@@ -40,7 +40,7 @@ export function cleanTerminalOutput(text: string): string {
   
   // Normalize carriage returns and line feeds
   cleaned = cleaned.replace(/\r\n/g, "\n");
-  cleaned = cleaned.replace(/\r/g, "\n");
+  cleaned = cleaned.replace(/\r/g, "");
   
   // Split into lines to filter out system prompt/nav rows completely
   const lines = cleaned.split("\n");
@@ -51,8 +51,12 @@ export function cleanTerminalOutput(text: string): string {
     // Filter out active REPL prompt indicators
     if (trimmed.includes("? for shortcuts") || trimmed.includes("shortcutsX") || trimmed.includes("shortcuts")) return false;
     
-    // Filter out Generating progress indicators and tips
-    if (trimmed.toLowerCase().includes("generating") || trimmed.toLowerCase().includes("generating...")) return false;
+    // Filter out Generating progress indicators (including prefix states like 'Gene', 'Gener' etc.)
+    const lowerTrimmed = trimmed.toLowerCase();
+    const targetGenerating = "generating...";
+    if (lowerTrimmed.length > 0 && lowerTrimmed.length <= targetGenerating.length && targetGenerating.startsWith(lowerTrimmed)) {
+      return false;
+    }
     if (trimmed.includes("●") || trimmed.includes("ListPermissions") || trimmed.includes("ListDir")) return false;
     if (trimmed.includes("Tip:") || trimmed.includes("Use /skills to browse") || trimmed.includes("└")) return false;
     if (trimmed.includes("ctrl+o to expand") || trimmed.includes("ctrl+")) return false;
