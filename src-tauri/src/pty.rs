@@ -112,14 +112,18 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
         if !cwd_path.is_empty() {
             cmd.cwd(PathBuf::from(cwd_path));
         } else {
-            if let Ok(exe_path) = std::env::current_exe() {
+            if let Ok(cur_dir) = std::env::current_dir() {
+                cmd.cwd(cur_dir);
+            } else if let Ok(exe_path) = std::env::current_exe() {
                 if let Some(exe_dir) = exe_path.parent() {
                     cmd.cwd(exe_dir.to_path_buf());
                 }
             }
         }
     } else {
-        if let Ok(exe_path) = std::env::current_exe() {
+        if let Ok(cur_dir) = std::env::current_dir() {
+            cmd.cwd(cur_dir);
+        } else if let Ok(exe_path) = std::env::current_exe() {
             if let Some(exe_dir) = exe_path.parent() {
                 cmd.cwd(exe_dir.to_path_buf());
             }
