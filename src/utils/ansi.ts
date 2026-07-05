@@ -51,6 +51,13 @@ export function cleanTerminalOutput(text: string): string {
     // Filter out active REPL prompt indicators
     if (trimmed.includes("? for shortcuts") || trimmed.includes("shortcutsX") || trimmed.includes("shortcuts")) return false;
     
+    // Filter out Generating progress indicators and tips
+    if (trimmed.toLowerCase().includes("generating") || trimmed.toLowerCase().includes("generating...")) return false;
+    if (trimmed.includes("●") || trimmed.includes("ListPermissions") || trimmed.includes("ListDir")) return false;
+    if (trimmed.includes("Tip:") || trimmed.includes("Use /skills to browse") || trimmed.includes("└")) return false;
+    if (trimmed.includes("ctrl+o to expand") || trimmed.includes("ctrl+")) return false;
+    if (trimmed.includes("Flash (Medium)") || trimmed.includes("Medium)")) return false;
+    
     // Filter out models, workspace metadata and headers
     if (trimmed.includes("Gemini 3.5") || trimmed.includes("Gemini")) return false;
     if (trimmed.includes("Google AI Pro") || trimmed.includes("Google AI")) return false;
