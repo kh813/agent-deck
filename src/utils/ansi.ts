@@ -138,7 +138,7 @@ export function cleanTerminalOutput(text: string): string {
     }
   }
   // Prevent trailing newline insertion for streaming chunks
-  if (cleaned.endsWith("\n") && !raw.endsWith("\n") && !raw.endsWith("\r")) {
+  if (cleaned.endsWith("\n") && !text.endsWith("\n") && !text.endsWith("\r")) {
     cleaned = cleaned.slice(0, -1);
   }
   return cleaned;
