@@ -63,12 +63,17 @@ export function cleanTerminalOutput(text: string): string {
     // Filter out active REPL prompt indicators
     if (trimmed.includes("? for shortcuts") || trimmed.includes("shortcutsX") || trimmed.includes("shortcuts")) return false;
     
-    // Filter out Generating progress indicators (including prefix states like 'Gene', 'Gener' etc.)
+    // Filter out Generating/Running progress indicators (including prefix states like 'Gene', 'Runn' etc.)
     const lowerTrimmed = trimmed.toLowerCase();
     const targetGenerating = "generating...";
+    const targetRunning = "running...";
     if (lowerTrimmed.length > 0 && lowerTrimmed.length <= targetGenerating.length && targetGenerating.startsWith(lowerTrimmed)) {
       return false;
     }
+    if (lowerTrimmed.length > 0 && lowerTrimmed.length <= targetRunning.length && targetRunning.startsWith(lowerTrimmed)) {
+      return false;
+    }
+    if (trimmed.includes("esc to cancel Running")) return false;
     if (trimmed.includes("●") || trimmed.includes("ListPermissions") || trimmed.includes("ListDir") || trimmed.includes("workspace(s)")) return false;
     if (trimmed.includes("Tip:") || trimmed.includes("Use /skills to browse") || trimmed.includes("└")) return false;
     if (trimmed.includes("ctrl+o to expand") || trimmed.includes("ctrl+") || trimmed.includes("expand)") || trimmed.includes("expand")) return false;
@@ -89,8 +94,7 @@ export function cleanTerminalOutput(text: string): string {
     // Filter out emails
     if (trimmed.includes("@") && (trimmed.includes(".com") || trimmed.includes(".org") || trimmed.includes(".net") || trimmed.includes(".edu"))) return false;
     
-    // Filter out workspace directory paths
-    if (trimmed.includes("~/") || trimmed.includes("/Users/") || trimmed.includes("src-tauri") || trimmed.includes("chatui")) return false;
+    // Keep workspace paths in AI output so answers don't get cut off
     
     // Remove divider borders (like '──────────') or lines containing mostly divider dashes
     if (trimmed.includes("──") || trimmed.includes("───")) return false;
