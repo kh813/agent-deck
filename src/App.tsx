@@ -231,7 +231,7 @@ function App() {
           <div className="controls-group">
             <div className="cwd-display" title={cwd || "Default working directory"}>
               <span className="cwd-label">CWD:</span>
-              <span className="cwd-path">{cwd || "User Home (Default)"}</span>
+              <span className="cwd-path">{cwd || "App Location (Default)"}</span>
             </div>
             
             <button 

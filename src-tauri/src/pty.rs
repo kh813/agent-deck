@@ -114,6 +114,48 @@ pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
 
 // --- Internal Logic (Generic Runtime support for testing) ---
 
+fn get_default_cwd() -> PathBuf {
+    if let Ok(exe_path) = std::env::current_exe() {
+        let mut path = exe_path.clone();
+        
+        // On macOS, traverse up to get outside of the .app bundle
+        #[cfg(target_os = "macos")]
+        {
+            // Traverse up 4 times:
+            // 1. Contents/MacOS/agent-deck -> Contents/MacOS
+            // 2. Contents/MacOS -> Contents
+            // 3. Contents -> agent-deck.app
+            // 4. agent-deck.app -> parent folder containing the .app
+            for _ in 0..4 {
+                if let Some(parent) = path.parent() {
+                    path = parent.to_path_buf();
+                }
+            }
+            return path;
+        }
+
+        // On Windows/Linux, just get the parent directory of the .exe
+        #[cfg(not(target_os = "macos"))]
+        {
+            if let Some(parent) = path.parent() {
+                return parent.to_path_buf();
+            }
+        }
+    }
+    
+    // Fallback to home directory without external dirs dependency
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            return PathBuf::from(home);
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home);
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
+}
+
 pub async fn start_pty_internal<R: tauri::Runtime>(
     command: String,
     args: Vec<String>,
@@ -143,22 +185,10 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
         if !cwd_path.is_empty() {
             cmd.cwd(PathBuf::from(cwd_path));
         } else {
-            if let Ok(cur_dir) = std::env::current_dir() {
-                cmd.cwd(cur_dir);
-            } else if let Ok(exe_path) = std::env::current_exe() {
-                if let Some(exe_dir) = exe_path.parent() {
-                    cmd.cwd(exe_dir.to_path_buf());
-                }
-            }
+            cmd.cwd(get_default_cwd());
         }
     } else {
-        if let Ok(cur_dir) = std::env::current_dir() {
-            cmd.cwd(cur_dir);
-        } else if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                cmd.cwd(exe_dir.to_path_buf());
-            }
-        }
+        cmd.cwd(get_default_cwd());
     }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
