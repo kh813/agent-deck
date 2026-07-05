@@ -331,7 +331,8 @@ export function useChatSession({
               
               const normTrimmed = trimmed.replace(/\s+/g, "").toLowerCase();
               // Filter out echo if the normalized line is a substring of normalized last query (or vice versa)
-              if (normTrimmed.length >= 2 && (normLast.includes(normTrimmed) || normTrimmed.includes(normLast))) {
+              // We use a safe threshold (>= 5 chars) to prevent stripping actual output details (like file list items)
+              if (normTrimmed.length >= 5 && (normLast.includes(normTrimmed) || normTrimmed.includes(normLast))) {
                 return false;
               }
               return true;

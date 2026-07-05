@@ -180,6 +180,8 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
     cmd.args(args);
     cmd.env("LANG", "en_US.UTF-8");
     cmd.env("LC_ALL", "en_US.UTF-8");
+    cmd.env("COLUMNS", "300");
+    cmd.env("LINES", "40");
     
     if let Some(cwd_path) = cwd {
         if !cwd_path.is_empty() {
