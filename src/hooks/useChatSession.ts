@@ -250,10 +250,16 @@ export function useChatSession({
       });
 
       let inputToSend = responseText + "\n";
-      if (responseText === "Yes, I trust this folder") {
+      if (responseText === "Yes, I trust this folder" || responseText === "Yes") {
         inputToSend = "\r";
       } else if (responseText === "No, exit") {
         inputToSend = "\u001b[B\r";
+      } else if (responseText.includes("always allow in this conversation")) {
+        inputToSend = "\u001b[B\r";
+      } else if (responseText.includes("always allow (Persist to settings.json)") || responseText.includes("Persist to settings.json")) {
+        inputToSend = "\u001b[B\u001b[B\r";
+      } else if (responseText === "No") {
+        inputToSend = "\u001b[B\u001b[B\u001b[B\r";
       }
 
       try {

@@ -67,7 +67,26 @@ pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
         });
     }
 
-    // 3. Y/N Confirmation
+    // 3. Tool/Command Permission Request Prompt
+    if text.contains("Requesting permission for:") || (text.contains("Do you want to proceed?") && !text.contains("[y/N]")) {
+        let mut cmd_name = "command".to_string();
+        if let Some(caps) = Regex::new(r"permission for:\s*\r?\n?\s*([^\r\n]+)").unwrap().captures(text) {
+            cmd_name = caps.get(1).map_or("command".to_string(), |m| m.as_str().trim().to_string());
+        }
+        return Some(PtyPromptPayload {
+            prompt_type: "confirm".to_string(),
+            message: format!("Command permission requested for: `{}`. Do you want to proceed?", cmd_name),
+            options: Some(vec![
+                "Yes".to_string(),
+                "Yes, and always allow in this conversation".to_string(),
+                "Yes, and always allow (Persist to settings.json)".to_string(),
+                "No".to_string(),
+            ]),
+            url: None,
+        });
+    }
+
+    // 4. Y/N Confirmation
     // Proceed [y/N], Confirm [yes/no], procedd (y/n), Are you sure? [y/N]
     let confirm_re = Regex::new(r"(?i)(confirm|proceed|are you sure|y/n|yes/no)[\s\S]*?\[([yY]/[nN]|[yY]es/[nN]o)\]").unwrap();
     if confirm_re.is_match(text) {

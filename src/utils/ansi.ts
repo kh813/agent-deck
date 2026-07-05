@@ -78,12 +78,13 @@ export function cleanTerminalOutput(text: string): string {
     if (/^\.+$/.test(trimmed)) return false;
     if (/^[a-zA-Z]{1,2}$/.test(trimmed)) return false;
     
-    // Filter out models, workspace metadata and headers
+    // Filter out models, workspace metadata, headers and permission prompts
     if (trimmed.includes("Gemini 3.5") || trimmed.includes("Gemini")) return false;
     if (trimmed.includes("Google AI Pro") || trimmed.includes("Google AI")) return false;
     if (trimmed.includes("Antigravity CLI") || trimmed.includes("Welcome to the Antigravity")) return false;
     if (trimmed.includes("Signing in") || trimmed.includes("Accessing workspace")) return false;
     if (trimmed.includes("Yes, I trust") || trimmed.includes("No, exit") || trimmed.includes("Navigate") || trimmed.includes("Confirm")) return false;
+    if (trimmed.includes("Requesting permission") || trimmed.includes("Do you want to proceed") || trimmed.includes("always allow")) return false;
     
     // Filter out emails
     if (trimmed.includes("@") && (trimmed.includes(".com") || trimmed.includes(".org") || trimmed.includes(".net") || trimmed.includes(".edu"))) return false;
