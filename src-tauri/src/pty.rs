@@ -27,7 +27,13 @@ impl Default for PtyState {
 
 #[derive(Serialize, Clone)]
 struct PtyOutputPayload {
-    data: String,
+    // Raw bytes, not a decoded String: a fixed-size PTY read can end in the
+    // middle of a multi-byte UTF-8 character, and independently
+    // lossy-decoding each chunk would replace both halves of that character
+    // with U+FFFD. Sending raw bytes and letting xterm.js's own UTF-8
+    // decoder (which correctly buffers a partial trailing sequence across
+    // separate `write()` calls) handle it avoids that corruption entirely.
+    data: Vec<u8>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -160,17 +166,27 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
     command: String,
     args: Vec<String>,
     cwd: Option<String>,
+    rows: Option<u16>,
+    cols: Option<u16>,
     app: tauri::AppHandle<R>,
     state: &PtyState,
 ) -> Result<(), String> {
     let _ = stop_pty_internal(state).await;
 
+    // Default to a reasonable size if the frontend didn't report the
+    // xterm.js viewport's actual fitted size yet. Whenever this doesn't
+    // match what's really being rendered, interactive CLIs that redraw via
+    // relative cursor movement (e.g. "up N rows, clear, redraw") can target
+    // the wrong row and leave stale content behind instead of overwriting it.
+    let rows = rows.unwrap_or(40);
+    let cols = cols.unwrap_or(300);
+
     let pty_system = native_pty_system();
-    
+
     let pair = pty_system
         .openpty(PtySize {
-            rows: 40,
-            cols: 300,
+            rows,
+            cols,
             pixel_width: 0,
             pixel_height: 0,
         })
@@ -180,9 +196,9 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
     cmd.args(args);
     cmd.env("LANG", "en_US.UTF-8");
     cmd.env("LC_ALL", "en_US.UTF-8");
-    cmd.env("COLUMNS", "300");
-    cmd.env("LINES", "40");
-    
+    cmd.env("COLUMNS", cols.to_string());
+    cmd.env("LINES", rows.to_string());
+
     if let Some(cwd_path) = cwd {
         if !cwd_path.is_empty() {
             cmd.cwd(PathBuf::from(cwd_path));
@@ -194,13 +210,21 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
     }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-    
+
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
     *state.session.lock().await = Some(pair.master);
     *state.writer.lock().await = Some(writer);
     *state.child.lock().await = Some(child);
+
+    // TEMPORARY: raw PTY byte log for diagnosing rendering bugs in the
+    // upstream CLI's own output. Truncated fresh on every session start.
+    let debug_log_path = std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("agent-deck-pty-debug.log");
+    let _ = std::fs::write(&debug_log_path, b"");
 
     let app_clone = app.clone();
     thread::spawn(move || {
@@ -213,9 +237,20 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
                     break;
                 }
                 Ok(n) => {
+                    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&debug_log_path) {
+                        use std::io::Write as _;
+                        let _ = f.write_all(&buffer[..n]);
+                    }
+
+                    let _ = app_clone.emit("pty-output", PtyOutputPayload { data: buffer[..n].to_vec() });
+
+                    // Lossy-decoding here is fine even if it mangles a
+                    // boundary-spanning character: this text is only used
+                    // for prompt-pattern matching, not display, so an
+                    // occasional stray replacement character has no visible
+                    // effect on what the user sees in the terminal.
                     let raw_data = String::from_utf8_lossy(&buffer[..n]).into_owned();
-                    let _ = app_clone.emit("pty-output", PtyOutputPayload { data: raw_data.clone() });
-                    
+
                     // Clean text and check prompt pattern
                     let clean_text = strip_ansi_rust(&raw_data);
                     if let Some(prompt) = detect_prompts(&clean_text) {
@@ -268,6 +303,21 @@ pub async fn write_to_pty_internal(input: String, state: &PtyState) -> Result<()
     }
 }
 
+pub async fn resize_pty_internal(rows: u16, cols: u16, state: &PtyState) -> Result<(), String> {
+    let session_guard = state.session.lock().await;
+    if let Some(ref master) = *session_guard {
+        master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 // --- Tauri Command Wrapper ---
 
 #[tauri::command]
@@ -275,10 +325,21 @@ pub async fn start_pty(
     command: String,
     args: Vec<String>,
     cwd: Option<String>,
+    rows: Option<u16>,
+    cols: Option<u16>,
     app: AppHandle,
     state: State<'_, PtyState>,
 ) -> Result<(), String> {
-    start_pty_internal(command, args, cwd, app, &state).await
+    start_pty_internal(command, args, cwd, rows, cols, app, &state).await
+}
+
+#[tauri::command]
+pub async fn resize_pty(
+    rows: u16,
+    cols: u16,
+    state: State<'_, PtyState>,
+) -> Result<(), String> {
+    resize_pty_internal(rows, cols, &state).await
 }
 
 #[tauri::command]
@@ -405,7 +466,7 @@ mod tests {
             }
         });
 
-        let start_res = start_pty_internal(cmd, args, None, handle.clone(), &state).await;
+        let start_res = start_pty_internal(cmd, args, None, None, None, handle.clone(), &state).await;
         assert!(start_res.is_ok());
 
         let mut received = String::new();
