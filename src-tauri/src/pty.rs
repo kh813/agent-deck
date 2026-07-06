@@ -36,7 +36,7 @@ fn debug_log_path() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join("agent-deck-pty-debug.log")
+        .join("agent-ui-pty-debug.log")
 }
 
 fn debug_log_marker(text: &str) {
@@ -46,7 +46,7 @@ fn debug_log_marker(text: &str) {
         .unwrap_or(0);
     if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(debug_log_path()) {
         use std::io::Write as _;
-        let _ = writeln!(f, "\n[agent-deck @ {millis}ms] {text}");
+        let _ = writeln!(f, "\n[agent-ui @ {millis}ms] {text}");
     }
 }
 
@@ -153,10 +153,10 @@ fn get_default_cwd() -> PathBuf {
         #[cfg(target_os = "macos")]
         {
             // Traverse up 4 times:
-            // 1. Contents/MacOS/agent-deck -> Contents/MacOS
+            // 1. Contents/MacOS/agent-ui -> Contents/MacOS
             // 2. Contents/MacOS -> Contents
-            // 3. Contents -> agent-deck.app
-            // 4. agent-deck.app -> parent folder containing the .app
+            // 3. Contents -> agent-ui.app
+            // 4. agent-ui.app -> parent folder containing the .app
             for _ in 0..4 {
                 if let Some(parent) = path.parent() {
                     path = parent.to_path_buf();

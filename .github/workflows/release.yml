@@ -15,10 +15,10 @@ jobs:
         include:
           - platform: "macos-latest"
             args: "--target universal-apple-darwin"
-            zip_name: "agent-deck-mac.zip"
+            zip_name: "agent-ui-mac.zip"
           - platform: "windows-latest"
             args: ""
-            zip_name: "agent-deck-win.zip"
+            zip_name: "agent-ui-win.zip"
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -44,20 +44,20 @@ jobs:
         if: matrix.platform == 'macos-latest'
         run: |
           cd src-tauri/target/release/bundle/macos
-          zip -r ../../../../agent-deck-mac.zip agent-deck.app
+          zip -r ../../../../agent-ui-mac.zip agent-ui.app
 
       - name: package Windows exe to zip
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          Compress-Archive -Path src-tauri/target/release/agent-deck.exe -DestinationPath agent-deck-win.zip
+          Compress-Archive -Path src-tauri/target/release/agent-ui.exe -DestinationPath agent-ui-win.zip
 
       - name: upload release asset
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.zip_name }}
           draft: true
-          name: "agent-deck ${{ github.ref_name }}"
+          name: "agent-ui ${{ github.ref_name }}"
           tag_name: ${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
