@@ -56,7 +56,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.zip_name }}
-          draft: true
+          draft: false
           name: "agent-ui ${{ github.ref_name }}"
           tag_name: ${{ github.ref_name }}
         env:
