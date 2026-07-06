@@ -121,41 +121,47 @@ pub async fn detect_agent_internal<R: tauri::Runtime>(
     agent_id: String,
     app: tauri::AppHandle<R>,
 ) -> Result<AgentStatus, String> {
-    let configs = load_config(&app)?;
-    let config = configs.get(&agent_id).ok_or_else(|| format!("Unknown agent: {}", agent_id))?;
+    let configs = load_config(&app).unwrap_or_default();
 
     let is_windows = cfg!(target_os = "windows");
     let mut found_path: Option<String> = None;
+    let mut binary_name = agent_id.clone();
+    let mut version_args = vec!["--version".to_string()];
 
-    // 0. Scan application local subdirectory `./bin/` (highly preferred for portable ZIP config)
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let local_bin_name = if is_windows {
-                format!("{}.exe", config.binary)
-            } else {
-                config.binary.clone()
-            };
-            let local_path = exe_dir.join("bin").join(local_bin_name);
-            if local_path.exists() {
-                found_path = Some(local_path.to_string_lossy().to_string());
+    if let Some(config) = configs.get(&agent_id) {
+        binary_name = config.binary.clone();
+        version_args = config.version_args.clone();
+
+        // 0. Scan application local subdirectory `./bin/` (highly preferred for portable ZIP config)
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let local_bin_name = if is_windows {
+                    format!("{}.exe", config.binary)
+                } else {
+                    config.binary.clone()
+                };
+                let local_path = exe_dir.join("bin").join(local_bin_name);
+                if local_path.exists() {
+                    found_path = Some(local_path.to_string_lossy().to_string());
+                }
             }
         }
-    }
-    
-    // 1. Scan pre-defined directory paths
-    let paths_to_check = if is_windows {
-        &config.detect_paths.windows
-    } else {
-        &config.detect_paths.macos
-    };
 
-    if found_path.is_none() {
-        if let Some(ref paths) = paths_to_check {
-            for path_str in paths {
-                let path = resolve_env_path(path_str);
-                if path.exists() {
-                    found_path = Some(path.to_string_lossy().to_string());
-                    break;
+        // 1. Scan pre-defined directory paths
+        let paths_to_check = if is_windows {
+            &config.detect_paths.windows
+        } else {
+            &config.detect_paths.macos
+        };
+
+        if found_path.is_none() {
+            if let Some(ref paths) = paths_to_check {
+                for path_str in paths {
+                    let path = resolve_env_path(path_str);
+                    if path.exists() {
+                        found_path = Some(path.to_string_lossy().to_string());
+                        break;
+                    }
                 }
             }
         }
@@ -165,7 +171,7 @@ pub async fn detect_agent_internal<R: tauri::Runtime>(
     if found_path.is_none() {
         let check_cmd = if is_windows { "where" } else { "which" };
         let output = Command::new(check_cmd)
-            .arg(&config.binary)
+            .arg(&binary_name)
             .output();
 
         if let Ok(out) = output {
@@ -184,8 +190,8 @@ pub async fn detect_agent_internal<R: tauri::Runtime>(
     if let Some(path) = found_path {
         // Run <binary> --version to get version string
         let mut cmd = Command::new(&path);
-        cmd.args(&config.version_args);
-        
+        cmd.args(&version_args);
+
         let version = cmd.output().ok().and_then(|out| {
             if out.status.success() {
                 let ver_str = String::from_utf8_lossy(&out.stdout).trim().to_string();

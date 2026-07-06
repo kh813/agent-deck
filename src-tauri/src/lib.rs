@@ -1,5 +1,6 @@
 mod pty;
 mod agent;
+mod config;
 
 use pty::PtyState;
 
@@ -28,7 +29,8 @@ pub fn run() {
             agent::check_agent_update,
             agent::get_update_command,
             agent::check_skill_folder,
-            agent::build_skill
+            agent::build_skill,
+            config::get_app_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

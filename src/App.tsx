@@ -16,10 +16,21 @@ interface AgentStatus {
   version: string | null;
 }
 
-// Claude Code is hidden for now: a paid Claude subscription already lets users
-// run Claude Code directly from Claude Desktop, so this app isn't needed for it.
-// Kept behind a flag in case that changes and the entry needs to come back.
-const SHOW_CLAUDE_CODE_ENTRY = false;
+interface EngineConfig {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+}
+
+interface AppConfig {
+  app_name: string;
+  default_theme: string;
+  font_family: string;
+  font_size: number;
+  engines: EngineConfig[];
+}
+
 
 interface UpdateStatus {
   current_version: string | null;
@@ -64,13 +75,16 @@ function App() {
     return translations[lang][key];
   };
 
-  // Agent Onboarding & Selection States
+  // Config & Selection States
+  const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
+  const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentStatus>>({});
   const [selectedAgentId, setSelectedAgentId] = useState("agy");
-  const [agyStatus, setAgyStatus] = useState<AgentStatus>({
+
+  const currentAgentStatus = agentStatuses[selectedAgentId] || {
     installed: false,
     path: null,
     version: null,
-  });
+  };
 
   // Update States
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({
@@ -92,24 +106,9 @@ function App() {
   const hasAutoStartedRef = useRef(false);
   const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // True once the terminal's size has stopped changing for a short while.
-  // Right after mount, the fitted size can shift once or twice (fonts
-  // settling, minor layout reflow), each of which is a real resize sent to
-  // the PTY. If a session is auto-started before that settles, agy ends up
-  // redrawing its whole startup screen for each of those changes back to
-  // back, and can leave a duplicated leftover line (e.g. the bottom status
-  // bar) behind - so auto-start waits for this instead of firing immediately.
   const [terminalSizeSettled, setTerminalSizeSettled] = useState(false);
 
-  // Raw PTY output handler to write directly to xterm.js. The terminal is
-  // the single source of truth for what agy has rendered - no reconstruction
-  // or cleanup happens here, so it can never diverge from the real session.
-  // Bytes (not a decoded string) are passed straight through so xterm.js's
-  // own UTF-8 decoder handles multi-byte characters split across PTY reads.
-  // Stable identity (useCallback) matters here: TerminalView's mount effect
-  // and useChatSession's event-listener effect both depend on this function,
-  // so a new reference on every render would tear down and remount the
-  // terminal (losing scrollback) and re-subscribe PTY listeners on every
-  // keystroke in the input box.
+  // Raw PTY output handler to write directly to xterm.js.
   const handleRawOutput = useCallback((raw: Uint8Array) => {
     if (terminalRef.current) {
       terminalRef.current.write(raw);
@@ -121,10 +120,7 @@ function App() {
     invoke("write_to_pty", { input: data });
   }, []);
 
-  // Keeps the PTY's reported window size in sync with what xterm.js is
-  // actually rendering. A mismatch here is what let agy's cursor-relative
-  // redraws (e.g. "up N rows, clear, redraw") target the wrong row and leave
-  // stale content behind instead of overwriting it.
+  // Keeps the PTY's reported window size in sync with what xterm.js is actually rendering.
   const handleTerminalResize = useCallback((size: { rows: number; cols: number }) => {
     terminalSizeRef.current = size;
     invoke("resize_pty", size).catch(() => {
@@ -159,53 +155,94 @@ function App() {
     getTerminalSize,
   });
 
-  // Detect installer CLI path and version
+  // Detect installer CLI path and version for all configured engines
   const checkAgentStatus = useCallback(async () => {
+    if (!appConfig) return;
     try {
-      const res = await invoke<AgentStatus>("detect_agent", { agentId: "agy" });
-      setAgyStatus(res);
-
-      if (res.installed && res.path) {
-        setShellPath(res.path);
-        setShellArgs(""); // Reset args, start agy without arguments
+      const newStatuses: Record<string, AgentStatus> = {};
+      for (const engine of appConfig.engines) {
+        try {
+          const status = await invoke<AgentStatus>("detect_agent", { agentId: engine.id });
+          newStatuses[engine.id] = status;
+        } catch (e) {
+          console.error(`Failed to detect agent ${engine.id}:`, e);
+          newStatuses[engine.id] = { installed: false, path: null, version: null };
+        }
       }
+      setAgentStatuses(newStatuses);
     } catch (e) {
-      console.error("Failed to detect agy status:", e);
+      console.error("Failed to detect agent status:", e);
     }
-  }, []);
+  }, [appConfig]);
 
   // Check for updates
   const checkUpdateStatus = useCallback(async () => {
     try {
-      const res = await invoke<UpdateStatus>("check_agent_update", { agentId: "agy" });
+      const res = await invoke<UpdateStatus>("check_agent_update", { agentId: selectedAgentId });
       setUpdateStatus(res);
     } catch (e) {
       console.error("Failed to check agent update:", e);
     }
-  }, []);
+  }, [selectedAgentId]);
 
-  // Run initial check on startup
+  // 1. Load dynamic configuration
   useEffect(() => {
+    const loadAppConfig = async () => {
+      try {
+        const cfg = await invoke<AppConfig>("get_app_config", { cwd: cwd || null });
+        setAppConfig(cfg);
+        
+        const savedTheme = localStorage.getItem("agent-ui-theme");
+        if (!savedTheme && cfg.default_theme) {
+          setCurrentThemeId(cfg.default_theme);
+        }
+      } catch (e) {
+        console.error("Failed to load app config:", e);
+      }
+    };
+    loadAppConfig();
+  }, [cwd]);
+
+  // 2. Trigger status detection when configuration loads or refreshes
+  useEffect(() => {
+    if (!appConfig) return;
     checkAgentStatus();
-  }, [checkAgentStatus]);
+
+    // Default select first engine if selection is missing from config
+    if (appConfig.engines.length > 0) {
+      const exists = appConfig.engines.some(e => e.id === selectedAgentId);
+      if (!exists) {
+        setSelectedAgentId(appConfig.engines[0].id);
+      }
+    }
+  }, [appConfig, checkAgentStatus]);
+
+  // 3. Update PTY command configuration when selection or statuses change
+  useEffect(() => {
+    if (!appConfig) return;
+    const engine = appConfig.engines.find(e => e.id === selectedAgentId);
+    const status = agentStatuses[selectedAgentId];
+    if (engine && status && status.installed && status.path) {
+      setShellPath(status.path);
+      const args = engine.args || [];
+      setShellArgs(args.join(" "));
+    }
+  }, [selectedAgentId, agentStatuses, appConfig]);
 
   // Check updates if installed and enabled
   useEffect(() => {
-    if (agyStatus.installed && autoCheckUpdate) {
+    if (currentAgentStatus.installed && autoCheckUpdate) {
       checkUpdateStatus();
     }
-  }, [agyStatus.installed, autoCheckUpdate, checkUpdateStatus]);
+  }, [currentAgentStatus.installed, autoCheckUpdate, checkUpdateStatus]);
 
-  // Auto-start a session as soon as Antigravity is detected as installed and
-  // the terminal's size has settled - it's currently the only supported
-  // agent, so there's no need to make the user click "Start Session" every
-  // time they open the app.
+  // Auto-start a session as soon as the selected agent is detected as installed and terminal size settled
   useEffect(() => {
-    if (agyStatus.installed && status === "idle" && terminalSizeSettled && !hasAutoStartedRef.current) {
+    if (currentAgentStatus.installed && status === "idle" && terminalSizeSettled && !hasAutoStartedRef.current) {
       hasAutoStartedRef.current = true;
       startSession();
     }
-  }, [agyStatus.installed, status, terminalSizeSettled, startSession]);
+  }, [currentAgentStatus.installed, status, terminalSizeSettled, startSession]);
 
   // Listen to PTY termination during installation and updates
   useEffect(() => {
@@ -313,7 +350,7 @@ function App() {
     <div className="app-container">
       {/* Header and Connection Panel */}
       <header className="app-header">
-        <h1 className="app-title">{t("appTitle")}</h1>
+        <h1 className="app-title">{appConfig ? appConfig.app_name : t("appTitle")}</h1>
 
         <div className="controls-group">
           <select
@@ -329,7 +366,7 @@ function App() {
             ))}
           </select>
 
-          {agyStatus.installed && (
+          {currentAgentStatus.installed && (
             <>
               <div className="cwd-display" title={cwd || "Default working directory"}>
                 <span className="cwd-label">CWD:</span>
@@ -363,7 +400,7 @@ function App() {
       </header>
 
       {/* Update Alert Notification Banner */}
-      {updateStatus.update_available && agyStatus.installed && (
+      {updateStatus.update_available && currentAgentStatus.installed && (
         <div className="update-banner" style={{
           background: "rgba(245, 158, 11, 0.15)",
           borderBottom: "1px solid rgba(245, 158, 11, 0.25)",
@@ -429,33 +466,27 @@ function App() {
           <div className="sidebar-title">{t("aiEngines")}</div>
 
           <div className="agent-list">
-            <div
-              className={`agent-item ${selectedAgentId === "agy" ? "active" : ""}`}
-              onClick={() => setSelectedAgentId("agy")}
-              title="Antigravity CLI"
-            >
-              <div className="agent-name-row">
-                <span className="agent-name">Antigravity</span>
-                <span className={`agent-badge ${agyStatus.installed ? "installed" : "not-installed"}`}>
-                  {agyStatus.installed ? t("installed") : t("missing")}
-                </span>
-              </div>
-              <div className="agent-version">
-                {agyStatus.installed ? agyStatus.version || t("versionLoaded") : t("requireSetup")}
-              </div>
-            </div>
-
-            {SHOW_CLAUDE_CODE_ENTRY && (
-              <div className="agent-item disabled" title="Claude Code (Future Roadmap)">
-                <div className="agent-name-row">
-                  <span className="agent-name">Claude Code</span>
-                  <span className="agent-badge not-installed" style={{ background: "rgba(100, 116, 139, 0.15)", color: "#94a3b8" }}>
-                    {t("roadmap")}
-                  </span>
+            {appConfig?.engines.map((engine) => {
+              const status = agentStatuses[engine.id] || { installed: false, path: null, version: null };
+              return (
+                <div
+                  key={engine.id}
+                  className={`agent-item ${selectedAgentId === engine.id ? "active" : ""}`}
+                  onClick={() => setSelectedAgentId(engine.id)}
+                  title={engine.name}
+                >
+                  <div className="agent-name-row">
+                    <span className="agent-name">{engine.name}</span>
+                    <span className={`agent-badge ${status.installed ? "installed" : "not-installed"}`}>
+                      {status.installed ? t("installed") : t("missing")}
+                    </span>
+                  </div>
+                  <div className="agent-version">
+                    {status.installed ? status.version || t("versionLoaded") : t("requireSetup")}
+                  </div>
                 </div>
-                <div className="agent-version">{t("notSupported")}</div>
-              </div>
-            )}
+              );
+            })}
           </div>
 
           {/* Settings Section inside Sidebar */}
@@ -476,7 +507,7 @@ function App() {
         </aside>
 
         {/* Main Panel View (live terminal OR Onboarding installer) */}
-        {!agyStatus.installed && selectedAgentId === "agy" ? (
+        {!currentAgentStatus.installed ? (
           /* Onboarding Panel */
           <div className="onboarding-panel" style={{ display: "flex", flexDirection: isInstallTerminalOpen ? "row" : "column", gap: "24px", width: "100%" }}>
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
@@ -510,6 +541,8 @@ function App() {
                     onData={handleTerminalInput}
                     onResize={handleTerminalResize}
                     theme={themes[currentThemeId].terminal}
+                    fontFamily={appConfig?.font_family}
+                    fontSize={appConfig?.font_size}
                   />
                 </div>
               </div>
@@ -532,6 +565,8 @@ function App() {
                     onData={handleTerminalInput}
                     onResize={handleTerminalResize}
                     theme={themes[currentThemeId].terminal}
+                    fontFamily={appConfig?.font_family}
+                    fontSize={appConfig?.font_size}
                   />
                 </div>
               </div>

@@ -1,0 +1,14 @@
+{
+  "app_name": "agent-ui Chat Console",
+  "default_theme": "light",
+  "font_family": "Menlo, Monaco, 'Courier New', monospace",
+  "font_size": 13,
+  "engines": [
+    {
+      "id": "agy",
+      "name": "Antigravity",
+      "command": "agy",
+      "args": []
+    }
+  ]
+}
