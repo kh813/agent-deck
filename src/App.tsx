@@ -5,7 +5,6 @@ import { listen } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import { useChatSession } from "./hooks/useChatSession";
 import { TerminalView } from "./components/TerminalView";
-import { Markdown } from "./components/Markdown";
 import "./App.css";
 
 interface AgentStatus {
@@ -13,6 +12,11 @@ interface AgentStatus {
   path: string | null;
   version: string | null;
 }
+
+// Claude Code is hidden for now: a paid Claude subscription already lets users
+// run Claude Code directly from Claude Desktop, so this app isn't needed for it.
+// Kept behind a flag in case that changes and the entry needs to come back.
+const SHOW_CLAUDE_CODE_ENTRY = false;
 
 interface UpdateStatus {
   current_version: string | null;
@@ -35,7 +39,7 @@ function App() {
     path: null,
     version: null,
   });
-  
+
   // Update States
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({
     current_version: null,
@@ -46,26 +50,70 @@ function App() {
     const saved = localStorage.getItem("autoCheckUpdate");
     return saved !== "false"; // Default to true
   });
-  
+
   const [isInstalling, setIsInstalling] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isInstallTerminalOpen, setIsInstallTerminalOpen] = useState(false);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  const terminalSizeRef = useRef<{ rows: number; cols: number } | null>(null);
+  const hasAutoStartedRef = useRef(false);
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True once the terminal's size has stopped changing for a short while.
+  // Right after mount, the fitted size can shift once or twice (fonts
+  // settling, minor layout reflow), each of which is a real resize sent to
+  // the PTY. If a session is auto-started before that settles, agy ends up
+  // redrawing its whole startup screen for each of those changes back to
+  // back, and can leave a duplicated leftover line (e.g. the bottom status
+  // bar) behind - so auto-start waits for this instead of firing immediately.
+  const [terminalSizeSettled, setTerminalSizeSettled] = useState(false);
 
-  // Raw PTY output handler to write directly to xterm.js
-  const handleRawOutput = (raw: string) => {
+  // Raw PTY output handler to write directly to xterm.js. The terminal is
+  // the single source of truth for what agy has rendered - no reconstruction
+  // or cleanup happens here, so it can never diverge from the real session.
+  // Bytes (not a decoded string) are passed straight through so xterm.js's
+  // own UTF-8 decoder handles multi-byte characters split across PTY reads.
+  // Stable identity (useCallback) matters here: TerminalView's mount effect
+  // and useChatSession's event-listener effect both depend on this function,
+  // so a new reference on every render would tear down and remount the
+  // terminal (losing scrollback) and re-subscribe PTY listeners on every
+  // keystroke in the input box.
+  const handleRawOutput = useCallback((raw: Uint8Array) => {
     if (terminalRef.current) {
       terminalRef.current.write(raw);
     }
-  };
+  }, []);
+
+  // Forwards keys typed directly into the terminal to the PTY.
+  const handleTerminalInput = useCallback((data: string) => {
+    invoke("write_to_pty", { input: data });
+  }, []);
+
+  // Keeps the PTY's reported window size in sync with what xterm.js is
+  // actually rendering. A mismatch here is what let agy's cursor-relative
+  // redraws (e.g. "up N rows, clear, redraw") target the wrong row and leave
+  // stale content behind instead of overwriting it.
+  const handleTerminalResize = useCallback((size: { rows: number; cols: number }) => {
+    terminalSizeRef.current = size;
+    invoke("resize_pty", size).catch(() => {
+      // No active session yet - the size will be used when one starts.
+    });
+
+    setTerminalSizeSettled(false);
+    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    settleTimerRef.current = setTimeout(() => {
+      settleTimerRef.current = null;
+      setTerminalSizeSettled(true);
+    }, 300);
+  }, []);
+
+  const getTerminalSize = useCallback(() => terminalSizeRef.current ?? undefined, []);
 
   const {
-    messages,
     cwd,
     status,
-    isTerminalOpen,
-    setIsTerminalOpen,
+    activePrompt,
+    statusMessage,
     startSession,
     stopSession,
     sendMessage,
@@ -76,16 +124,15 @@ function App() {
     defaultArgs: shellArgs.trim() ? shellArgs.split(" ") : [],
     initialCwd: "",
     onRawOutput: handleRawOutput,
+    getTerminalSize,
   });
-
-  const hasActivePrompt = messages.some((msg) => msg.prompt !== undefined);
 
   // Detect installer CLI path and version
   const checkAgentStatus = useCallback(async () => {
     try {
       const res = await invoke<AgentStatus>("detect_agent", { agentId: "agy" });
       setAgyStatus(res);
-      
+
       if (res.installed && res.path) {
         setShellPath(res.path);
         setShellArgs(""); // Reset args, start agy without arguments
@@ -117,6 +164,17 @@ function App() {
     }
   }, [agyStatus.installed, autoCheckUpdate, checkUpdateStatus]);
 
+  // Auto-start a session as soon as Antigravity is detected as installed and
+  // the terminal's size has settled - it's currently the only supported
+  // agent, so there's no need to make the user click "Start Session" every
+  // time they open the app.
+  useEffect(() => {
+    if (agyStatus.installed && status === "idle" && terminalSizeSettled && !hasAutoStartedRef.current) {
+      hasAutoStartedRef.current = true;
+      startSession();
+    }
+  }, [agyStatus.installed, status, terminalSizeSettled, startSession]);
+
   // Listen to PTY termination during installation and updates
   useEffect(() => {
     let unlistenStatus: (() => void) | null = null;
@@ -147,8 +205,8 @@ function App() {
   const handleInstallAgy = async () => {
     try {
       setIsInstalling(true);
-      setIsTerminalOpen(true); // Open console automatically to show progress logs
-      
+      setIsInstallTerminalOpen(true); // Open console automatically to show progress logs
+
       const installCmd = await invoke<{ command: string; args: string[] }>("get_install_command", {
         agentId: "agy",
       });
@@ -157,6 +215,8 @@ function App() {
         command: installCmd.command,
         args: installCmd.args,
         cwd: null,
+        rows: terminalSizeRef.current?.rows,
+        cols: terminalSizeRef.current?.cols,
       });
     } catch (e: any) {
       setIsInstalling(false);
@@ -165,12 +225,13 @@ function App() {
     }
   };
 
-  // Trigger update via PTY
+  // Trigger update via PTY. This reuses the same always-visible main
+  // terminal (the backend only ever runs one PTY session at a time), so no
+  // separate terminal instance is needed here.
   const handleUpdateAgy = async () => {
     try {
       setIsUpdating(true);
-      setIsTerminalOpen(true); // Open console automatically
-      
+
       const updateCmd = await invoke<{ command: string; args: string[] }>("get_update_command", {
         agentId: "agy",
       });
@@ -179,6 +240,8 @@ function App() {
         command: updateCmd.command,
         args: updateCmd.args,
         cwd: null,
+        rows: terminalSizeRef.current?.rows,
+        cols: terminalSizeRef.current?.cols,
       });
     } catch (e: any) {
       setIsUpdating(false);
@@ -186,11 +249,6 @@ function App() {
       alert(`Failed to launch updater: ${e.toString()}`);
     }
   };
-
-  // Auto-scroll chat to the bottom on new messages
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
 
   // Open directory selection dialog using Tauri Dialog API
   const handleSelectDirectory = async () => {
@@ -221,21 +279,23 @@ function App() {
     setInput("");
   };
 
+  const hasActivePrompt = activePrompt !== null;
+
   return (
     <div className="app-container">
       {/* Header and Connection Panel */}
       <header className="app-header">
         <h1 className="app-title">agent-deck Chat Console</h1>
-        
+
         {agyStatus.installed && (
           <div className="controls-group">
             <div className="cwd-display" title={cwd || "Default working directory"}>
               <span className="cwd-label">CWD:</span>
               <span className="cwd-path">{cwd || "App Location (Default)"}</span>
             </div>
-            
-            <button 
-              className="secondary" 
+
+            <button
+              className="secondary"
               onClick={handleSelectDirectory}
               disabled={status === "running"}
             >
@@ -255,13 +315,6 @@ function App() {
                 Start Session
               </button>
             )}
-
-            <button 
-              className="secondary" 
-              onClick={() => setIsTerminalOpen(!isTerminalOpen)}
-            >
-              {isTerminalOpen ? "Hide Console" : "Show Console"}
-            </button>
           </div>
         )}
       </header>
@@ -285,8 +338,8 @@ function App() {
               ※本エージェントは自己更新に対応しています。二重更新の防止のため、他で実行中の場合は終了をお待ちください。
             </span>
           </div>
-          <button 
-            className="primary" 
+          <button
+            className="primary"
             onClick={handleUpdateAgy}
             disabled={isUpdating}
             style={{
@@ -305,14 +358,35 @@ function App() {
         </div>
       )}
 
+      {/* Session status banner (former system messages: session start, skill
+          rebuild progress, stop, errors). Always rendered at the same size
+          (padding/border/margin never change, only color/content do) so
+          it appearing or disappearing can never resize the terminal below
+          it - that used to cause a real PTY resize a few seconds into a
+          session, which could race with agy's own async UI updates (e.g.
+          its account-quota badge) and leave the screen looking corrupted. */}
+      <div style={{
+        background: statusMessage ? "rgba(59, 130, 246, 0.1)" : "transparent",
+        border: statusMessage ? "1px solid rgba(59, 130, 246, 0.2)" : "1px solid transparent",
+        borderRadius: "8px",
+        padding: "8px 16px",
+        marginBottom: "12px",
+        fontSize: "0.8rem",
+        color: "#475569",
+        whiteSpace: "pre-wrap",
+        minHeight: "1.2em",
+      }}>
+        {statusMessage || " "}
+      </div>
+
       {/* Main Body Layout with Sidebar and Panel */}
       <div className="app-body-layout">
         {/* Sidebar panel */}
         <aside className="sidebar">
           <div className="sidebar-title">AI Engines</div>
-          
+
           <div className="agent-list">
-            <div 
+            <div
               className={`agent-item ${selectedAgentId === "agy" ? "active" : ""}`}
               onClick={() => setSelectedAgentId("agy")}
             >
@@ -327,46 +401,48 @@ function App() {
               </div>
             </div>
 
-            <div className="agent-item disabled" title="Claude Code (Future Roadmap)">
-              <div className="agent-name-row">
-                <span className="agent-name">Claude Code</span>
-                <span className="agent-badge not-installed" style={{ background: "rgba(100, 116, 139, 0.15)", color: "#94a3b8" }}>
-                  Roadmap
-                </span>
+            {SHOW_CLAUDE_CODE_ENTRY && (
+              <div className="agent-item disabled" title="Claude Code (Future Roadmap)">
+                <div className="agent-name-row">
+                  <span className="agent-name">Claude Code</span>
+                  <span className="agent-badge not-installed" style={{ background: "rgba(100, 116, 139, 0.15)", color: "#94a3b8" }}>
+                    Roadmap
+                  </span>
+                </div>
+                <div className="agent-version">Not supported</div>
               </div>
-              <div className="agent-version">Not supported</div>
-            </div>
+            )}
           </div>
 
           {/* Settings Section inside Sidebar */}
           <div style={{ marginTop: "auto", borderTop: "1px solid rgba(255, 255, 255, 0.08)", paddingTop: "16px" }}>
             <div className="sidebar-title" style={{ marginBottom: "8px" }}>App Settings</div>
             <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.8rem", color: "#94a3b8", cursor: "pointer" }}>
-              <input 
-                type="checkbox" 
-                checked={autoCheckUpdate} 
+              <input
+                type="checkbox"
+                checked={autoCheckUpdate}
                 onChange={(e) => {
                   setAutoCheckUpdate(e.target.checked);
                   localStorage.setItem("autoCheckUpdate", e.target.checked.toString());
-                }} 
+                }}
               />
               起動時に更新を確認する
             </label>
           </div>
         </aside>
 
-        {/* Main Panel View (Chat OR Onboarding installer) */}
+        {/* Main Panel View (live terminal OR Onboarding installer) */}
         {!agyStatus.installed && selectedAgentId === "agy" ? (
           /* Onboarding Panel */
-          <div className="onboarding-panel" style={{ display: "flex", flexDirection: isTerminalOpen ? "row" : "column", gap: "24px", width: "100%" }}>
+          <div className="onboarding-panel" style={{ display: "flex", flexDirection: isInstallTerminalOpen ? "row" : "column", gap: "24px", width: "100%" }}>
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
               <div className="onboarding-icon">🌌</div>
               <h2 className="onboarding-title">Antigravity CLI required</h2>
               <p className="onboarding-desc">
-                This desktop client runs Antigravity CLI (agy) under the hood to perform tasks. 
+                This desktop client runs Antigravity CLI (agy) under the hood to perform tasks.
                 We detected that "agy" is currently not installed or not in your system path.
               </p>
-              
+
               {isInstalling ? (
                 <button className="primary" disabled style={{ background: "#64748b" }}>
                   Installing agent (logs in console)...
@@ -379,154 +455,140 @@ function App() {
             </div>
 
             {/* Embedded Live Console for Installer Logs */}
-            {isTerminalOpen && (
+            {isInstallTerminalOpen && (
               <div className="terminal-panel" style={{ flex: 1, minHeight: "350px", height: "100%" }}>
                 <div className="terminal-header">
                   <span>INSTALLATION LOGS (PTY STREAM)</span>
                   <span style={{ color: "#ef4444" }}>RUNNING</span>
                 </div>
-                <div style={{ flex: 1, minHeight: 0 }}>
-                  <TerminalView 
+                <div style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+                  <TerminalView
                     terminalRef={terminalRef}
-                    onData={(data) => {
-                      invoke("write_to_pty", { input: data });
-                    }}
+                    onData={handleTerminalInput}
+                    onResize={handleTerminalResize}
                   />
                 </div>
               </div>
             )}
           </div>
         ) : (
-          /* Normal Chat Interface */
+          /* Live Antigravity Terminal Session */
           <div className="main-view-layout" style={{ flex: 1 }}>
-            {/* Chat History Panel */}
             <div className="chat-panel">
-              <div className="messages-list">
-                {messages.length === 0 ? (
-                  <div className="message-row system">
-                    <div className="message-bubble">
-                      Welcome to Antigravity. Start Session and type a query.
-                    </div>
-                  </div>
-                ) : (
-                  messages.map((msg) => (
-                    <div key={msg.id} className={`message-row ${msg.sender}`}>
-                      <div className="message-bubble">
-                        {msg.sender === "system" ? (
-                          <div className="message-content">{msg.content}</div>
-                        ) : (
-                          <>
-                            <Markdown content={msg.content} />
-                            {msg.status === "thinking" && (
-                              <div style={{ marginTop: "4px" }}>
-                                <span className="thinking-dot"></span>
-                                <span className="thinking-dot"></span>
-                                <span className="thinking-dot"></span>
-                              </div>
-                            )}
-                            {msg.prompt && (
-                              <div style={{
-                                marginTop: "12px",
-                                padding: "12px",
-                                background: "rgba(255, 255, 255, 0.05)",
-                                border: "1px solid rgba(255, 255, 255, 0.1)",
-                                borderRadius: "8px",
-                                display: "flex",
-                                flexDirection: "column",
-                                gap: "8px"
-                              }}>
-                                <div style={{ fontSize: "0.85rem", color: "#94a3b8", fontWeight: "600" }}>
-                                  {msg.prompt.message}
-                                </div>
-                                
-                                {msg.prompt.prompt_type === "confirm" && (
-                                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                                    {msg.prompt.options ? (
-                                      msg.prompt.options.map((opt: string) => (
-                                        <button 
-                                          key={opt}
-                                          className={opt.toLowerCase().includes("no") || opt.toLowerCase().includes("exit") ? "secondary" : "primary"}
-                                          onClick={() => respondToPrompt(msg.id, opt)}
-                                          style={{ padding: "6px 16px" }}
-                                        >
-                                          {opt}
-                                        </button>
-                                      ))
-                                    ) : (
-                                      <>
-                                        <button 
-                                          className="primary" 
-                                          onClick={() => respondToPrompt(msg.id, "y")}
-                                          style={{ padding: "6px 16px" }}
-                                        >
-                                          はい (Yes)
-                                        </button>
-                                        <button 
-                                          className="secondary" 
-                                          onClick={() => respondToPrompt(msg.id, "n")}
-                                          style={{ padding: "6px 16px" }}
-                                        >
-                                          いいえ (No)
-                                        </button>
-                                      </>
-                                    )}
-                                  </div>
-                                )}
-                                
-                                {msg.prompt.prompt_type === "path" && (
-                                  <div>
-                                    <button 
-                                      className="primary" 
-                                      onClick={async () => {
-                                        const selected = await open({
-                                          directory: true,
-                                          multiple: false,
-                                          title: "Select Path for CLI Prompt",
-                                        });
-                                        if (selected && typeof selected === "string") {
-                                          respondToPrompt(msg.id, selected);
-                                        }
-                                      }}
-                                      style={{ padding: "6px 16px" }}
-                                    >
-                                      フォルダを選択
-                                    </button>
-                                  </div>
-                                )}
-
-                                {msg.prompt.prompt_type === "login" && msg.prompt.url && (
-                                  <div>
-                                    <a 
-                                      href={msg.prompt.url} 
-                                      target="_blank" 
-                                      rel="noreferrer"
-                                      style={{
-                                        display: "inline-flex",
-                                        alignItems: "center",
-                                        padding: "8px 16px",
-                                        background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
-                                        color: "#fff",
-                                        textDecoration: "none",
-                                        borderRadius: "8px",
-                                        fontWeight: "600",
-                                        fontSize: "0.9rem",
-                                        boxShadow: "0 2px 8px rgba(16, 185, 129, 0.4)"
-                                      }}
-                                    >
-                                      ブラウザでログインを開く
-                                    </a>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                )}
-                <div ref={messagesEndRef} />
+              <div className="terminal-panel" style={{ flex: 1 }}>
+                <div className="terminal-header">
+                  <span>{isUpdating ? "UPDATE LOGS (PTY STREAM)" : "ANTIGRAVITY CLI"}</span>
+                  <span style={{ color: status === "running" ? "#4caf50" : "#94a3b8" }}>
+                    {status.toUpperCase()}
+                  </span>
+                </div>
+                <div style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+                  <TerminalView
+                    terminalRef={terminalRef}
+                    onData={handleTerminalInput}
+                    onResize={handleTerminalResize}
+                  />
+                </div>
               </div>
+
+              {/* Structured, clickable UI for interactive prompts (folder
+                  trust, tool permission, login link) so novice users don't
+                  have to navigate agy's own arrow-key prompts by hand. */}
+              {activePrompt && (
+                <div style={{
+                  marginTop: "12px",
+                  padding: "12px",
+                  background: "rgba(255, 255, 255, 0.9)",
+                  border: "1px solid rgba(0, 0, 0, 0.08)",
+                  borderRadius: "8px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "8px"
+                }}>
+                  <div style={{ fontSize: "0.85rem", color: "#475569", fontWeight: "600" }}>
+                    {activePrompt.message}
+                  </div>
+
+                  {activePrompt.prompt_type === "confirm" && (
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                      {activePrompt.options ? (
+                        activePrompt.options.map((opt: string) => (
+                          <button
+                            key={opt}
+                            className={opt.toLowerCase().includes("no") || opt.toLowerCase().includes("exit") ? "secondary" : "primary"}
+                            onClick={() => respondToPrompt(opt)}
+                            style={{ padding: "6px 16px" }}
+                          >
+                            {opt}
+                          </button>
+                        ))
+                      ) : (
+                        <>
+                          <button
+                            className="primary"
+                            onClick={() => respondToPrompt("y")}
+                            style={{ padding: "6px 16px" }}
+                          >
+                            はい (Yes)
+                          </button>
+                          <button
+                            className="secondary"
+                            onClick={() => respondToPrompt("n")}
+                            style={{ padding: "6px 16px" }}
+                          >
+                            いいえ (No)
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {activePrompt.prompt_type === "path" && (
+                    <div>
+                      <button
+                        className="primary"
+                        onClick={async () => {
+                          const selected = await open({
+                            directory: true,
+                            multiple: false,
+                            title: "Select Path for CLI Prompt",
+                          });
+                          if (selected && typeof selected === "string") {
+                            respondToPrompt(selected);
+                          }
+                        }}
+                        style={{ padding: "6px 16px" }}
+                      >
+                        フォルダを選択
+                      </button>
+                    </div>
+                  )}
+
+                  {activePrompt.prompt_type === "login" && activePrompt.url && (
+                    <div>
+                      <a
+                        href={activePrompt.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          padding: "8px 16px",
+                          background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                          color: "#fff",
+                          textDecoration: "none",
+                          borderRadius: "8px",
+                          fontWeight: "600",
+                          fontSize: "0.9rem",
+                          boxShadow: "0 2px 8px rgba(16, 185, 129, 0.4)"
+                        }}
+                      >
+                        ブラウザでログインを開く
+                      </a>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Form Input Bar */}
               <form onSubmit={handleSend} className="input-form">
@@ -536,43 +598,23 @@ function App() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   placeholder={
-                    status !== "running" 
-                      ? "Start a session to interact" 
+                    status !== "running"
+                      ? "Start a session to interact"
                       : hasActivePrompt
-                      ? "Please respond to the interactive prompt below..."
+                      ? "Please respond to the interactive prompt above..."
                       : "Send terminal input..."
                   }
                   disabled={status !== "running" || hasActivePrompt}
                 />
-                <button 
-                  type="submit" 
-                  className="primary" 
+                <button
+                  type="submit"
+                  className="primary"
                   disabled={status !== "running" || !input.trim()}
                 >
                   Send
                 </button>
               </form>
             </div>
-
-            {/* Debug/Installation/Update Terminal Panel (xterm.js) */}
-            {isTerminalOpen && (
-              <div className="terminal-panel" style={{ flex: isUpdating ? 1 : undefined }}>
-                <div className="terminal-header">
-                  <span>{isUpdating ? "UPDATE LOGS (PTY STREAM)" : "LIVE INTERACTIVE SHELL LOG (DEBUG)"}</span>
-                  <span style={{ color: isUpdating ? "#ef4444" : "#4caf50" }}>
-                    {isUpdating ? "RUNNING" : "ONLINE"}
-                  </span>
-                </div>
-                <div style={{ flex: 1, minHeight: 0 }}>
-                  <TerminalView 
-                    terminalRef={terminalRef}
-                    onData={(data) => {
-                      invoke("write_to_pty", { input: data });
-                    }}
-                  />
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>

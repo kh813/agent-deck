@@ -22,6 +22,7 @@ pub fn run() {
             pty::start_pty,
             pty::write_to_pty,
             pty::stop_pty,
+            pty::resize_pty,
             agent::detect_agent,
             agent::get_install_command,
             agent::check_agent_update,
