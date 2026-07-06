@@ -9,9 +9,11 @@ interface TerminalViewProps {
   terminalRef: React.MutableRefObject<Terminal | null>;
   onResize?: (size: { rows: number; cols: number }) => void;
   theme: TerminalTheme;
+  fontFamily?: string;
+  fontSize?: number;
 }
 
-export function TerminalView({ onData, terminalRef, onResize, theme }: TerminalViewProps) {
+export function TerminalView({ onData, terminalRef, onResize, theme, fontFamily, fontSize }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -21,8 +23,8 @@ export function TerminalView({ onData, terminalRef, onResize, theme }: TerminalV
     const term = new Terminal({
       cursorBlink: true,
       theme: theme,
-      fontSize: 13,
-      fontFamily: "Menlo, Monaco, 'Courier New', monospace",
+      fontSize: fontSize || 13,
+      fontFamily: fontFamily || "Menlo, Monaco, 'Courier New', monospace",
     });
 
     // Open terminal in the container DOM element
@@ -110,6 +112,32 @@ export function TerminalView({ onData, terminalRef, onResize, theme }: TerminalV
       terminalRef.current.options.theme = theme;
     }
   }, [theme, terminalRef]);
+
+  // Handle dynamic font changes and trigger cell refit
+  useEffect(() => {
+    if (terminalRef.current && containerRef.current) {
+      let changed = false;
+      if (fontSize && terminalRef.current.options.fontSize !== fontSize) {
+        terminalRef.current.options.fontSize = fontSize;
+        changed = true;
+      }
+      if (fontFamily && terminalRef.current.options.fontFamily !== fontFamily) {
+        terminalRef.current.options.fontFamily = fontFamily;
+        changed = true;
+      }
+      if (changed) {
+        // Force refit for new cell metrics
+        const style = window.getComputedStyle(containerRef.current);
+        const paddingX = parseInt(style.paddingLeft, 10) + parseInt(style.paddingRight, 10);
+        const paddingY = parseInt(style.paddingTop, 10) + parseInt(style.paddingBottom, 10);
+        const size = computeFitSize(terminalRef.current, containerRef.current.clientWidth - paddingX, containerRef.current.clientHeight - paddingY);
+        if (size) {
+          terminalRef.current.resize(size.cols, size.rows);
+          onResize?.({ rows: size.rows, cols: size.cols });
+        }
+      }
+    }
+  }, [fontSize, fontFamily, terminalRef, onResize]);
 
   return (
     <div
