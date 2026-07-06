@@ -44,7 +44,7 @@ jobs:
         if: matrix.platform == 'macos-latest'
         run: |
           cd src-tauri/target/aarch64-apple-darwin/release/bundle/macos
-          zip -r ${{ github.workspace }}/agent-ui-mac.zip agent-ui.app
+          ditto -c -k --sequesterRsrc --keepParent agent-ui.app ${{ github.workspace }}/agent-ui-mac.zip
 
       - name: package Windows exe to zip
         if: matrix.platform == 'windows-latest'
