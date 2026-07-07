@@ -149,15 +149,16 @@ fn get_default_cwd() -> PathBuf {
     if let Ok(exe_path) = std::env::current_exe() {
         let mut path = exe_path.clone();
         
-        // On macOS, traverse up to get outside of the .app bundle
+        // On macOS, traverse up to get outside of the .app bundle and wrapper folder
         #[cfg(target_os = "macos")]
         {
-            // Traverse up 4 times:
+            // Traverse up 5 times:
             // 1. Contents/MacOS/agent-ui -> Contents/MacOS
             // 2. Contents/MacOS -> Contents
             // 3. Contents -> agent-ui.app
-            // 4. agent-ui.app -> parent folder containing the .app
-            for _ in 0..4 {
+            // 4. agent-ui.app -> app/ (wrapper folder)
+            // 5. app/ -> actual project root
+            for _ in 0..5 {
                 if let Some(parent) = path.parent() {
                     path = parent.to_path_buf();
                 }
@@ -165,9 +166,13 @@ fn get_default_cwd() -> PathBuf {
             return path;
         }
 
-        // On Windows/Linux, just get the parent directory of the .exe
+        // On Windows/Linux, traverse up to get outside of the app/ wrapper folder
         #[cfg(not(target_os = "macos"))]
         {
+            // exe is placed in <project_root>/app/agent-ui.exe -> traverse up twice
+            if let Some(parent) = path.parent().and_then(|p| p.parent()) {
+                return parent.to_path_buf();
+            }
             if let Some(parent) = path.parent() {
                 return parent.to_path_buf();
             }

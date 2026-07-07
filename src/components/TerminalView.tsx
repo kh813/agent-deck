@@ -30,6 +30,20 @@ export function TerminalView({ onData, terminalRef, onResize, theme, fontFamily,
 
     term.loadAddon(new WebLinksAddon());
 
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown") return true;
+      const mod = event.ctrlKey || event.metaKey;
+      if (mod && event.key.toLowerCase() === "c" && term.hasSelection()) {
+        navigator.clipboard.writeText(term.getSelection());
+        return false; // Copy selection, do not forward key to pty
+      }
+      if (mod && event.shiftKey && event.key.toLowerCase() === "a") {
+        term.selectAll();
+        return false;
+      }
+      return true;
+    });
+
     // Open terminal in the container DOM element
     term.open(containerRef.current);
 
