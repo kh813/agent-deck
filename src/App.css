@@ -594,30 +594,6 @@ button:disabled {
   transition: color 0.2s;
 }
 
-/* Theme selector select styling */
-.theme-selector {
-  background: var(--btn-secondary-bg);
-  border: 1px solid var(--btn-secondary-border);
-  color: var(--btn-secondary-color);
-  padding: 6px 12px;
-  border-radius: 8px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  outline: none;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.theme-selector:hover {
-  background: var(--btn-secondary-hover);
-}
-
-.theme-selector option {
-  background: var(--btn-secondary-bg);
-  color: var(--btn-secondary-color);
-}
-
-
 /* Premium Micro-animations and Transitions */
 @keyframes slideDown {
   from {

@@ -54,18 +54,32 @@ function App() {
   // Sync theme with body class
   useEffect(() => {
     localStorage.setItem("agent-ui-theme", currentThemeId);
-    
+
     // Remove all theme classes first
     const classesToRemove = Array.from(document.body.classList).filter(c => c.startsWith("theme-"));
     classesToRemove.forEach(c => document.body.classList.remove(c));
-    
+
     // Add specific theme class
     document.body.classList.add(`theme-${currentThemeId}`);
-    
+
     // Also toggle generic theme-dark helper if needed
     const isDark = themes[currentThemeId]?.isDark ?? false;
     document.body.classList.toggle("theme-dark", isDark);
+
+    // Keep the native app menu's Theme checkmarks in sync
+    invoke("set_theme", { themeId: currentThemeId }).catch(() => {});
   }, [currentThemeId]);
+
+  // Apply theme changes made from the native app menu
+  useEffect(() => {
+    const unsub = subscribeToTauriEvent(
+      listen<string>("theme-changed", (event) => {
+        setCurrentThemeId(event.payload);
+      })
+    );
+
+    return unsub;
+  }, []);
 
   // OS locale auto detection (JA if OS language starts with 'ja', otherwise EN)
   const lang: Lang = navigator.language.startsWith("ja") ? "ja" : "en";
@@ -353,19 +367,6 @@ function App() {
         <h1 className="app-title">{appConfig ? appConfig.app_name : t("appTitle")}</h1>
 
         <div className="controls-group">
-          <select
-            className="theme-selector"
-            value={currentThemeId}
-            onChange={(e) => setCurrentThemeId(e.target.value)}
-            title="Select Theme"
-          >
-            {Object.entries(themes).map(([id, t]) => (
-              <option key={id} value={id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-
           {currentAgentStatus.installed && (
             <>
               <div className="cwd-display" title={cwd || "Default working directory"}>

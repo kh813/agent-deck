@@ -1,6 +1,7 @@
 mod pty;
 mod agent;
 mod config;
+mod menu;
 
 use pty::PtyState;
 
@@ -15,8 +16,10 @@ pub fn run() {
     tauri::Builder::default()
         .manage(PtyState::default())
         // Tauri only builds this default Edit/Window/Help menu automatically on macOS;
-        // set it explicitly so Windows and Linux also get a menu bar with Copy/Paste/etc.
-        .menu(|handle| tauri::menu::Menu::default(handle))
+        // set it explicitly so Windows and Linux also get a menu bar with Copy/Paste/etc.,
+        // plus a Theme submenu mirroring the in-app theme selector.
+        .menu(|handle| menu::build_menu(handle, &config::get_app_config(None).default_theme))
+        .on_menu_event(menu::handle_menu_event)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -33,7 +36,8 @@ pub fn run() {
             agent::get_update_command,
             agent::check_skill_folder,
             agent::build_skill,
-            config::get_app_config
+            config::get_app_config,
+            menu::set_theme
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
