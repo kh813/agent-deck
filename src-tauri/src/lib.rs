@@ -14,6 +14,9 @@ fn greet(name: &str) -> String {
 pub fn run() {
     tauri::Builder::default()
         .manage(PtyState::default())
+        // Tauri only builds this default Edit/Window/Help menu automatically on macOS;
+        // set it explicitly so Windows and Linux also get a menu bar with Copy/Paste/etc.
+        .menu(|handle| tauri::menu::Menu::default(handle))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
