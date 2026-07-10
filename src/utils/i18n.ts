@@ -4,6 +4,7 @@ export const translations = {
   ja: {
     appTitle: "agent-ui チャットコンソール",
     appLocationDefault: "アプリの場所 (デフォルト)",
+    agentLabel: "エージェント",
     changeDir: "ディレクトリ変更",
     stop: "停止",
     startSession: "セッション開始",
@@ -45,6 +46,7 @@ export const translations = {
   en: {
     appTitle: "agent-ui Chat Console",
     appLocationDefault: "App Location (Default)",
+    agentLabel: "Agent",
     changeDir: "Change Dir",
     stop: "Stop",
     startSession: "Start Session",
