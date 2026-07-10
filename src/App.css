@@ -291,6 +291,14 @@ body {
   color: var(--cwd-path);
 }
 
+/* Agent name chip reuses .cwd-display's pill styling, but the value isn't
+   a filesystem path so it doesn't need the monospace font or ellipsis
+   truncation width. */
+.agent-type-display {
+  font-family: inherit;
+  max-width: none;
+}
+
 /* Buttons */
 button {
   display: inline-flex;

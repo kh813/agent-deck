@@ -100,6 +100,10 @@ function App() {
     version: null,
   };
 
+  // Derived from selectedAgentId so this naturally becomes "the active
+  // tab's engine" once multiple concurrent sessions/tabs are supported.
+  const selectedEngine = appConfig?.engines.find((e) => e.id === selectedAgentId);
+
   // Update States
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({
     current_version: null,
@@ -369,6 +373,11 @@ function App() {
         <div className="controls-group">
           {currentAgentStatus.installed && (
             <>
+              <div className="cwd-display agent-type-display" title={selectedEngine?.name}>
+                <span className="cwd-label">{t("agentLabel")}:</span>
+                <span className="cwd-path">{selectedEngine?.name}</span>
+              </div>
+
               <div className="cwd-display" title={cwd || "Default working directory"}>
                 <span className="cwd-label">CWD:</span>
                 <span className="cwd-path">{cwd || t("appLocationDefault")}</span>
