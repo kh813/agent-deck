@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::pty::{get_default_cwd, resolve_app_bundle_dir};
+use crate::pty::{get_default_cwd, resolve_app_bundle_dir, resolve_project_root};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -181,15 +181,35 @@ pub async fn detect_agent_internal<R: tauri::Runtime>(
         // macOS (and is a no-op beyond exe_path.parent() on Windows/Linux,
         // where the executable already sits directly in this folder).
         if let Ok(exe_path) = std::env::current_exe() {
-            let exe_dir = resolve_app_bundle_dir(exe_path);
             let local_bin_name = if is_windows {
                 format!("{}.exe", config.binary)
             } else {
                 config.binary.clone()
             };
-            let local_path = exe_dir.join("bin").join(local_bin_name);
+
+            // Check in app bundle directory (app/bin/agy)
+            let exe_dir = resolve_app_bundle_dir(exe_path.clone());
+            let local_path = exe_dir.join("bin").join(&local_bin_name);
             if local_path.exists() {
                 found_path = Some(local_path.to_string_lossy().to_string());
+            }
+
+            // Check in project root (bin/agy)
+            if found_path.is_none() {
+                let proj_dir = resolve_project_root(exe_path.clone());
+                let local_path = proj_dir.join("bin").join(&local_bin_name);
+                if local_path.exists() {
+                    found_path = Some(local_path.to_string_lossy().to_string());
+                }
+            }
+
+            // Check in project root's app/bin (app/bin/agy from project root perspective)
+            if found_path.is_none() {
+                let proj_dir = resolve_project_root(exe_path.clone());
+                let local_path = proj_dir.join("app").join("bin").join(&local_bin_name);
+                if local_path.exists() {
+                    found_path = Some(local_path.to_string_lossy().to_string());
+                }
             }
         }
 
