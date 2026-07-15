@@ -317,10 +317,12 @@ function App() {
         agentId: "agy",
       });
 
+      const appBundleDir = await invoke<string>("get_app_bundle_dir");
+
       await invoke("start_pty", {
         command: installCmd.command,
         args: installCmd.args,
-        cwd: null,
+        cwd: appBundleDir,
         rows: terminalSizeRef.current?.rows,
         cols: terminalSizeRef.current?.cols,
       });
@@ -342,10 +344,12 @@ function App() {
         agentId: "agy",
       });
 
+      const appBundleDir = await invoke<string>("get_app_bundle_dir");
+
       await invoke("start_pty", {
         command: updateCmd.command,
         args: updateCmd.args,
-        cwd: null,
+        cwd: appBundleDir,
         rows: terminalSizeRef.current?.rows,
         cols: terminalSizeRef.current?.cols,
       });

@@ -30,6 +30,7 @@ pub fn run() {
             pty::write_to_pty,
             pty::stop_pty,
             pty::resize_pty,
+            pty::get_app_bundle_dir,
             agent::detect_agent,
             agent::get_install_command,
             agent::check_agent_update,

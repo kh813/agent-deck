@@ -2,7 +2,7 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use regex::Regex;
 use serde::Serialize;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -145,7 +145,27 @@ pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
 
 // --- Internal Logic (Generic Runtime support for testing) ---
 
+fn is_development_mode(path: &Path) -> bool {
+    path.components().any(|c| c.as_os_str() == "target")
+}
+
+fn find_dev_project_root(mut path: PathBuf) -> Option<PathBuf> {
+    while let Some(parent) = path.parent() {
+        if parent.join("src-tauri").exists() {
+            return Some(parent.to_path_buf());
+        }
+        path = parent.to_path_buf();
+    }
+    None
+}
+
 pub(crate) fn resolve_project_root(mut path: PathBuf) -> PathBuf {
+    if is_development_mode(&path) {
+        if let Some(dev_root) = find_dev_project_root(path.clone()) {
+            return dev_root;
+        }
+    }
+
     // On macOS, traverse up to get outside of the .app bundle and wrapper folder
     #[cfg(target_os = "macos")]
     {
@@ -186,6 +206,12 @@ pub(crate) fn resolve_project_root(mut path: PathBuf) -> PathBuf {
 // NOT simply the raw binary's own parent directory (Contents/MacOS/) — that
 // naive computation was the bug this function fixes.
 pub(crate) fn resolve_app_bundle_dir(mut path: PathBuf) -> PathBuf {
+    if is_development_mode(&path) {
+        if let Some(dev_root) = find_dev_project_root(path.clone()) {
+            return dev_root;
+        }
+    }
+
     #[cfg(target_os = "macos")]
     {
         // Traverse up 4 times to get from the raw Mach-O binary out to the
@@ -431,6 +457,15 @@ pub async fn write_to_pty(
 #[tauri::command]
 pub async fn stop_pty(state: State<'_, PtyState>) -> Result<(), String> {
     stop_pty_internal(&state).await
+}
+
+#[tauri::command]
+pub fn get_app_bundle_dir() -> Result<String, String> {
+    if let Ok(exe_path) = std::env::current_exe() {
+        Ok(resolve_app_bundle_dir(exe_path).to_string_lossy().to_string())
+    } else {
+        Err("Failed to get current executable path".to_string())
+    }
 }
 
 // --- Test Code ---
