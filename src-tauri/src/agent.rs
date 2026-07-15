@@ -520,6 +520,37 @@ fn start_pre_launch_command_internal<R: tauri::Runtime>(
 
     let mut cmd = Command::new(&command);
     cmd.args(&args);
+
+    let mut path_env = std::env::var("PATH").unwrap_or_default();
+    let path_sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+
+    #[cfg(target_os = "macos")]
+    {
+        for path in &["/opt/homebrew/bin", "/usr/local/bin"] {
+            if !path_env.contains(path) {
+                path_env = format!("{}{}{}", path, path_sep, path_env);
+            }
+        }
+    }
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        let exe_dir = resolve_app_bundle_dir(exe_path.clone());
+        let proj_dir = resolve_project_root(exe_path);
+        
+        let mut local_paths = Vec::new();
+        local_paths.push(exe_dir.join("bin"));
+        local_paths.push(exe_dir.join("app").join("bin"));
+        local_paths.push(proj_dir.join("bin"));
+        local_paths.push(proj_dir.join("app").join("bin"));
+
+        for local_path in local_paths {
+            let path_str = local_path.to_string_lossy().to_string();
+            if !path_env.contains(&path_str) {
+                path_env = format!("{}{}{}", path_str, path_sep, path_env);
+            }
+        }
+    }
+    cmd.env("PATH", path_env);
     // Match start_pty's cwd resolution (pty.rs): fall back to the resolved
     // project root rather than leaving the child's cwd unset, which would
     // default to wherever the OS happened to launch this app from (e.g. "/"
@@ -680,7 +711,14 @@ mod tests {
         tokio::pin!(deadline);
         loop {
             tokio::select! {
-                Some(s) = status_rx.recv() => { success = Some(s); if out_rx.is_empty() { break; } }
+                Some(s) = status_rx.recv() => {
+                    success = Some(s);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    while let Ok(chunk) = out_rx.try_recv() {
+                        output.push_str(&chunk);
+                    }
+                    break;
+                }
                 Some(chunk) = out_rx.recv() => { output.push_str(&chunk); }
                 _ = &mut deadline => break,
             }

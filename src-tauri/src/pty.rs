@@ -307,19 +307,32 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
     // Add local bin directories to PATH so that command-line tools like marp or agy
     // are directly accessible inside the PTY shell.
     let mut path_env = std::env::var("PATH").unwrap_or_default();
-    let mut local_paths = Vec::new();
+    let path_sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+
+    #[cfg(target_os = "macos")]
+    {
+        for path in &["/opt/homebrew/bin", "/usr/local/bin"] {
+            if !path_env.contains(path) {
+                path_env = format!("{}{}{}", path, path_sep, path_env);
+            }
+        }
+    }
+
     if let Ok(exe_path) = std::env::current_exe() {
         let exe_dir = resolve_app_bundle_dir(exe_path.clone());
         let proj_dir = resolve_project_root(exe_path);
+        
+        let mut local_paths = Vec::new();
         local_paths.push(exe_dir.join("bin"));
+        local_paths.push(exe_dir.join("app").join("bin"));
         local_paths.push(proj_dir.join("bin"));
         local_paths.push(proj_dir.join("app").join("bin"));
-    }
-    let path_sep = if cfg!(target_os = "windows") { ";" } else { ":" };
-    for local_path in local_paths {
-        let path_str = local_path.to_string_lossy().to_string();
-        if !path_env.contains(&path_str) {
-            path_env = format!("{}{}{}", path_str, path_sep, path_env);
+
+        for local_path in local_paths {
+            let path_str = local_path.to_string_lossy().to_string();
+            if !path_env.contains(&path_str) {
+                path_env = format!("{}{}{}", path_str, path_sep, path_env);
+            }
         }
     }
     cmd.env("PATH", path_env);
@@ -753,7 +766,8 @@ mod tests {
                     received.push_str(&data);
                     if received.contains("TERM=xterm-256color") 
                         && received.contains("COLORTERM=truecolor") 
-                        && received.contains("PYTHONIOENCODING=utf-8") {
+                        && received.contains("PYTHONIOENCODING=utf-8")
+                        && received.contains("PATH=") {
                         break;
                     }
                 }
