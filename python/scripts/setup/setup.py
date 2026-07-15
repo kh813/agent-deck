@@ -244,6 +244,7 @@ def skills_list():
             print(f"  ✗ {name}")
 
 def skills_rebuild():
+    setup_binaries()
     build_skills()
     install_skills()
     print("==> Skills rebuilt and reinstalled.")
