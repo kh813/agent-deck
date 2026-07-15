@@ -15,18 +15,33 @@ mkdir -p "$SKILLS_OUT"
 rm -f "$SKILLS_OUT"/*.skill
 
 count=0
-declare -A seen
+seen_skills=()
+get_seen_dir() {
+    local target="$1"
+    [ "${#seen_skills[@]}" -eq 0 ] && return 0
+    for item in "${seen_skills[@]}"; do
+        local key="${item%%:*}"
+        local val="${item#*:}"
+        if [ "$key" = "$target" ]; then
+            echo "$val"
+            return 0
+        fi
+    done
+    return 0
+}
+
 for root in "${SKILL_ROOTS[@]}"; do
     [ -d "$root" ] || continue
     while IFS= read -r -d '' skill_md; do
         dir="$(dirname "$skill_md")"
         name="$(basename "$dir")"
 
-        if [ -n "${seen[$name]+x}" ]; then
-            echo "  [WARN] Duplicate skill name '$name': ${seen[$name]} vs $dir — keeping the first one." >&2
+        prev_dir="$(get_seen_dir "$name")"
+        if [ -n "$prev_dir" ]; then
+            echo "  [WARN] Duplicate skill name '$name': $prev_dir vs $dir — keeping the first one." >&2
             continue
         fi
-        seen[$name]="$dir"
+        seen_skills+=("$name:$dir")
 
         output="$SKILLS_OUT/$name.skill"
         (cd "$dir" && zip -j "$output" SKILL.md -q)
