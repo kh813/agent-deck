@@ -13,8 +13,17 @@ except ImportError:
 _log = _get_logger("auth")
 
 
-def run_auth_flow(flow, port=0, login_hint=None):
-    """Run OAuth local server and open Chrome for the consent screen."""
+def run_auth_flow(flow, port=0, login_hint=None, timeout_seconds=None):
+    """Run OAuth local server and open Chrome for the consent screen.
+
+    timeout_seconds: passed through to run_local_server. Set this when the
+    caller must never block forever (e.g. skills_catalog.py's launch-time
+    sync, which runs inside the non-interactive preflight — if the user
+    closes the browser without authorizing, the local server would
+    otherwise wait for a callback that never comes and hang the whole
+    session start). On timeout run_local_server raises, which callers
+    treat as "skipped this launch, retry next time".
+    """
     _log.info("OAuth flow starting login_hint=%s", login_hint or "(none)")
     print("  Chrome が開きます。会社のGoogleアカウントでログインしてください。")
     print("  Chrome will open — log in with your company Google account.")
@@ -48,6 +57,8 @@ def run_auth_flow(flow, port=0, login_hint=None):
     kwargs = {"port": port, "open_browser": True}
     if login_hint:
         kwargs["login_hint"] = login_hint
+    if timeout_seconds is not None:
+        kwargs["timeout_seconds"] = timeout_seconds
     try:
         creds = flow.run_local_server(**kwargs)
         _log.info("OAuth flow completed successfully")

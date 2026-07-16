@@ -21,10 +21,14 @@ Browse and retrieve skills shared within the group from the Google Drive catalog
 | `skill-catalog import <name>` | スキルをインポート＆インストール |
 | `skill-catalog update-index` | カタログインデックスをDriveから再取得（管理者用） |
 | `skill-catalog share <name>` | ローカルスキルをカタログに登録・更新 |
+| `skill-catalog publish <name>` | スキルを自動配布対象（`_default/`）に登録（管理者用） |
 | `skill-catalog unshare <name>` | カタログからスキルを取り下げ（ローカルは残す） |
 | `skill-catalog change-owner <name>` | スキルのオーナーを変更 |
 
-カタログの構成: `<owner>/<skill-name>.md`（例: `user.name/downloads.md`）
+カタログの構成: `<owner>/<skill-name>.md`（SKILL.md のみのスキル）または `<owner>/<skill-name>.zip`（スクリプト等を同梱するスキル。形式は share/publish 時に自動選択されます）
+
+`_default/` フォルダのスキルは特別で、カタログが設定されている全端末の起動時に自動で導入・更新されます（手動 import 不要）。
+Skills under `_default/` are special: they are automatically installed/updated on every configured machine at launch (no manual import needed).
 
 **OS別コマンド / OS-specific commands:** 以下のコマンドはすべて Mac/Linux 表記です。Windows では `python3` → `python`、パス区切りの `/` → `\` に読み替えて実行してください。
 All commands below are written for Mac/Linux. On Windows, replace `python3` with `python` and forward slashes (`/`) with backslashes (`\`).
@@ -44,6 +48,7 @@ If the user types `/skill-catalog` or "skill-catalog" without specifying a subco
   skill-catalog info <name>             スキルの詳細を表示 / Show skill details
   skill-catalog import <name>           スキルをインポート / Import a skill
   skill-catalog share <name>            カタログに登録・更新 / Publish or update in the catalog
+  skill-catalog publish <name>          自動配布対象に登録（管理者用） / Publish for auto-distribution (admin)
   skill-catalog unshare <name>          カタログから取り下げ / Remove from the catalog
   skill-catalog change-owner <name>     オーナーを変更 / Transfer ownership
 
@@ -134,6 +139,25 @@ On first run, OAuth browser authentication is required.
 
 完了後、アップロード先（`owner/skill-name`）をユーザーに伝えてください。
 After completion, report the upload destination (`owner/skill-name`) to the user.
+
+---
+
+## skill-catalog publish <name>（管理者用 / Admin）
+
+スキルを自動配布フォルダ（`_default/`）に登録します。ここに置かれたスキルは、カタログが設定されている全端末の次回起動時に自動で導入・更新されます。組織の共通スキルを配布する管理者向けの操作です。
+Publishes a skill to the auto-distribution folder (`_default/`). Everything there is installed/updated automatically on every configured machine at its next launch. Intended for whoever administers the organization's shared skills.
+
+実行前に、全端末に自動配布される操作であることをユーザーに確認してください：
+Confirm with the user before running, since this affects every machine:
+
+```
+「<name>」を自動配布対象に登録します。カタログを設定した全端末の次回起動時に自動導入されます。よろしいですか？（はい / いいえ）
+Publish "<name>" for auto-distribution to every configured machine? (Yes / No)
+```
+
+```bash
+python3 python/scripts/setup/skills_catalog.py publish <name>
+```
 
 ---
 

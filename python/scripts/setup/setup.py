@@ -201,7 +201,28 @@ def skills_list():
         for name in sorted(disabled):
             print(f"  ✗ {name}")
 
+def sync_catalog_skills():
+    """Best-effort: pull auto-distributed skills (the catalog's _default/
+    folder) into skills-personal/ before building, so they're part of the
+    same rebuild. skills_catalog.py itself no-ops instantly unless
+    config.toml points at a real catalog_folder_id, and handles its own
+    venv re-exec for the google-api deps.
+
+    Never fails the rebuild: offline, auth declined/timed out, or any
+    other problem just means skills stay as they are until the next
+    launch (skills_catalog.py sync already prints its own [WARN] with the
+    reason in those cases)."""
+    script = os.path.join(SCRIPT_DIR, "skills_catalog.py")
+    try:
+        result = subprocess.run([sys.executable, script, "sync"],
+                                stdin=subprocess.DEVNULL)
+        if result.returncode != 0:
+            print("  [WARN] Catalog sync failed — continuing with existing skills.")
+    except Exception as e:
+        print(f"  [WARN] Catalog sync failed ({e}) — continuing with existing skills.")
+
 def skills_rebuild():
+    sync_catalog_skills()
     build_skills()
     install_skills()
     print("==> Skills rebuilt and reinstalled.")

@@ -7,14 +7,39 @@ Usage:
   python3 skills_catalog.py info <name|owner/name>
   python3 skills_catalog.py download <name|owner/name>
   python3 skills_catalog.py upload <skill_name>
+  python3 skills_catalog.py publish <skill_name>
+  python3 skills_catalog.py sync
   python3 skills_catalog.py delete <name|owner/name>
   python3 skills_catalog.py change-owner <name|owner/name> <new_email>
   python3 skills_catalog.py whoami
+
+Storage format on Drive (two kinds, per skill):
+  <owner>/<skill-name>.md   — SKILL.md-only skill (previewable on Drive)
+  <owner>/<skill-name>.zip  — whole skill directory, for skills that bundle
+                              scripts/assets beyond SKILL.md. On download the
+                              archive is extracted to skills-personal/<name>/;
+                              SKILL.md then references its bundled scripts
+                              PROJECT-ROOT-RELATIVE (e.g. "python3
+                              python/skills-personal/<name>/scripts/foo.py"),
+                              since the agy session cwd is the project root.
+                              The .skill package built from it still contains
+                              only SKILL.md — nothing about build/install
+                              changes.
+
+`publish` uploads to the special `_default/` owner folder; everything in
+that folder is auto-installed on every machine by `sync` (run from setup.py
+on every launch when config.toml has a real catalog_folder_id). This is how
+an organization distributes its own skills without forking this repo: ship a
+config.toml pointing at the org's catalog folder, `publish` the org's
+skills, and every install picks them up on next launch.
 """
 import sys
 import io
+import json
 import os
+import shutil
 import subprocess
+import zipfile
 from pathlib import Path
 
 # Re-exec with venv Python if google packages are not available.
@@ -90,10 +115,32 @@ COMMON_SKILL_ROOTS = [PROJECT_ROOT / "python" / "skills"]
 INDEX_PATH        = PROJECT_ROOT / "python" / "skills" / "skill-catalog" / "catalog-index.md"
 CATALOG_FILE_NAME = "skill-catalog.md"  # Drive ライブラリフォルダ直下の共有カタログ
 
+# Owner folder whose skills are auto-installed everywhere by `sync`.
+# Leading underscore keeps it from colliding with a real owner prefix
+# (owner prefixes are email local parts, which can't start with "_" in
+# practice for Google Workspace accounts).
+AUTO_SYNC_OWNER = "_default"
+# Records which skills `sync` itself installed (name -> Drive modifiedTime),
+# so a skill removed from _default/ is cleaned up locally without ever
+# touching skills the user created or downloaded manually.
+SYNC_MANIFEST_PATH = SKILLS_SRC / ".catalog-sync-manifest"
+# First-launch interactive auth cap: if the user closes the browser without
+# authorizing, sync must not hang the (non-interactive) preflight forever.
+SYNC_AUTH_TIMEOUT_SECONDS = 180
+
+
+def catalog_configured() -> bool:
+    """True when config.toml points at a real catalog folder. The shipped
+    config.toml.template uses "YOUR_..." placeholder strings (non-empty!),
+    so both empty and placeholder values must count as unconfigured —
+    otherwise every OSS install without a catalog would attempt Drive
+    calls (and interactive auth) on every launch."""
+    return bool(CATALOG_FOLDER_ID) and not CATALOG_FOLDER_ID.startswith("YOUR_")
+
 
 # ── Auth & service ────────────────────────────────────────────
 
-def _get_credentials():
+def _get_credentials(timeout_seconds=None):
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
     from google.auth.transport.requests import Request
@@ -107,15 +154,17 @@ def _get_credentials():
             creds.refresh(Request())
         else:
             flow = InstalledAppFlow.from_client_config(CLIENT_CONFIG, SCOPES)
-            creds = run_auth_flow(flow)
+            creds = run_auth_flow(flow, timeout_seconds=timeout_seconds)
         TOKEN_PATH.write_text(creds.to_json())
 
     return creds
 
 
-def _get_service():
+def _get_service(timeout_seconds=None):
     from googleapiclient.discovery import build
-    return build("drive", "v3", credentials=_get_credentials(), cache_discovery=False)
+    return build("drive", "v3",
+                 credentials=_get_credentials(timeout_seconds=timeout_seconds),
+                 cache_discovery=False)
 
 
 def _current_email(service) -> str:
@@ -142,8 +191,9 @@ def _list_owner_folders(service) -> dict:
     return {f["name"]: f["id"] for f in res.get("files", [])}
 
 
-def _list_md_in_folder(service, folder_id: str) -> list:
-    """Return [{id, name, modifiedTime}] for .md files in a folder."""
+def _list_skill_files_in_folder(service, folder_id: str) -> list:
+    """Return [{id, name, modifiedTime}] for skill files (.md / .zip) in a
+    folder. Both formats coexist in the catalog — see module docstring."""
     res = service.files().list(
         q=f"'{folder_id}' in parents and trashed=false",
         fields="files(id, name, modifiedTime)",
@@ -151,10 +201,11 @@ def _list_md_in_folder(service, folder_id: str) -> list:
         includeItemsFromAllDrives=True,
         pageSize=200,
     ).execute()
-    return [f for f in res.get("files", []) if f["name"].endswith(".md")]
+    return [f for f in res.get("files", [])
+            if f["name"].endswith(".md") or f["name"].endswith(".zip")]
 
 
-def _get_file_content(service, file_id: str) -> str:
+def _get_file_bytes(service, file_id: str) -> bytes:
     from googleapiclient.http import MediaIoBaseDownload
     req = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     buf = io.BytesIO()
@@ -162,7 +213,61 @@ def _get_file_content(service, file_id: str) -> str:
     done = False
     while not done:
         _, done = dl.next_chunk()
-    return buf.getvalue().decode("utf-8")
+    return buf.getvalue()
+
+
+def _get_file_content(service, file_id: str) -> str:
+    return _get_file_bytes(service, file_id).decode("utf-8")
+
+
+# ── Multi-file skill (zip) helpers ────────────────────────────
+
+def _skill_extra_files(skill_dir: Path) -> list:
+    """Files beyond SKILL.md that would need to travel with the skill.
+    __pycache__ and OS junk are not content."""
+    return [
+        p for p in sorted(skill_dir.rglob("*"))
+        if p.is_file()
+        and p.name != "SKILL.md"
+        and p.name != ".DS_Store"
+        and "__pycache__" not in p.parts
+    ]
+
+
+def _zip_skill_dir(skill_dir: Path) -> bytes:
+    """Zip a whole skill directory (arcnames relative to the dir itself,
+    so extraction lands directly in skills-personal/<name>/)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(skill_dir / "SKILL.md", "SKILL.md")
+        for p in _skill_extra_files(skill_dir):
+            zf.write(p, p.relative_to(skill_dir).as_posix())
+    return buf.getvalue()
+
+
+def _extract_skill_zip(data: bytes, dest_dir: Path) -> None:
+    """Replace dest_dir with the archive contents. Every member path is
+    validated to stay inside dest_dir first (zip-slip guard) — the archive
+    comes from a shared Drive folder other people can write to."""
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        dest_resolved = dest_dir.resolve()
+        for member in zf.namelist():
+            target = (dest_dir / member).resolve()
+            if not str(target).startswith(str(dest_resolved) + os.sep) and target != dest_resolved:
+                raise ValueError(f"Unsafe path in skill archive: {member}")
+        if dest_dir.exists():
+            shutil.rmtree(dest_dir)
+        dest_dir.mkdir(parents=True)
+        zf.extractall(dest_dir)
+
+
+def _read_skill_md_from_zip(data: bytes) -> str:
+    """SKILL.md content from a zipped skill (for descriptions in the index)."""
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        try:
+            return zf.read("SKILL.md").decode("utf-8")
+        except KeyError:
+            return ""
 
 
 def _get_or_create_owner_folder(service, owner_name: str) -> str:
@@ -181,36 +286,53 @@ def _get_or_create_owner_folder(service, owner_name: str) -> str:
     return res["id"]
 
 
+def _entry_from_file(owner: str, f: dict) -> dict:
+    """Normalize a Drive file listing into a skill entry."""
+    name, _, ext = f["name"].rpartition(".")
+    return {
+        "owner": owner, "name": name,
+        "file_id": f["id"], "modified": f["modifiedTime"][:10],
+        "modified_full": f["modifiedTime"], "format": ext,
+    }
+
+
+def _dedupe_prefer_zip(entries: list) -> list:
+    """One entry per (owner, name); when both a .md and a .zip exist for
+    the same skill (e.g. a stale counterpart left by a pre-zip-support
+    upload), the .zip wins — it's the complete, multi-file form."""
+    best = {}
+    for e in entries:
+        key = (e["owner"], e["name"])
+        if key not in best or (e["format"] == "zip" and best[key]["format"] == "md"):
+            best[key] = e
+    return list(best.values())
+
+
 def _find_skill(service, name_or_path: str) -> list:
     """
     Find skills matching name_or_path ('skill-name' or 'owner/skill-name').
-    Returns list of {owner, name, file_id, modified}.
+    Returns list of {owner, name, file_id, modified, modified_full, format}.
     """
     if "/" in name_or_path:
         owner, skill_name = name_or_path.split("/", 1)
         folders = _list_owner_folders(service)
         if owner not in folders:
             return []
-        filename = skill_name + ".md"
-        return [
-            {"owner": owner, "name": skill_name,
-             "file_id": f["id"], "modified": f["modifiedTime"][:10]}
-            for f in _list_md_in_folder(service, folders[owner])
-            if f["name"] == filename
+        entries = [
+            _entry_from_file(owner, f)
+            for f in _list_skill_files_in_folder(service, folders[owner])
+            if f["name"] in (skill_name + ".md", skill_name + ".zip")
         ]
+        return _dedupe_prefer_zip(entries)
     else:
         skill_name = name_or_path
-        filename = skill_name + ".md"
         folders = _list_owner_folders(service)
-        matches = []
+        entries = []
         for owner, folder_id in folders.items():
-            for f in _list_md_in_folder(service, folder_id):
-                if f["name"] == filename:
-                    matches.append({
-                        "owner": owner, "name": skill_name,
-                        "file_id": f["id"], "modified": f["modifiedTime"][:10],
-                    })
-        return matches
+            for f in _list_skill_files_in_folder(service, folder_id):
+                if f["name"] in (skill_name + ".md", skill_name + ".zip"):
+                    entries.append(_entry_from_file(owner, f))
+        return _dedupe_prefer_zip(entries)
 
 
 def _require_single_match(matches: list, query: str) -> dict:
@@ -271,11 +393,14 @@ def _update_frontmatter(content: str, updates: dict) -> str:
 
 
 def _upload_content(service, folder_id: str, filename: str,
-                    content: str, existing_file_id: str = None) -> str:
+                    content, existing_file_id: str = None,
+                    mimetype: str = "text/plain") -> str:
+    """Upload str (text) or bytes (e.g. a zipped skill) to Drive."""
     from googleapiclient.http import MediaIoBaseUpload
+    data = content.encode("utf-8") if isinstance(content, str) else content
     media = MediaIoBaseUpload(
-        io.BytesIO(content.encode("utf-8")),
-        mimetype="text/plain",
+        io.BytesIO(data),
+        mimetype=mimetype,
         resumable=False,
     )
     if existing_file_id:
@@ -563,13 +688,20 @@ def cmd_update_index():
     folders = _list_owner_folders(service)
     all_skills = []
     for owner, folder_id in sorted(folders.items()):
-        for f in _list_md_in_folder(service, folder_id):
-            content = _get_file_content(service, f["id"])
+        entries = _dedupe_prefer_zip([
+            _entry_from_file(owner, f)
+            for f in _list_skill_files_in_folder(service, folder_id)
+        ])
+        for e in sorted(entries, key=lambda x: x["name"]):
+            if e["format"] == "zip":
+                content = _read_skill_md_from_zip(_get_file_bytes(service, e["file_id"]))
+            else:
+                content = _get_file_content(service, e["file_id"])
             desc = _parse_frontmatter(content).get("description", "")
             all_skills.append({
                 "owner": owner,
-                "name": f["name"][:-3],
-                "modified": f["modifiedTime"][:10],
+                "name": e["name"],
+                "modified": e["modified"],
                 "description": desc,
             })
     _write_index(all_skills)
@@ -622,13 +754,18 @@ def cmd_list():
 def cmd_info(name_or_path: str):
     service = _get_service()
     m = _require_single_match(_find_skill(service, name_or_path), name_or_path)
-    content = _get_file_content(service, m["file_id"])
+    if m["format"] == "zip":
+        content = _read_skill_md_from_zip(_get_file_bytes(service, m["file_id"]))
+    else:
+        content = _get_file_content(service, m["file_id"])
     meta = _parse_frontmatter(content)
 
     print("─" * 56)
     print(f"  スキル / Skill  : {m['name']}")
     print(f"  オーナー / Owner: {m['owner']}")
     print(f"  更新日 / Updated: {m['modified']}")
+    if m["format"] == "zip":
+        print(f"  形式 / Format   : zip（スクリプト同梱 / bundles scripts）")
     if meta.get("author"):
         print(f"  作成者 / Author : {meta['author']}")
     if meta.get("description"):
@@ -637,25 +774,81 @@ def cmd_info(name_or_path: str):
     print(content)
 
 
+def _install_skill_entry(service, m: dict) -> None:
+    """Fetch a catalog entry into skills-personal/<name>/ (both formats)."""
+    skill_dir = SKILLS_SRC / m["name"]
+    if m["format"] == "zip":
+        _extract_skill_zip(_get_file_bytes(service, m["file_id"]), skill_dir)
+    else:
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            _get_file_content(service, m["file_id"]), encoding="utf-8")
+
+
 def cmd_download(name_or_path: str):
     service = _get_service()
     m = _require_single_match(_find_skill(service, name_or_path), name_or_path)
 
-    skill_dir = SKILLS_SRC / m["name"]
-    skill_md  = skill_dir / "SKILL.md"
-
-    if skill_dir.exists():
+    if (SKILLS_SRC / m["name"]).exists():
         print(f"[INFO] 既存のスキルを上書きします / Overwriting existing skill: {m['name']}")
 
-    skill_dir.mkdir(exist_ok=True)
-    content = _get_file_content(service, m["file_id"])
-    skill_md.write_text(content, encoding="utf-8")
+    _install_skill_entry(service, m)
 
     print(f"[OK] ダウンロード完了 / Downloaded: {m['owner']}/{m['name']}")
-    print(f"     保存先 / Saved to: python/skills-personal/{m['name']}/SKILL.md")
+    print(f"     保存先 / Saved to: python/skills-personal/{m['name']}/")
     print()
     print("スキルを有効化するには / To activate the skill:")
     print("  python3 python/scripts/setup/setup.py skills rebuild")
+
+
+def _upload_skill_to_folder(service, skill_name: str, owner_label: str,
+                            folder_id: str, existing: list) -> None:
+    """Shared upload core for cmd_upload (own folder) and cmd_publish
+    (_default/). Picks .md vs .zip by whether the skill dir bundles files
+    beyond SKILL.md, and removes the stale counterpart format afterwards
+    so a skill that gains/loses scripts doesn't leave both forms behind
+    (download and sync prefer .zip, so a stale .zip would otherwise keep
+    shadowing a newer .md forever)."""
+    skill_dir = SKILLS_SRC / skill_name
+    content   = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    use_zip   = bool(_skill_extra_files(skill_dir))
+
+    own_entries = [e for e in existing if e["owner"] == owner_label]
+    filename = skill_name + (".zip" if use_zip else ".md")
+    same_format = next((e for e in own_entries if e["format"] == ("zip" if use_zip else "md")), None)
+
+    if use_zip:
+        _upload_content(service, folder_id, filename, _zip_skill_dir(skill_dir),
+                        same_format["file_id"] if same_format else None,
+                        mimetype="application/zip")
+    else:
+        _upload_content(service, folder_id, filename, content,
+                        same_format["file_id"] if same_format else None)
+
+    for e in own_entries:
+        if e["format"] != ("zip" if use_zip else "md"):
+            service.files().delete(fileId=e["file_id"], supportsAllDrives=True).execute()
+
+    verb = "更新しました / Updated" if own_entries else "アップロードしました / Uploaded"
+    fmt  = " (zip)" if use_zip else ""
+    print(f"[OK] {verb}: {owner_label}/{skill_name}{fmt}")
+    _index_add(skill_name, owner_label)
+    _push_catalog_to_drive(service)
+
+
+def _inject_author_frontmatter(service, skill_md: Path, email: str, owner: str) -> None:
+    """Inject author/email into frontmatter if missing or stale."""
+    content = skill_md.read_text(encoding="utf-8")
+    meta    = _parse_frontmatter(content)
+    updates = {}
+    if not meta.get("author"):
+        about = service.about().get(fields="user").execute()
+        updates["author"] = about["user"].get("displayName", owner)
+    if meta.get("email") != email:
+        updates["email"] = email
+    if updates:
+        skill_md.write_text(_update_frontmatter(content, updates), encoding="utf-8")
+        print(f"[INFO] frontmatter を更新しました (author/email)")
 
 
 def cmd_upload(skill_name: str):
@@ -668,20 +861,7 @@ def cmd_upload(skill_name: str):
     email   = _current_email(service)
     owner   = _owner_prefix(email)
 
-    content = skill_md.read_text(encoding="utf-8")
-    meta    = _parse_frontmatter(content)
-
-    # Inject author/email into frontmatter if missing or stale
-    updates = {}
-    if not meta.get("author"):
-        about = service.about().get(fields="user").execute()
-        updates["author"] = about["user"].get("displayName", owner)
-    if meta.get("email") != email:
-        updates["email"] = email
-    if updates:
-        content = _update_frontmatter(content, updates)
-        skill_md.write_text(content, encoding="utf-8")
-        print(f"[INFO] frontmatter を更新しました (author/email)")
+    _inject_author_frontmatter(service, skill_md, email, owner)
 
     # Collision check: same skill name under a different owner?
     existing = _find_skill(service, skill_name)
@@ -692,14 +872,100 @@ def cmd_upload(skill_name: str):
             print(f"        スキル名を変更するか、オーナーに連絡してください。")
             sys.exit(1)
 
-    folder_id  = _get_or_create_owner_folder(service, owner)
-    own_match  = next((e for e in existing if e["owner"] == owner), None)
-    file_id    = _upload_content(service, folder_id, skill_name + ".md",
-                                 content, own_match["file_id"] if own_match else None)
-    verb = "更新しました / Updated" if own_match else "アップロードしました / Uploaded"
-    print(f"[OK] {verb}: {owner}/{skill_name}")
-    _index_add(skill_name, owner)
-    _push_catalog_to_drive(service)
+    folder_id = _get_or_create_owner_folder(service, owner)
+    _upload_skill_to_folder(service, skill_name, owner, folder_id, existing)
+
+
+def cmd_publish(skill_name: str):
+    """Upload a skill to the auto-sync folder (_default/) — everything
+    there is installed on every machine by `sync` on the next launch.
+    Meant for whoever administers the org's shared catalog."""
+    skill_md = SKILLS_SRC / skill_name / "SKILL.md"
+    if not skill_md.exists():
+        print(f"[ERROR] SKILL.md が見つかりません / Not found: {skill_md}")
+        sys.exit(1)
+
+    service = _get_service()
+    email   = _current_email(service)
+
+    _inject_author_frontmatter(service, skill_md, email, _owner_prefix(email))
+
+    existing = [e for e in _find_skill(service, skill_name)
+                if e["owner"] == AUTO_SYNC_OWNER]
+    folder_id = _get_or_create_owner_folder(service, AUTO_SYNC_OWNER)
+    _upload_skill_to_folder(service, skill_name, AUTO_SYNC_OWNER, folder_id, existing)
+    print(f"     全端末の次回起動時に自動導入されます / Auto-installs everywhere on next launch.")
+
+
+def _read_sync_manifest() -> dict:
+    if SYNC_MANIFEST_PATH.exists():
+        try:
+            return json.loads(SYNC_MANIFEST_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def cmd_sync() -> None:
+    """Install/update every skill in the catalog's _default/ folder, and
+    remove locally whatever left it — but ONLY skills this sync itself
+    installed (tracked in .catalog-sync-manifest), never the user's own.
+
+    Runs on every launch via setup.py skills rebuild, so it must never
+    fail the launch: any problem (offline, auth declined/timed out, a
+    malformed archive) prints a warning and leaves existing skills as
+    they are — they'll be retried next launch. No-op without a real
+    catalog_folder_id in config.toml (see catalog_configured())."""
+    if not catalog_configured():
+        return
+
+    manifest = _read_sync_manifest()
+    try:
+        # First launch: no cached token yet → run_auth_flow opens Chrome for
+        # a one-time consent (deliberate — see docs; the user just
+        # double-clicked the app, so they're present). Time-capped so a
+        # closed browser can't hang the session start forever.
+        service = _get_service(timeout_seconds=SYNC_AUTH_TIMEOUT_SECONDS)
+
+        folders = _list_owner_folders(service)
+        auto_folder = folders.get(AUTO_SYNC_OWNER)
+        remote = {}
+        if auto_folder:
+            entries = _dedupe_prefer_zip([
+                _entry_from_file(AUTO_SYNC_OWNER, f)
+                for f in _list_skill_files_in_folder(service, auto_folder)
+            ])
+            remote = {e["name"]: e for e in entries}
+
+        # Remove skills that left _default/ (manifest-tracked only).
+        removed = 0
+        for stale_name in set(manifest) - set(remote):
+            stale_dir = SKILLS_SRC / stale_name
+            if stale_dir.exists():
+                shutil.rmtree(stale_dir)
+                removed += 1
+            manifest.pop(stale_name)
+
+        # Install new / changed (compare Drive modifiedTime with manifest).
+        installed = 0
+        for name, entry in sorted(remote.items()):
+            prev = manifest.get(name)
+            if (prev == entry["modified_full"]
+                    and (SKILLS_SRC / name / "SKILL.md").exists()):
+                continue
+            _install_skill_entry(service, entry)
+            manifest[name] = entry["modified_full"]
+            installed += 1
+            print(f"  Catalog skill installed/updated: {name}")
+
+        SYNC_MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SYNC_MANIFEST_PATH.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+        if installed or removed:
+            print(f"  Catalog sync: {installed} installed/updated, {removed} removed.")
+    except Exception as e:
+        print(f"  [WARN] Catalog sync skipped ({type(e).__name__}: {e}) — "
+              f"existing skills unchanged; will retry next launch.")
 
 
 def cmd_delete(name_or_path: str):
@@ -714,7 +980,12 @@ def cmd_delete(name_or_path: str):
         print(f"        自分がオーナーのスキルのみ削除できます。")
         sys.exit(1)
 
-    service.files().delete(fileId=m["file_id"], supportsAllDrives=True).execute()
+    # Delete BOTH formats if present — _find_skill dedupes preferring .zip,
+    # so deleting only the returned entry could leave a stale .md behind.
+    folder_id = _list_owner_folders(service)[m["owner"]]
+    for f in _list_skill_files_in_folder(service, folder_id):
+        if f["name"] in (m["name"] + ".md", m["name"] + ".zip"):
+            service.files().delete(fileId=f["id"], supportsAllDrives=True).execute()
     print(f"[OK] 削除しました / Deleted: {m['owner']}/{m['name']}")
     _index_remove(m["name"], m["owner"])
     _push_catalog_to_drive(service)
@@ -735,14 +1006,31 @@ def cmd_change_owner(name_or_path: str, new_email: str):
     old_folder_id = _list_owner_folders(service)[m["owner"]]
     new_folder_id = _get_or_create_owner_folder(service, new_owner)
 
-    # Update email in frontmatter and move file
-    content = _update_frontmatter(_get_file_content(service, m["file_id"]),
-                                  {"email": new_email})
+    # Update email in frontmatter and move file. For a zipped skill the
+    # frontmatter lives in SKILL.md inside the archive — patch it in place
+    # and re-zip, keeping every bundled script byte-identical.
     from googleapiclient.http import MediaIoBaseUpload
+    if m["format"] == "zip":
+        original = _get_file_bytes(service, m["file_id"])
+        patched_md = _update_frontmatter(_read_skill_md_from_zip(original),
+                                         {"email": new_email})
+        buf = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(original)) as src, \
+                zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as dst:
+            for member in src.namelist():
+                if member == "SKILL.md":
+                    dst.writestr("SKILL.md", patched_md)
+                else:
+                    dst.writestr(member, src.read(member))
+        data, mimetype = buf.getvalue(), "application/zip"
+    else:
+        content = _update_frontmatter(_get_file_content(service, m["file_id"]),
+                                      {"email": new_email})
+        data, mimetype = content.encode("utf-8"), "text/plain"
     service.files().update(
         fileId=m["file_id"],
         media_body=MediaIoBaseUpload(
-            io.BytesIO(content.encode("utf-8")), mimetype="text/plain", resumable=False),
+            io.BytesIO(data), mimetype=mimetype, resumable=False),
         supportsAllDrives=True,
     ).execute()
     service.files().update(
@@ -788,6 +1076,12 @@ if __name__ == "__main__":
         if len(args) < 2:
             print("[ERROR] Usage: skills_catalog.py upload <skill_name>"); sys.exit(1)
         cmd_upload(args[1])
+    elif cmd == "publish":
+        if len(args) < 2:
+            print("[ERROR] Usage: skills_catalog.py publish <skill_name>"); sys.exit(1)
+        cmd_publish(args[1])
+    elif cmd == "sync":
+        cmd_sync()
     elif cmd == "delete":
         if len(args) < 2:
             print("[ERROR] Usage: skills_catalog.py delete <name|owner/name>"); sys.exit(1)
