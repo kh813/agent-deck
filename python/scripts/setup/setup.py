@@ -4,6 +4,18 @@ import platform
 import subprocess
 from pathlib import Path
 
+# Windows pipe (agy.exe's pty etc.) makes stdout fall back to CP1252,
+# corrupting or crashing on this file's Japanese output (see
+# setup_config()'s prompts, skills_list()'s labels). Confirmed for real:
+# a user's /update -> preflight.bat -> this script's "config" step printed
+# mojibake instead of the intended Japanese text.
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except AttributeError:
+        pass
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = Path(SCRIPT_DIR).parents[2] / "config.toml"
 
