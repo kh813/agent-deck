@@ -77,6 +77,8 @@ def setup_venv():
     (venv_dir / ".installed").touch()
     print("==> Virtual environment ready.")
 
+_HOME_SKILLS_MANIFEST = ".installed-skills-manifest"
+
 def install_skills():
     print("==> Installing skills to .gemini/skills/...")
     import zipfile
@@ -99,13 +101,37 @@ def install_skills():
         installed.append(skill_name)
 
     # Also install to ~/.gemini/skills/ for Antigravity CLI (agy).
+    #
+    # A manifest of what THIS process installed last time lets a renamed or
+    # retired skill be cleaned up here too — without it, a skill that no
+    # longer exists in the current build (e.g. "calendar" consolidated into
+    # "daily-schedule") is never touched again: the loop below only
+    # overwrites entries matching CURRENT skill names, so the old directory
+    # sits there forever, and an agent that stumbles onto it follows
+    # stale, no-longer-correct instructions instead of the current skill.
+    # Confirmed happening for real. A name never tracked by this manifest
+    # (e.g. a skill a user created directly in ~/.gemini/skills/ some other
+    # way) is left alone, matching sync_internal_skills.py's equivalent
+    # manifest for the LOCAL .gemini/skills/ directory in agent-deck.
     home_gemini_skills = Path.home() / ".gemini" / "skills"
     home_gemini_skills.mkdir(parents=True, exist_ok=True)
+    manifest_path = home_gemini_skills / _HOME_SKILLS_MANIFEST
+    previously_installed = set(manifest_path.read_text().splitlines()) if manifest_path.exists() else set()
+    current_names = set(installed)
+
+    for stale_name in previously_installed - current_names:
+        stale_dir = home_gemini_skills / stale_name
+        if stale_dir.exists():
+            shutil.rmtree(stale_dir)
+            print(f"  Removed stale: {stale_name}")
+
     for skill_name in installed:
         home_skill = home_gemini_skills / skill_name
         if home_skill.exists():
             shutil.rmtree(home_skill)
         shutil.copytree(os.path.join(gemini_skills_dir, skill_name), str(home_skill))
+
+    manifest_path.write_text("\n".join(sorted(current_names)))
 
 def trust_project_folder():
     import json

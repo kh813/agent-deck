@@ -11,12 +11,18 @@ Run:
 """
 
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
+
+import pytest
 
 ROOT          = Path(__file__).resolve().parents[2]
 SKILLS_ROOTS  = [ROOT / "python" / "skills", ROOT / "python" / "skills-personal"]
 SKILLS_DIST   = ROOT / "skills"
+
+sys.path.insert(0, str(ROOT / "python" / "scripts" / "setup"))
+import setup as setup_mod  # noqa: E402
 
 
 def _skill_mds(roots):
@@ -77,6 +83,70 @@ class TestSetupPySkillsRebuild:
             "The shell script is the canonical tool for locating SKILL.md files and "
             "producing .skill ZIP packages."
         )
+
+
+# ── 2b. install_skills() cleans up renamed/retired skills from ~/.gemini/ ──
+#
+# Regression test (2026-07-16): confirmed happening for real — a skill
+# renamed/consolidated (e.g. "calendar" -> "daily-schedule") left its old
+# directory behind in ~/.gemini/skills/ forever, since the per-name copy
+# loop only ever touches entries matching CURRENT skill names. An agent
+# stumbled onto the stale "calendar" skill's outdated instructions instead
+# of the current "daily-schedule" one, wasting significant time before
+# finding the right command.
+
+def _make_skill_zip(skills_dir: Path, name: str) -> None:
+    with zipfile.ZipFile(skills_dir / f"{name}.skill", "w") as zf:
+        zf.writestr("SKILL.md", f"---\nname: {name}\n---\n")
+
+
+class TestInstallSkillsCleansUpStaleHomeSkills:
+    @pytest.fixture()
+    def project(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "skills").mkdir()
+        (tmp_path / ".gemini" / "skills").mkdir(parents=True)
+        home = tmp_path / "fake_home"
+        home.mkdir()
+        monkeypatch.setattr(setup_mod.Path, "home", classmethod(lambda cls: home))
+        return tmp_path, home
+
+    def test_stale_skill_removed_after_rename(self, project):
+        tmp_path, home = project
+        _make_skill_zip(tmp_path / "skills", "calendar")
+        setup_mod.install_skills()
+        assert (home / ".gemini" / "skills" / "calendar").exists()
+
+        (tmp_path / "skills" / "calendar.skill").unlink()
+        _make_skill_zip(tmp_path / "skills", "daily-schedule")
+        setup_mod.install_skills()
+
+        assert not (home / ".gemini" / "skills" / "calendar").exists(), (
+            "install_skills() left the old 'calendar' skill behind in "
+            "~/.gemini/skills/ after it was renamed to 'daily-schedule' — "
+            "an agent can still discover and follow its stale instructions."
+        )
+        assert (home / ".gemini" / "skills" / "daily-schedule").exists()
+
+    def test_user_created_home_skill_is_left_alone(self, project):
+        """A skill this process never installed (e.g. created directly by
+        some other means) must not be treated as stale and removed."""
+        tmp_path, home = project
+        user_skill = home / ".gemini" / "skills" / "my-own-skill"
+        user_skill.mkdir(parents=True)
+        (user_skill / "SKILL.md").write_text("---\nname: my-own-skill\n---\n")
+
+        _make_skill_zip(tmp_path / "skills", "ask-portal")
+        setup_mod.install_skills()
+
+        assert (home / ".gemini" / "skills" / "my-own-skill" / "SKILL.md").exists()
+
+    def test_idempotent_across_repeated_runs(self, project):
+        tmp_path, home = project
+        _make_skill_zip(tmp_path / "skills", "ask-portal")
+        setup_mod.install_skills()
+        setup_mod.install_skills()  # must not raise or remove anything
+        assert (home / ".gemini" / "skills" / "ask-portal").exists()
 
 
 # ── 3. Actual build output: every SKILL.md has a matching .skill ──────────
