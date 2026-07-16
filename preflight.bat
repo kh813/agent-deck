@@ -1,10 +1,10 @@
 @echo off
-rem Pre-launch bootstrap for agent-ui (Windows), run automatically via
+rem Pre-launch bootstrap for agent-deck (Windows), run automatically via
 rem agent_config.json's pre_launch_command before every agy session start.
 rem Creates the venv and builds skills on first run; keeps skills up to date
 rem on every subsequent run.
 rem
-rem Invoked non-interactively (agent-ui captures stdout/stderr, no console),
+rem Invoked non-interactively (agent-deck captures stdout/stderr, no console),
 rem so this must never `pause` for a keypress.
 cd /d "%~dp0"
 

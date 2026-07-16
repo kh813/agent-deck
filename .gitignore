@@ -59,11 +59,17 @@ python/skills/skill-catalog/catalog-index.md
 # Private configuration (template stays tracked)
 /config.toml
 
-# Self-updater / release-bundling artifacts written at the project root
+# Self-updater / release-bundling artifacts written at the project root.
+# agent-ui.* covers a pre-2026-07-16 local build/test artifact (before the
+# agent-ui -> agent-deck rename); agent-deck.* is the current name.
 /agent-ui.app
 /agent-ui.app.version
 /agent-ui.exe
 /agent-ui.exe.version
+/agent-deck.app
+/agent-deck.app.version
+/agent-deck.exe
+/agent-deck.exe.version
 
 # Runtime artifacts created by setup.py at first launch
 /app/bin/

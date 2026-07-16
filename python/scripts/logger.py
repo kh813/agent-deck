@@ -1,6 +1,6 @@
 """Centralized file logger with size-based rotation.
 
-Log file: <project-root>/tmp/logs/agent-ui.log
+Log file: <project-root>/tmp/logs/agent-deck.log
 Rotation: 10 MB per file, 1 backup (total max ~20 MB).
 """
 import logging
@@ -10,9 +10,9 @@ import sys
 from pathlib import Path
 
 _LOG_DIR  = Path(__file__).resolve().parents[2] / "tmp" / "logs"
-_LOG_FILE = _LOG_DIR / "agent-ui.log"
+_LOG_FILE = _LOG_DIR / "agent-deck.log"
 _MAX_BYTES    = 10 * 1024 * 1024  # 10 MB
-_BACKUP_COUNT = 1                  # agent-ui.log + agent-ui.log.1
+_BACKUP_COUNT = 1                  # agent-deck.log + agent-deck.log.1
 
 
 def get_logger(name: str) -> logging.Logger:

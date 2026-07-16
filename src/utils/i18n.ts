@@ -2,7 +2,7 @@ export type Lang = "ja" | "en";
 
 export const translations = {
   ja: {
-    appTitle: "agent-ui チャットコンソール",
+    appTitle: "agent-deck チャットコンソール",
     appLocationDefault: "アプリの場所 (デフォルト)",
     agentLabel: "エージェント",
     changeDir: "ディレクトリ変更",
@@ -37,7 +37,7 @@ export const translations = {
     installAgyDesc: "このデスクトップクライアントは、バックグラウンドで Antigravity CLI (agy) を実行してタスクを実行します。現在 'agy' がインストールされていないか、システムパスに見つかりません。",
   },
   en: {
-    appTitle: "agent-ui Chat Console",
+    appTitle: "agent-deck Chat Console",
     appLocationDefault: "App Location (Default)",
     agentLabel: "Agent",
     changeDir: "Change Dir",

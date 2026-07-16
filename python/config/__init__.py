@@ -28,9 +28,9 @@ _drive = _cfg["drive"]
 CATALOG_FOLDER_ID = (_drive.get("catalog_folder_id") or _drive.get("library_folder_id", "")).strip()
 CATALOG_URL       = (_drive.get("catalog_url")       or _drive.get("library_url", "")).strip()
 CATALOG_FILE_ID   = (_drive.get("catalog_file_id")   or _drive.get("library_catalog_file_id", "")).strip()
-# [company] is not declared in agent-ui's own config.toml.template — it's an
+# [company] is not declared in agent-deck's own config.toml.template — it's an
 # optional overlay a wrapping project (e.g. agent-deck) supplies in its own
-# config.toml. Defaults to empty so standalone agent-ui installs don't crash.
+# config.toml. Defaults to empty so standalone agent-deck installs don't crash.
 _company = _cfg.get("company", {})
 COMPANY_DOMAIN        = _company.get("domain", "").strip()
 PORTAL_URL            = _company.get("portal_url", "").strip()

@@ -1,10 +1,14 @@
 """
 Regression tests for skill building and installation.
 
-Adapted from agent-deck's src/tests/test_skill_build.py for agent-ui's simpler
-two-root model (python/skills bundled + python/skills-personal per-install —
-no internal tier and no --public/--company build modes, since agent-ui itself
-is the fully-public layer).
+Adapted from the (separate, company-internal) agent-deck skill-catalog
+consumer's own test_skill_build.py for this project's simpler two-root model
+(python/skills bundled + python/skills-personal per-install — no internal
+tier and no --public/--company build modes, since this repo itself is the
+fully-public layer). Confusingly, as of 2026-07-16 both projects are named
+"agent-deck" (a company product built on top of this one, sharing the name
+by coincidence after this repo's own agent-ui -> agent-deck rename) — this
+comment predates that and refers to the company's own, separate repo.
 
 Run:
   pytest python/tests/test_skill_build.py -v

@@ -1,10 +1,10 @@
 #!/bin/bash
-# Pre-launch bootstrap for agent-ui (Mac/Linux), run automatically via
+# Pre-launch bootstrap for agent-deck (Mac/Linux), run automatically via
 # agent_config.json's pre_launch_command before every agy session start.
 # Creates the venv and builds skills on first run; keeps skills up to date
 # on every subsequent run.
 #
-# Invoked non-interactively (agent-ui captures stdout/stderr, no TTY), so
+# Invoked non-interactively (agent-deck captures stdout/stderr, no TTY), so
 # this must never block on user input — setup.py's own _prompt() helper
 # already degrades to an empty answer when stdin isn't attached.
 set -e

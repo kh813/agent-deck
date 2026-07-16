@@ -36,7 +36,7 @@ fn debug_log_path() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join("agent-ui-pty-debug.log")
+        .join("agent-deck-pty-debug.log")
 }
 
 fn debug_log_marker(text: &str) {

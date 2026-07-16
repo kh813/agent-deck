@@ -74,7 +74,7 @@ If the user wants this repeated on an interval ("every day", "keep monitoring", 
 ## 使用例 / Examples
 
 ### シナリオ1: バージョンチェック / Scenario 1: Version Check
-**ユーザー / User**: 「GitHubの kh813/agent-ui のリリースページから、v0.0.5より新しいバージョンが出てないか確認して」
+**ユーザー / User**: 「GitHubの kh813/agent-deck のリリースページから、v0.0.5より新しいバージョンが出てないか確認して」
 
 **アクション / Action**: GitHub REST APIでリリース一覧を取得し、タグ名だけを比較。結果を「v0.0.5が最新です」のように一言で報告。
 

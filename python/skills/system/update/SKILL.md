@@ -1,9 +1,9 @@
 ---
 name: update
-description: Checks GitHub Releases for a newer agent-ui version and installs it. "update", "アップデート", "最新版を確認", "agent-uiを更新して" などで起動。 / Checks GitHub Releases for a newer agent-ui build and installs it if found.
+description: Checks GitHub Releases for a newer agent-deck version and installs it. "update", "アップデート", "最新版を確認", "agent-deckを更新して" などで起動。 / Checks GitHub Releases for a newer agent-deck build and installs it if found.
 ---
 
-# /update — agent-ui の更新 / Update agent-ui
+# /update — agent-deck の更新 / Update agent-deck
 
 ## 言語設定 / Language Policy
 ユーザーへの全ての返答は日英バイリンガルで表示してください。日本語を先に表示し、改行の後に英語を続けてください。
@@ -11,8 +11,8 @@ Always respond to the user in both Japanese and English. Display Japanese first,
 
 ## 概要 / Overview
 
-agent-ui の GitHub Releases（`kh813/agent-ui`）を確認し、現在インストールされているバージョンより新しいものがあればダウンロードして置き換えます。実行中の agent-ui 自体を書き換えるわけではないため、更新適用後はウィンドウを再起動する必要があります。
-Checks agent-ui's GitHub Releases (`kh813/agent-ui`) and, if a newer version exists, downloads and installs it in place. This does not hot-swap the running process, so a restart is required to use the new version after applying an update.
+agent-deck の GitHub Releases（`kh813/agent-deck`）を確認し、現在インストールされているバージョンより新しいものがあればダウンロードして置き換えます。実行中の agent-deck 自体を書き換えるわけではないため、更新適用後はウィンドウを再起動する必要があります。
+Checks agent-deck's GitHub Releases (`kh813/agent-deck`) and, if a newer version exists, downloads and installs it in place. This does not hot-swap the running process, so a restart is required to use the new version after applying an update.
 
 ## サブコマンド / Subcommands
 
@@ -51,8 +51,8 @@ python3 python/scripts/setup/self_update.py apply
 `apply` の出力に "installed to" が含まれる場合、以下をユーザーに伝えてください：
 If `apply`'s output contains "installed to", tell the user:
 
-「更新が完了しました。新しいバージョンを使うには、このウィンドウを閉じて agent-ui を再起動してください。」
-"The update is complete. Please close this window and restart agent-ui to use the new version."
+「更新が完了しました。新しいバージョンを使うには、このウィンドウを閉じて agent-deck を再起動してください。」
+"The update is complete. Please close this window and restart agent-deck to use the new version."
 
 ## エラー対応 / Error Handling
 

@@ -1,18 +1,29 @@
-"""Self-update checker for agent-ui itself.
+"""Self-update checker for agent-deck (formerly agent-ui) itself.
 
-Updates agent-ui in place: asks GitHub for whatever the *latest* published
+Updates the app in place: asks GitHub for whatever the *latest* published
 release actually is, and swaps the currently-installed app bundle/exe (a
 sibling of python/ and config/ at the project root — see the release
 workflow's zip-staging step) for the new one, along with the bundled
 python/ tree (skills, setup scripts) from the same zip.
 
-Rebranded installs (2026-07-16): an organization may ship this whole layout
+Product rename (2026-07-16): this project (and its GitHub repo) renamed
+agent-ui -> agent-deck. The canonical bundle/exe name, asset names, and the
+binary embedded inside a Mac bundle (Contents/MacOS/agent-deck) all changed
+accordingly starting with v0.0.15. Backward compat for anyone still on a
+pre-v0.0.15 self_update.py (baked in, unpatchable) is handled entirely on
+the release-CI side: v0.0.15+ releases ALSO publish legacy-named assets
+(agent-ui-mac.zip/agent-ui-win.zip, with the old agent-ui.app/agent-ui.exe
+internal structure) for one/two releases' grace period — see release.yml's
+"package legacy-named ... compatibility zip" steps. This script itself only
+ever deals in the current (agent-deck) naming.
+
+Rebranded installs: an ORGANIZATION may separately ship this whole layout
 under its own product name — the bundle then sits at the project root as
-e.g. agent-deck.app / agent-deck.exe instead of agent-ui.* (only the OUTER
-name differs; the binary inside a Mac bundle is still Contents/MacOS/agent-ui,
-baked in at build time). This script therefore:
+e.g. acme-console.app / acme-console.exe instead of agent-deck.* (only the
+OUTER name differs; the binary inside a Mac bundle is still
+Contents/MacOS/agent-deck, baked in at build time). This script therefore:
   - detects the installed bundle's actual name and KEEPS it when swapping
-    in the update, rather than assuming agent-ui.*;
+    in the update, rather than assuming agent-deck.*;
   - reads the installed version from the rebrander's marker
     (app/<name>.version, written as "<tag>+<build>" by its own pinned
     installer) as a fallback, comparing tags with any "+build" suffix
@@ -27,19 +38,19 @@ python/ payload (2026-07-16): also extracted from the same zip on every
 update — previously only the binary was swapped, silently leaving skills
 and setup scripts at the old version forever. python/skills-personal/ (user
 -created and catalog-synced skills) is preserved across the refresh. Every
-*.sh in the new payload is normalized to LF: agent-ui-win.zip's python/
-tree has shipped CRLF before (Windows CI runners), which breaks bash on
-Mac ("$'\\r': command not found").
+*.sh in the new payload is normalized to LF: the Windows zip's python/ tree
+has shipped CRLF before (Windows CI runners), which breaks bash on Mac
+("$'\\r': command not found").
 
 Reuses the atomic-swap safety pattern: download and extract into a staging
 directory first, and only remove the existing install once the replacement
 is verified in place, so a failed/interrupted download never leaves the
-user with no agent-ui at all.
+user with no install at all.
 
-Since agent-ui may be the very process invoking this (e.g. via a skill run
-from inside a live session), this script never touches the running binary's
-open file — it replaces it on disk and asks the user to relaunch. It does
-not attempt a hot in-place self-replace.
+Since this app may be the very process invoking this script (e.g. via a
+skill run from inside a live session), this script never touches the
+running binary's open file — it replaces it on disk and asks the user to
+relaunch. It does not attempt a hot in-place self-replace.
 
 Usage:
   python3 self_update.py check    # print whether an update is available
@@ -55,7 +66,7 @@ import zipfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_REPO = "kh813/agent-ui"
+_REPO = "kh813/agent-deck"  # renamed from kh813/agent-ui 2026-07-16 (old URL 301-redirects)
 _API_LATEST = f"https://api.github.com/repos/{_REPO}/releases/latest"
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -65,24 +76,24 @@ def _dest_name() -> str:
     """Name of the installed bundle/exe at the project root — kept as-is
     across updates so a rebranded install stays under its own name."""
     if sys.platform == "win32":
-        default = "agent-ui.exe"
+        default = "agent-deck.exe"
         if (PROJECT_ROOT / default).exists():
             return default
         # A rebranded install has exactly one launcher exe at the root.
         exes = sorted(p.name for p in PROJECT_ROOT.glob("*.exe"))
         return exes[0] if len(exes) == 1 else default
-    default = "agent-ui.app"
+    default = "agent-deck.app"
     if (PROJECT_ROOT / default).is_dir():
         return default
     for p in sorted(PROJECT_ROOT.glob("*.app")):
-        # The rebranded bundle is still agent-ui inside (see module docstring).
-        if (p / "Contents" / "MacOS" / "agent-ui").exists():
+        # The rebranded bundle is still agent-deck inside (see module docstring).
+        if (p / "Contents" / "MacOS" / "agent-deck").exists():
             return p.name
     return default
 
 
 def _asset_name() -> str:
-    return "agent-ui-win.zip" if sys.platform == "win32" else "agent-ui-mac.zip"
+    return "agent-deck-win.zip" if sys.platform == "win32" else "agent-deck-mac.zip"
 
 
 def _marker_path(dest_name: str) -> Path:
@@ -168,11 +179,11 @@ def apply() -> None:
         )
     url = asset["browser_download_url"]
 
-    print(f"  Updating agent-ui: {installed_tag or 'unknown'} -> {latest_tag}")
+    print(f"  Updating: {installed_tag or 'unknown'} -> {latest_tag}")
     print(f"  Downloading {url}...")
 
     dest = PROJECT_ROOT / dest_name
-    upstream_name = "agent-ui.exe" if sys.platform == "win32" else "agent-ui.app"
+    upstream_name = "agent-deck.exe" if sys.platform == "win32" else "agent-deck.app"
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -195,7 +206,7 @@ def apply() -> None:
 
         if sys.platform != "win32":
             subprocess.run(["xattr", "-cr", str(new_dest)], check=False, stdin=subprocess.DEVNULL)
-            (new_dest / "Contents" / "MacOS" / "agent-ui").chmod(0o755)
+            (new_dest / "Contents" / "MacOS" / "agent-deck").chmod(0o755)
             # Defensive ad-hoc re-sign over the final bundle (an upstream CI
             # signing bug once shipped a bundle whose resource seal predated
             # Contents/Resources — harmless no-op on correctly-signed builds).
@@ -215,8 +226,8 @@ def apply() -> None:
         _install_python_payload(staging)
 
     _marker_path(dest_name).write_text(latest_tag)
-    print(f"  agent-ui {latest_tag} installed to {dest}.")
-    print("  Restart agent-ui to use the new version.")
+    print(f"  {latest_tag} installed to {dest}.")
+    print("  Restart the app to use the new version.")
 
 
 def _usage():

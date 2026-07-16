@@ -1,4 +1,4 @@
-# agent-ui configuration template
+# agent-deck configuration template
 # Copy this file to config.toml (project root) and fill in your values.
 # config.toml is gitignored but read at runtime.
 

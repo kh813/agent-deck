@@ -15,10 +15,12 @@ jobs:
         include:
           - platform: "macos-latest"
             args: "--target aarch64-apple-darwin"
-            zip_name: "agent-ui-mac.zip"
+            zip_name: "agent-deck-mac.zip"
+            legacy_zip_name: "agent-ui-mac.zip"
           - platform: "windows-latest"
             args: ""
-            zip_name: "agent-ui-win.zip"
+            zip_name: "agent-deck-win.zip"
+            legacy_zip_name: "agent-ui-win.zip"
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -64,22 +66,65 @@ jobs:
         # quarantine/Gatekeeper settings. A fresh ad-hoc re-sign over the
         # complete, final bundle fixes this (verified empirically).
         run: |
-          codesign --force --deep --sign - src-tauri/target/aarch64-apple-darwin/release/bundle/macos/agent-ui.app
-          codesign --verify --deep --strict src-tauri/target/aarch64-apple-darwin/release/bundle/macos/agent-ui.app
+          codesign --force --deep --sign - src-tauri/target/aarch64-apple-darwin/release/bundle/macos/agent-deck.app
+          codesign --verify --deep --strict src-tauri/target/aarch64-apple-darwin/release/bundle/macos/agent-deck.app
 
       - name: package macOS app to zip
         if: matrix.platform == 'macos-latest'
         run: |
           cd src-tauri/target/aarch64-apple-darwin/release/bundle/macos
-          ditto -c -k --sequesterRsrc --keepParent agent-ui.app ${{ github.workspace }}/agent-ui-mac.zip
+          ditto -c -k --sequesterRsrc --keepParent agent-deck.app ${{ github.workspace }}/agent-deck-mac.zip
           cd ${{ github.workspace }}
-          zip -r agent-ui-mac.zip python config agent_config.json preflight.sh
+          # -x __pycache__: the test step above ran pytest against this
+          # checkout, leaving .pyc caches inside python/ — build artifacts,
+          # not payload (one shipped in v0.0.13 for real).
+          zip -r agent-deck-mac.zip python config agent_config.json preflight.sh -x "*__pycache__*"
 
       - name: package Windows exe to zip
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          Compress-Archive -Path src-tauri/target/release/agent-ui.exe,python,config,agent_config.json,preflight.bat -DestinationPath agent-ui-win.zip
+          # __pycache__ removed first: the test step ran pytest against this
+          # checkout, leaving .pyc caches inside python/ (build artifacts,
+          # not payload — one shipped in v0.0.13 for real).
+          Get-ChildItem -Path python -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
+          Compress-Archive -Path src-tauri/target/release/agent-deck.exe,python,config,agent_config.json,preflight.bat -DestinationPath agent-deck-win.zip
+
+      # ── Legacy-named compatibility asset (2026-07-16, temporary) ────────
+      # This repo/product was renamed agent-ui -> agent-deck in v0.0.15. Any
+      # install still running a PRE-v0.0.15 self_update.py has that logic
+      # baked in and unpatchable: it hardcodes the asset name it looks for
+      # ("agent-ui-mac.zip"/"agent-ui-win.zip") AND the bundle/exe name it
+      # expects inside that asset ("agent-ui.app"/"agent-ui.exe", with the
+      # Mac binary literally at Contents/MacOS/agent-ui — old self_update.py
+      # chmods that exact path). Without a legacy-named asset containing
+      # that exact old structure, every pre-v0.0.15 install's self-update
+      # would fail outright on its next check, with no way to recover since
+      # the code that would need to change is the very thing failing.
+      # Byte-identical content to the canonical asset above, just the outer
+      # name (and, on Mac, the inner binary + Info.plist reference) renamed
+      # back to the old scheme. Safe to remove once no installs older than
+      # v0.0.15 remain (a few releases' grace period).
+      - name: package legacy-named macOS compatibility zip
+        if: matrix.platform == 'macos-latest'
+        run: |
+          cd src-tauri/target/aarch64-apple-darwin/release/bundle/macos
+          rm -rf agent-ui.app
+          cp -R agent-deck.app agent-ui.app
+          mv agent-ui.app/Contents/MacOS/agent-deck agent-ui.app/Contents/MacOS/agent-ui
+          /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable agent-ui" agent-ui.app/Contents/Info.plist
+          codesign --force --deep --sign - agent-ui.app
+          codesign --verify --deep --strict agent-ui.app
+          ditto -c -k --sequesterRsrc --keepParent agent-ui.app ${{ github.workspace }}/agent-ui-mac.zip
+          cd ${{ github.workspace }}
+          zip -r agent-ui-mac.zip python config agent_config.json preflight.sh -x "*__pycache__*"
+
+      - name: package legacy-named Windows compatibility zip
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          Copy-Item src-tauri/target/release/agent-deck.exe agent-ui.exe
+          Compress-Archive -Path agent-ui.exe,python,config,agent_config.json,preflight.bat -DestinationPath agent-ui-win.zip
 
       # A broken release asset (truncated build, a bad zip step, an
       # accidentally-empty binary) has shipped silently before with no error
@@ -88,15 +133,22 @@ jobs:
       # the asset was already public. codesign --verify (above) catches a
       # bad macOS *signature*, but not a corrupted *zip*; this step re-opens
       # the actual artifact that's about to be uploaded and checks the
-      # embedded binary is present and a sane size, on both platforms.
+      # embedded binary is present and a sane size, on both platforms —
+      # for both the canonical and legacy-named assets.
       - name: verify release zip integrity
         if: matrix.platform == 'macos-latest'
         run: |
           set -e
-          SIZE=$(unzip -p agent-ui-mac.zip agent-ui.app/Contents/MacOS/agent-ui | wc -c)
-          echo "agent-ui.app/Contents/MacOS/agent-ui: ${SIZE} bytes"
+          SIZE=$(unzip -p agent-deck-mac.zip agent-deck.app/Contents/MacOS/agent-deck | wc -c)
+          echo "agent-deck.app/Contents/MacOS/agent-deck: ${SIZE} bytes"
           if [ "$SIZE" -lt 1000000 ]; then
-            echo "::error::agent-ui binary inside agent-ui-mac.zip is suspiciously small (${SIZE} bytes) — refusing to publish a likely-corrupted release."
+            echo "::error::agent-deck binary inside agent-deck-mac.zip is suspiciously small (${SIZE} bytes) — refusing to publish a likely-corrupted release."
+            exit 1
+          fi
+          LEGACY_SIZE=$(unzip -p agent-ui-mac.zip agent-ui.app/Contents/MacOS/agent-ui | wc -c)
+          echo "agent-ui.app/Contents/MacOS/agent-ui (legacy compat): ${LEGACY_SIZE} bytes"
+          if [ "$LEGACY_SIZE" -lt 1000000 ]; then
+            echo "::error::agent-ui binary inside legacy agent-ui-mac.zip is suspiciously small (${LEGACY_SIZE} bytes) — refusing to publish a likely-corrupted release."
             exit 1
           fi
 
@@ -104,26 +156,33 @@ jobs:
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zip = [System.IO.Compression.ZipFile]::OpenRead("agent-ui-win.zip")
-          $entry = $zip.Entries | Where-Object { $_.FullName -eq "agent-ui.exe" }
-          $zip.Dispose()
-          if (-not $entry) {
-            Write-Error "agent-ui.exe entry not found in agent-ui-win.zip — refusing to publish a likely-corrupted release."
-            exit 1
+          function Test-ZipEntry($zipPath, $entryName) {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+            $entry = $zip.Entries | Where-Object { $_.FullName -eq $entryName }
+            $length = if ($entry) { $entry.Length } else { 0 }
+            $zip.Dispose()
+            if (-not $entry) {
+              Write-Error "$entryName entry not found in $zipPath — refusing to publish a likely-corrupted release."
+              exit 1
+            }
+            Write-Host "$entryName ($zipPath): $length bytes"
+            if ($length -lt 1000000) {
+              Write-Error "$entryName inside $zipPath is suspiciously small ($length bytes) — refusing to publish a likely-corrupted release."
+              exit 1
+            }
           }
-          Write-Host "agent-ui.exe: $($entry.Length) bytes"
-          if ($entry.Length -lt 1000000) {
-            Write-Error "agent-ui.exe inside agent-ui-win.zip is suspiciously small ($($entry.Length) bytes) — refusing to publish a likely-corrupted release."
-            exit 1
-          }
+          Test-ZipEntry "agent-deck-win.zip" "agent-deck.exe"
+          Test-ZipEntry "agent-ui-win.zip" "agent-ui.exe"
 
       - name: upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.zip_name }}
+          files: |
+            ${{ matrix.zip_name }}
+            ${{ matrix.legacy_zip_name }}
           draft: false
-          name: "agent-ui ${{ github.ref_name }}"
+          name: "agent-deck ${{ github.ref_name }}"
           tag_name: ${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

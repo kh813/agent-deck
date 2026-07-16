@@ -56,7 +56,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            app_name: "agent-ui Chat Console".to_string(),
+            app_name: "agent-deck Chat Console".to_string(),
             default_theme: "light".to_string(),
             font_family: "Menlo, Monaco, 'Courier New', monospace".to_string(),
             font_size: 13,
@@ -155,7 +155,7 @@ mod tests {
 
         // 1. Test fallback when no file is present
         let config = get_app_config(Some(temp_base.to_string_lossy().to_string()));
-        assert_eq!(config.app_name, "agent-ui Chat Console"); // default value
+        assert_eq!(config.app_name, "agent-deck Chat Console"); // default value
 
         // 2. Test reading config from CWD root (agent_config.json)
         let config_file_cwd = temp_base.join("agent_config.json");

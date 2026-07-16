@@ -141,8 +141,8 @@ Node.js, Gemini CLI, and Python environments are all stored inside the project f
 2. プロジェクトフォルダを削除する / Delete the project folder:
    ```
    # フォルダごと削除 / Delete the entire project folder
-   rm -rf /path/to/agent-ui      # Mac/Linux
-   rmdir /S /Q C:\path\to\agent-ui  # Windows
+   rm -rf /path/to/agent-deck      # Mac/Linux
+   rmdir /S /Q C:\path\to\agent-deck  # Windows
    ```
 
 3. ポリシーファイルを削除する / Delete the policy file:

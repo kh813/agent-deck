@@ -7,7 +7,7 @@
 # ("$'\r': command not found"). Without this, GitHub's windows-latest
 # runners (core.autocrlf=true by default) convert LF blobs to CRLF on
 # checkout, and the release workflow's windows-latest job zips those
-# CRLF-converted python/*.sh files straight into agent-ui-win.zip —
+# CRLF-converted python/*.sh files straight into agent-deck-win.zip —
 # confirmed for real in v0.0.9: build-skills.sh shipped CRLF to Mac users
 # and broke their first-launch bootstrap.
 *.sh   text  eol=lf

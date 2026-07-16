@@ -1,9 +1,9 @@
 """
-Tests for self_update.py — agent-ui's own GitHub-Releases-based updater.
+Tests for self_update.py — agent-deck's own GitHub-Releases-based updater.
 
-Covers the atomic-swap safety pattern reused from agent-deck's
-install_agent_ui.py: download/extract into a staging dir first, and only
-remove the existing install once the replacement is verified in place.
+Covers the atomic-swap safety pattern: download/extract into a staging dir
+first, and only remove the existing install once the replacement is
+verified in place.
 
 Run:
   pytest python/tests/test_self_update.py -v
@@ -24,11 +24,11 @@ import self_update as su  # noqa: E402
 
 
 def _dest_name() -> str:
-    return "agent-ui.exe" if sys.platform == "win32" else "agent-ui.app"
+    return "agent-deck.exe" if sys.platform == "win32" else "agent-deck.app"
 
 
 def _asset_name() -> str:
-    return "agent-ui-win.zip" if sys.platform == "win32" else "agent-ui-mac.zip"
+    return "agent-deck-win.zip" if sys.platform == "win32" else "agent-deck-mac.zip"
 
 
 def _fake_release(tag: str, asset_url: str = "https://example.com/asset.zip") -> dict:
@@ -39,12 +39,12 @@ def _fake_release(tag: str, asset_url: str = "https://example.com/asset.zip") ->
 
 
 def _make_fake_zip(zip_path: Path) -> None:
-    name = "agent-ui.exe" if sys.platform == "win32" else "agent-ui.app"
+    name = "agent-deck.exe" if sys.platform == "win32" else "agent-deck.app"
     with zipfile.ZipFile(zip_path, "w") as zf:
         if sys.platform == "win32":
             zf.writestr(name, b"fake exe content")
         else:
-            zf.writestr(f"{name}/Contents/MacOS/agent-ui", b"#!/bin/sh\necho hi\n")
+            zf.writestr(f"{name}/Contents/MacOS/agent-deck", b"#!/bin/sh\necho hi\n")
 
 
 @pytest.fixture
@@ -144,34 +144,36 @@ class TestApply:
         )
 
 
-def _make_rebranded_zip(zip_path: Path, with_python: bool = True) -> None:
-    """Fake upstream asset: bundle is agent-ui.* inside the zip regardless
-    of what the installed copy is named locally."""
+def _make_org_rebranded_zip(zip_path: Path, with_python: bool = True) -> None:
+    """Fake upstream asset: the bundle inside the release zip is always
+    agent-deck.* (the project's own canonical name since the 2026-07-16
+    agent-ui -> agent-deck rename), regardless of what an organization's
+    OWN install is locally named."""
     with zipfile.ZipFile(zip_path, "w") as zf:
-        zf.writestr("agent-ui.app/Contents/MacOS/agent-ui", b"#!/bin/sh\necho hi\n")
+        zf.writestr("agent-deck.app/Contents/MacOS/agent-deck", b"#!/bin/sh\necho hi\n")
         if with_python:
             zf.writestr("python/skills/translator/SKILL.md", b"---\nname: translator\n---\n")
             zf.writestr("python/scripts/setup/build-skills.sh", b"#!/bin/bash\r\necho ok\r\n")
 
 
-class TestRebrandedInstall:
-    """2026-07-16: an organization may ship this layout under its own
-    product name (agent-deck.app instead of agent-ui.app) — self_update
+class TestOrgRebrandedInstall:
+    """An organization may ship this whole layout under its own product
+    name (e.g. acme-console.app instead of agent-deck.app) — self_update
     must keep that name, read the rebrander's version marker, and never
     clobber it (see module docstring)."""
 
     def _setup_rebranded(self, project_root):
-        bundle = project_root / "agent-deck.app"
+        bundle = project_root / "acme-console.app"
         (bundle / "Contents" / "MacOS").mkdir(parents=True)
-        (bundle / "Contents" / "MacOS" / "agent-ui").write_text("old binary")
+        (bundle / "Contents" / "MacOS" / "agent-deck").write_text("old binary")
         (project_root / "app").mkdir()
-        (project_root / "app" / "agent-deck.app.version").write_text("v0.0.13+1")
+        (project_root / "app" / "acme-console.app.version").write_text("v0.0.13+1")
         return bundle
 
     def test_detects_rebranded_bundle_name(self, project_root, monkeypatch):
         monkeypatch.setattr(su.sys, "platform", "darwin")
         self._setup_rebranded(project_root)
-        assert su._dest_name() == "agent-deck.app"
+        assert su._dest_name() == "acme-console.app"
 
     def test_reads_rebrander_marker_with_build_suffix_stripped(self, project_root, monkeypatch):
         """The rebrander's pinned installer writes "<tag>+<build>" to
@@ -196,22 +198,22 @@ class TestRebrandedInstall:
 
         def fake_run(cmd, *a, **kw):
             if cmd[0] == "curl":
-                _make_rebranded_zip(Path(cmd[-1]))
+                _make_org_rebranded_zip(Path(cmd[-1]))
             return subprocess.CompletedProcess(cmd, 0)
 
         monkeypatch.setattr(su.subprocess, "run", fake_run)
 
         su.apply()
 
-        assert (project_root / "agent-deck.app").exists(), "rebranded name must be kept"
-        assert not (project_root / "agent-ui.app").exists(), (
+        assert (project_root / "acme-console.app").exists(), "rebranded name must be kept"
+        assert not (project_root / "agent-deck.app").exists(), (
             "the update must not appear as a SECOND bundle under the "
             "upstream name next to the stale rebranded one."
         )
-        assert (project_root / "agent-deck.app.version").read_text().strip() == "v0.0.14", (
+        assert (project_root / "acme-console.app.version").read_text().strip() == "v0.0.14", (
             "self_update must write its own root-level marker"
         )
-        assert (project_root / "app" / "agent-deck.app.version").read_text().strip() == "v0.0.13+1", (
+        assert (project_root / "app" / "acme-console.app.version").read_text().strip() == "v0.0.13+1", (
             "the rebrander's own marker must be left untouched — overwriting "
             "it with a newer tag makes the rebrander's pinned installer "
             "reinstall (downgrade to) its pin on the next launch."
@@ -229,7 +231,7 @@ class TestPythonPayloadRefresh:
 
         def fake_run(cmd, *a, **kw):
             if cmd[0] == "curl":
-                _make_rebranded_zip(Path(cmd[-1]))
+                _make_org_rebranded_zip(Path(cmd[-1]))
             return subprocess.CompletedProcess(cmd, 0)
 
         monkeypatch.setattr(su.subprocess, "run", fake_run)
@@ -247,7 +249,7 @@ class TestPythonPayloadRefresh:
 
         def fake_run(cmd, *a, **kw):
             if cmd[0] == "curl":
-                _make_rebranded_zip(Path(cmd[-1]))
+                _make_org_rebranded_zip(Path(cmd[-1]))
             return subprocess.CompletedProcess(cmd, 0)
 
         monkeypatch.setattr(su.subprocess, "run", fake_run)
@@ -259,14 +261,14 @@ class TestPythonPayloadRefresh:
         )
 
     def test_apply_normalizes_sh_files_to_lf(self, project_root, monkeypatch):
-        """agent-ui-win.zip's python/ tree has shipped CRLF before, which
-        breaks bash on Mac."""
+        """The Windows release zip's python/ tree has shipped CRLF before,
+        which breaks bash on Mac."""
         monkeypatch.setattr(su.sys, "platform", "darwin")
         monkeypatch.setattr(su, "_fetch_latest_release", lambda: _fake_release("v0.2.0"))
 
         def fake_run(cmd, *a, **kw):
             if cmd[0] == "curl":
-                _make_rebranded_zip(Path(cmd[-1]))
+                _make_org_rebranded_zip(Path(cmd[-1]))
             return subprocess.CompletedProcess(cmd, 0)
 
         monkeypatch.setattr(su.subprocess, "run", fake_run)

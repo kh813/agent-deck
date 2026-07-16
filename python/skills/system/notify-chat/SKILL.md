@@ -63,11 +63,11 @@ Have the user create it via Google Chat's web UI (`chat.google.com`):
 ```
 1. chat.google.com を開く
 2. 左上の「+」→「スペースを作成」を選択
-3. スペース名を入力（例: 「agent-ui 通知」）し、「作成」をクリック
+3. スペース名を入力（例: 「agent-deck 通知」）し、「作成」をクリック
 
 1. Open chat.google.com
 2. Click "+" in the top-left → "Create space"
-3. Name it (e.g. "agent-ui notifications") and click "Create"
+3. Name it (e.g. "agent-deck notifications") and click "Create"
 ```
 
 ### 3. Webhookの追加 / Add the Incoming Webhook
@@ -79,12 +79,12 @@ Within that space, have the user issue a webhook:
 ```
 1. スペース名の右にあるスペース名／下矢印をクリック
 2. 「アプリと統合」→「Webhookを追加」を選択
-3. 名前を入力（例: 「agent-ui」）し、「追加」をクリック
+3. 名前を入力（例: 「agent-deck」）し、「追加」をクリック
 4. 表示されたURLをコピーする（一度しか表示されない場合があるので必ずコピー）
 
 1. Click the space name / dropdown arrow near the top
 2. Select "Apps & integrations" → "Add webhooks"
-3. Give it a name (e.g. "agent-ui") and click "Add"
+3. Give it a name (e.g. "agent-deck") and click "Add"
 4. Copy the generated URL (it may not be shown again, so copy it now)
 ```
 
@@ -110,7 +110,7 @@ After editing, delete the backup. If the write fails, restore from the backup.
 ### 6. 動作確認 / Test
 
 ```bash
-python3 python/scripts/automation/notify_chat.py "✅ agent-ui: Chat通知の設定が完了しました。"
+python3 python/scripts/automation/notify_chat.py "✅ agent-deck: Chat通知の設定が完了しました。"
 ```
 
 実行後、ユーザーに該当スペースにメッセージが届いているか確認してもらいます。届いていなければ、URLの貼り間違いやWebhookの削除がないか確認し、Step 3〜5をやり直してください。

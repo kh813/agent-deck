@@ -37,6 +37,13 @@ _SCRIPT_DIR    = Path(__file__).resolve().parent
 _PROJECT_ROOT  = _SCRIPT_DIR.parents[2]
 _RUNNER_SCRIPT = _SCRIPT_DIR / "agy_scheduled_prompt.py"
 
+# Deliberately NOT renamed for the 2026-07-16 agent-ui -> agent-deck product
+# rename: these are live OS-level identifiers. An existing install may
+# already have real LaunchAgents/Scheduled Tasks registered under the old
+# namespace, and this module's list/enable/disable/delete only ever look at
+# tasks matching _LABEL_PREFIX/_TASK_FOLDER exactly — changing either would
+# silently orphan any already-scheduled task (invisible to future
+# list/edit/delete calls, but still running).
 _LABEL_PREFIX = "com.agent-ui.agy."
 _TASK_FOLDER  = r"AgentUI\AGY"
 

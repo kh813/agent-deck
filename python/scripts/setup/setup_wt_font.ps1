@@ -24,7 +24,7 @@ elseif (Test-Path "$fontsDir\msgothic.ttc")      { $fontFace = "MS Gothic" }
 
 if (-not $fontFace) {
     # Non-Japanese Windows: no CJK fonts found — notify once
-    $markerDir  = "$env:LOCALAPPDATA\agent-ui"
+    $markerDir  = "$env:LOCALAPPDATA\agent-deck"
     $markerFile = "$markerDir\wt-font-notice.flag"
     if (-not (Test-Path $markerFile)) {
         if (-not (Test-Path $markerDir)) { New-Item -ItemType Directory -Path $markerDir | Out-Null }

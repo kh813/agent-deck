@@ -9,7 +9,7 @@ set "PYTHON_VERSION=3.12.9"
 set "PYTHON_EMBED_URL=https://www.python.org/ftp/python/%PYTHON_VERSION%/python-%PYTHON_VERSION%-embed-amd64.zip"
 
 echo.
-echo ====== agent-ui Setup for Windows ======
+echo ====== agent-deck Setup for Windows ======
 echo.
 
 if not exist "App\bin"        mkdir "App\bin"

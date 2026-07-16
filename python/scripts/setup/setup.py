@@ -50,7 +50,7 @@ def setup_venv():
         python = venv_dir / "bin" / "python3"
 
     pip_flags = ["-qq", "--disable-pip-version-check", "--no-cache-dir"]
-    # Not used by any of agent-ui's own public skills (the corporate slide-
+    # Not used by any of agent-deck's own public skills (the corporate slide-
     # generation feature that used to live here moved entirely to agent-deck
     # in 0.0.11 — see python/scripts/slides/ removal). Kept anyway: a
     # wrapping project's own scripts (e.g. agent-deck's src/scripts/slides/
@@ -165,7 +165,7 @@ def install_gemini_policies():
 # ── setup skills ──────────────────────────────────────────────
 #
 # Two skill roots:
-#   python/skills/           bundled   — ships with every agent-ui install
+#   python/skills/           bundled   — ships with every agent-deck install
 #   python/skills-personal/  personal — per-installation, gitignored, created by `my-skills create`
 # Each root may have its own `disabled/` subfolder for temporarily-disabled skills.
 
@@ -289,7 +289,7 @@ def skills_enable(skill_name):
 def _prompt(msg):
     """input() that degrades to an empty answer when stdin isn't interactive.
 
-    setup_config() can run non-interactively (e.g. invoked by agent-ui's
+    setup_config() can run non-interactively (e.g. invoked by agent-deck's
     pre_launch_command via preflight.sh/.bat, with no attached stdin), where
     a bare input() would raise EOFError and crash the whole preflight step.
     Missing credentials/email are already handled as "not yet configured"
