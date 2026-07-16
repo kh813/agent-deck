@@ -142,3 +142,136 @@ class TestApply:
             "apply() removed the existing install before confirming the "
             "replacement download succeeded."
         )
+
+
+def _make_rebranded_zip(zip_path: Path, with_python: bool = True) -> None:
+    """Fake upstream asset: bundle is agent-ui.* inside the zip regardless
+    of what the installed copy is named locally."""
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("agent-ui.app/Contents/MacOS/agent-ui", b"#!/bin/sh\necho hi\n")
+        if with_python:
+            zf.writestr("python/skills/translator/SKILL.md", b"---\nname: translator\n---\n")
+            zf.writestr("python/scripts/setup/build-skills.sh", b"#!/bin/bash\r\necho ok\r\n")
+
+
+class TestRebrandedInstall:
+    """2026-07-16: an organization may ship this layout under its own
+    product name (agent-deck.app instead of agent-ui.app) — self_update
+    must keep that name, read the rebrander's version marker, and never
+    clobber it (see module docstring)."""
+
+    def _setup_rebranded(self, project_root):
+        bundle = project_root / "agent-deck.app"
+        (bundle / "Contents" / "MacOS").mkdir(parents=True)
+        (bundle / "Contents" / "MacOS" / "agent-ui").write_text("old binary")
+        (project_root / "app").mkdir()
+        (project_root / "app" / "agent-deck.app.version").write_text("v0.0.13+1")
+        return bundle
+
+    def test_detects_rebranded_bundle_name(self, project_root, monkeypatch):
+        monkeypatch.setattr(su.sys, "platform", "darwin")
+        self._setup_rebranded(project_root)
+        assert su._dest_name() == "agent-deck.app"
+
+    def test_reads_rebrander_marker_with_build_suffix_stripped(self, project_root, monkeypatch):
+        """The rebrander's pinned installer writes "<tag>+<build>" to
+        app/<name>.version — the "+build" part is its own re-publish
+        counter, not part of the upstream tag."""
+        monkeypatch.setattr(su.sys, "platform", "darwin")
+        self._setup_rebranded(project_root)
+        monkeypatch.setattr(su, "_fetch_latest_release", lambda: _fake_release("v0.0.13"))
+
+        available, installed, latest = su.check()
+
+        assert installed == "v0.0.13"
+        assert available is False, (
+            "a rebranded install at the same upstream tag must not be "
+            "reported as needing an update just because of the +build suffix."
+        )
+
+    def test_apply_keeps_rebranded_name_and_spares_rebrander_marker(self, project_root, monkeypatch):
+        monkeypatch.setattr(su.sys, "platform", "darwin")
+        self._setup_rebranded(project_root)
+        monkeypatch.setattr(su, "_fetch_latest_release", lambda: _fake_release("v0.0.14"))
+
+        def fake_run(cmd, *a, **kw):
+            if cmd[0] == "curl":
+                _make_rebranded_zip(Path(cmd[-1]))
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(su.subprocess, "run", fake_run)
+
+        su.apply()
+
+        assert (project_root / "agent-deck.app").exists(), "rebranded name must be kept"
+        assert not (project_root / "agent-ui.app").exists(), (
+            "the update must not appear as a SECOND bundle under the "
+            "upstream name next to the stale rebranded one."
+        )
+        assert (project_root / "agent-deck.app.version").read_text().strip() == "v0.0.14", (
+            "self_update must write its own root-level marker"
+        )
+        assert (project_root / "app" / "agent-deck.app.version").read_text().strip() == "v0.0.13+1", (
+            "the rebrander's own marker must be left untouched — overwriting "
+            "it with a newer tag makes the rebrander's pinned installer "
+            "reinstall (downgrade to) its pin on the next launch."
+        )
+
+
+class TestPythonPayloadRefresh:
+    """2026-07-16: apply() must also refresh <root>/python/ from the same
+    zip — previously only the binary was swapped, silently leaving skills
+    and setup scripts at the old version forever."""
+
+    def test_apply_refreshes_python_tree(self, project_root, monkeypatch):
+        monkeypatch.setattr(su.sys, "platform", "darwin")
+        monkeypatch.setattr(su, "_fetch_latest_release", lambda: _fake_release("v0.2.0"))
+
+        def fake_run(cmd, *a, **kw):
+            if cmd[0] == "curl":
+                _make_rebranded_zip(Path(cmd[-1]))
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(su.subprocess, "run", fake_run)
+
+        su.apply()
+
+        assert (project_root / "python" / "skills" / "translator" / "SKILL.md").exists()
+
+    def test_apply_preserves_skills_personal(self, project_root, monkeypatch):
+        monkeypatch.setattr(su.sys, "platform", "darwin")
+        personal = project_root / "python" / "skills-personal" / "my-skill"
+        personal.mkdir(parents=True)
+        (personal / "SKILL.md").write_text("---\nname: my-skill\n---\n")
+        monkeypatch.setattr(su, "_fetch_latest_release", lambda: _fake_release("v0.2.0"))
+
+        def fake_run(cmd, *a, **kw):
+            if cmd[0] == "curl":
+                _make_rebranded_zip(Path(cmd[-1]))
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(su.subprocess, "run", fake_run)
+
+        su.apply()
+
+        assert (project_root / "python" / "skills-personal" / "my-skill" / "SKILL.md").exists(), (
+            "user-created and catalog-synced skills must survive the refresh."
+        )
+
+    def test_apply_normalizes_sh_files_to_lf(self, project_root, monkeypatch):
+        """agent-ui-win.zip's python/ tree has shipped CRLF before, which
+        breaks bash on Mac."""
+        monkeypatch.setattr(su.sys, "platform", "darwin")
+        monkeypatch.setattr(su, "_fetch_latest_release", lambda: _fake_release("v0.2.0"))
+
+        def fake_run(cmd, *a, **kw):
+            if cmd[0] == "curl":
+                _make_rebranded_zip(Path(cmd[-1]))
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(su.subprocess, "run", fake_run)
+
+        su.apply()
+
+        sh = project_root / "python" / "scripts" / "setup" / "build-skills.sh"
+        assert b"\r" not in sh.read_bytes()

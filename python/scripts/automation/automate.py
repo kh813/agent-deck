@@ -14,12 +14,18 @@ LOG_FILE      = SCRIPT_DIR / "logs" / "automator.log"
 
 # Target scripts live under whichever root matches their distribution scope
 # (this file itself is public, but some ACTIONS below dispatch to
-# company-internal or personal scripts) — search all three in order.
+# company-internal or personal scripts) — search all of these in order.
 AUTOMATION_DIRS = [
     SCRIPT_DIR,
     PROJECT_ROOT / "src-internal" / "scripts" / "automation",
     PROJECT_ROOT / "src-personal" / "scripts" / "automation",
 ]
+
+# Catalog-distributed skills bundle their scripts inside their own skill
+# directory (python/skills-personal/<name>/scripts/ — see skills_catalog.py's
+# module docstring), so an org's skills can dispatch through this launcher
+# (and get its venv/playwright bootstrap) without the org forking this repo.
+SKILL_SCRIPTS_GLOB = PROJECT_ROOT / "python" / "skills-personal"
 
 ACTIONS = {
     "clockin":          "routine.py",
@@ -39,8 +45,12 @@ def _find_script(filename: str) -> Path:
         candidate = automation_dir / filename
         if candidate.exists():
             return candidate
+    if SKILL_SCRIPTS_GLOB.is_dir():
+        for candidate in sorted(SKILL_SCRIPTS_GLOB.glob(f"*/scripts/{filename}")):
+            return candidate
     raise FileNotFoundError(
-        f"{filename} not found in any of: {[str(d) for d in AUTOMATION_DIRS]}"
+        f"{filename} not found in any of: {[str(d) for d in AUTOMATION_DIRS]} "
+        f"or {SKILL_SCRIPTS_GLOB}/*/scripts/"
     )
 
 
