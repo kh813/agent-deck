@@ -81,6 +81,43 @@ jobs:
         run: |
           Compress-Archive -Path src-tauri/target/release/agent-ui.exe,python,config,agent_config.json,preflight.bat -DestinationPath agent-ui-win.zip
 
+      # A broken release asset (truncated build, a bad zip step, an
+      # accidentally-empty binary) has shipped silently before with no error
+      # anywhere in the pipeline — users only found out later as "is damaged
+      # and can't be opened" (macOS) or a silent crash (Windows), long after
+      # the asset was already public. codesign --verify (above) catches a
+      # bad macOS *signature*, but not a corrupted *zip*; this step re-opens
+      # the actual artifact that's about to be uploaded and checks the
+      # embedded binary is present and a sane size, on both platforms.
+      - name: verify release zip integrity
+        if: matrix.platform == 'macos-latest'
+        run: |
+          set -e
+          SIZE=$(unzip -p agent-ui-mac.zip agent-ui.app/Contents/MacOS/agent-ui | wc -c)
+          echo "agent-ui.app/Contents/MacOS/agent-ui: ${SIZE} bytes"
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "::error::agent-ui binary inside agent-ui-mac.zip is suspiciously small (${SIZE} bytes) — refusing to publish a likely-corrupted release."
+            exit 1
+          fi
+
+      - name: verify release zip integrity
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead("agent-ui-win.zip")
+          $entry = $zip.Entries | Where-Object { $_.FullName -eq "agent-ui.exe" }
+          $zip.Dispose()
+          if (-not $entry) {
+            Write-Error "agent-ui.exe entry not found in agent-ui-win.zip — refusing to publish a likely-corrupted release."
+            exit 1
+          }
+          Write-Host "agent-ui.exe: $($entry.Length) bytes"
+          if ($entry.Length -lt 1000000) {
+            Write-Error "agent-ui.exe inside agent-ui-win.zip is suspiciously small ($($entry.Length) bytes) — refusing to publish a likely-corrupted release."
+            exit 1
+          }
+
       - name: upload release asset
         uses: softprops/action-gh-release@v2
         with:
