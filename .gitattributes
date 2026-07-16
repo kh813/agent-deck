@@ -2,3 +2,12 @@
 # files. Without this, core.autocrlf=input (a common macOS/Linux git config)
 # silently strips CRLF back to LF on every commit.
 *.bat  text  eol=crlf
+
+# .sh files must stay LF — bash dies on a stray \r in the shebang/body
+# ("$'\r': command not found"). Without this, GitHub's windows-latest
+# runners (core.autocrlf=true by default) convert LF blobs to CRLF on
+# checkout, and the release workflow's windows-latest job zips those
+# CRLF-converted python/*.sh files straight into agent-ui-win.zip —
+# confirmed for real in v0.0.9: build-skills.sh shipped CRLF to Mac users
+# and broke their first-launch bootstrap.
+*.sh   text  eol=lf
