@@ -270,6 +270,36 @@ pub(crate) fn get_default_cwd() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
 }
 
+enum PtyMessage {
+    Output(Vec<u8>),
+    Terminated,
+    Error,
+}
+
+fn emit_output<R: tauri::Runtime>(app: &tauri::AppHandle<R>, data: &[u8]) {
+    let _ = app.emit("pty-output", PtyOutputPayload { data: data.to_vec() });
+
+    // Lossy-decoding here is fine even if it mangles a
+    // boundary-spanning character: this text is only used
+    // for prompt-pattern matching, not display, so an
+    // occasional stray replacement character has no visible
+    // effect on what the user sees in the terminal.
+    let raw_data = String::from_utf8_lossy(data).into_owned();
+
+    // Clean text and check prompt pattern
+    let clean_text = strip_ansi_rust(&raw_data);
+    if let Some(prompt) = detect_prompts(&clean_text) {
+        // If it's a login link, open default OS browser
+        if prompt.prompt_type == "login" {
+            if let Some(ref url) = prompt.url {
+                let _ = app.opener().open_path(url, None::<String>);
+            }
+        }
+        
+        let _ = app.emit("pty-prompt", prompt);
+    }
+}
+
 pub async fn start_pty_internal<R: tauri::Runtime>(
     command: String,
     args: Vec<String>,
@@ -374,46 +404,80 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
     debug_log_marker(&format!("start_pty rows={rows} cols={cols}"));
 
     let app_clone = app.clone();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<PtyMessage>(1024);
+
+    // Spawn PTY reader thread that pushes read chunks to the channel
+    let debug_log_path_clone = debug_log_path.clone();
     thread::spawn(move || {
         let mut reader = reader;
         let mut buffer = [0u8; 1024];
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => {
-                    let _ = app_clone.emit("pty-status", "terminated");
+                    let _ = tx.blocking_send(PtyMessage::Terminated);
                     break;
                 }
                 Ok(n) => {
-                    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&debug_log_path) {
+                    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&debug_log_path_clone) {
                         use std::io::Write as _;
                         let _ = f.write_all(&buffer[..n]);
                     }
 
-                    let _ = app_clone.emit("pty-output", PtyOutputPayload { data: buffer[..n].to_vec() });
-
-                    // Lossy-decoding here is fine even if it mangles a
-                    // boundary-spanning character: this text is only used
-                    // for prompt-pattern matching, not display, so an
-                    // occasional stray replacement character has no visible
-                    // effect on what the user sees in the terminal.
-                    let raw_data = String::from_utf8_lossy(&buffer[..n]).into_owned();
-
-                    // Clean text and check prompt pattern
-                    let clean_text = strip_ansi_rust(&raw_data);
-                    if let Some(prompt) = detect_prompts(&clean_text) {
-                        // If it's a login link, open default OS browser
-                        if prompt.prompt_type == "login" {
-                            if let Some(ref url) = prompt.url {
-                                let _ = app_clone.opener().open_path(url, None::<String>);
-                            }
-                        }
-                        
-                        let _ = app_clone.emit("pty-prompt", prompt);
+                    if tx.blocking_send(PtyMessage::Output(buffer[..n].to_vec())).is_err() {
+                        break;
                     }
                 }
                 Err(_) => {
+                    let _ = tx.blocking_send(PtyMessage::Error);
+                    break;
+                }
+            }
+        }
+    });
+
+    // Spawn tokio task that flushes accumulated output to the frontend with batching
+    tokio::spawn(async move {
+        let mut accumulated = Vec::new();
+        let mut last_flush = std::time::Instant::now();
+        let flush_interval = std::time::Duration::from_millis(15); // 15ms batching window
+
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_millis(5), rx.recv()).await {
+                Ok(Some(PtyMessage::Output(chunk))) => {
+                    accumulated.extend_from_slice(&chunk);
+
+                    // Flush immediately if buffer size is large (>= 16 KB)
+                    // or if the flush interval has elapsed.
+                    if accumulated.len() >= 16384 || last_flush.elapsed() >= flush_interval {
+                        emit_output(&app_clone, &accumulated);
+                        accumulated.clear();
+                        last_flush = std::time::Instant::now();
+                    }
+                }
+                Ok(Some(PtyMessage::Terminated)) => {
+                    if !accumulated.is_empty() {
+                        emit_output(&app_clone, &accumulated);
+                    }
+                    let _ = app_clone.emit("pty-status", "terminated");
+                    break;
+                }
+                Ok(Some(PtyMessage::Error)) => {
+                    if !accumulated.is_empty() {
+                        emit_output(&app_clone, &accumulated);
+                    }
                     let _ = app_clone.emit("pty-status", "error");
                     break;
+                }
+                Ok(None) => {
+                    break;
+                }
+                Err(_) => {
+                    // Timeout (5ms idle). Flush immediately to keep interactive inputs responsive.
+                    if !accumulated.is_empty() {
+                        emit_output(&app_clone, &accumulated);
+                        accumulated.clear();
+                        last_flush = std::time::Instant::now();
+                    }
                 }
             }
         }
