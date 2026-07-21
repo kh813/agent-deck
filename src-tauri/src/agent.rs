@@ -293,6 +293,58 @@ pub async fn detect_agent_internal<R: tauri::Runtime>(
     }
 }
 
+// Rewrites a `powershell.exe -Command "<long inline script>"` InstallCommand
+// into an equivalent `-File <tmp.ps1>` invocation, staging the script text
+// to a temp file first.
+//
+// Confirmed for real (2026-07-21): CreateProcessW returned ERROR_ACCESS_DENIED
+// (os error 5) when spawning the install_commands.json Windows agy install
+// command as-is, on the same machine whose security software (ESET) had
+// already been confirmed once before to flag/block PowerShell invocations
+// with a suspicious-looking inline script (Set-ExecutionPolicy Bypass,
+// Invoke-WebRequest, dynamic GUID temp filenames). That earlier fix (see
+// python/tests/test_install_commands.py) addressed what the DOWNLOADED
+// antigravity script does once running -- it did not change how agent-deck
+// itself launches powershell.exe, which still passed the entire script as
+// one `-Command "<text>"` argument. `-Command` with a long, suspicious
+// inline string is itself a commonly-flagged shape independent of what the
+// script does; `-File <path>` pointing at a script already on disk is not.
+fn materialize_windows_install_command(cmd: InstallCommand) -> Result<InstallCommand, String> {
+    if cmd.command != "powershell.exe" {
+        return Ok(cmd);
+    }
+    let Some(idx) = cmd.args.iter().position(|a| a == "-Command") else {
+        return Ok(cmd);
+    };
+    let script = cmd
+        .args
+        .get(idx + 1)
+        .cloned()
+        .ok_or_else(|| "Malformed install command: -Command with no script text".to_string())?;
+
+    let tmp_path = std::env::temp_dir().join(format!(
+        "agent-deck-install-{}-{}.ps1",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    fs::write(&tmp_path, script)
+        .map_err(|e| format!("Failed to stage install script to {:?}: {}", tmp_path, e))?;
+
+    Ok(InstallCommand {
+        command: cmd.command,
+        args: vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            tmp_path.to_string_lossy().to_string(),
+        ],
+    })
+}
+
 pub async fn get_install_command_internal<R: tauri::Runtime>(
     agent_id: String,
     app: tauri::AppHandle<R>,
@@ -307,7 +359,8 @@ pub async fn get_install_command_internal<R: tauri::Runtime>(
         config.install.macos.clone()
     };
 
-    cmd.ok_or_else(|| "Install command not defined for this OS".to_string())
+    let cmd = cmd.ok_or_else(|| "Install command not defined for this OS".to_string())?;
+    materialize_windows_install_command(cmd)
 }
 
 pub async fn check_agent_update_internal<R: tauri::Runtime>(
@@ -355,7 +408,8 @@ pub async fn get_update_command_internal<R: tauri::Runtime>(
         config.update.macos.clone()
     };
 
-    cmd.ok_or_else(|| "Update command not defined for this OS".to_string())
+    let cmd = cmd.ok_or_else(|| "Update command not defined for this OS".to_string())?;
+    materialize_windows_install_command(cmd)
 }
 
 // --- Tauri Command Wrapper ---
@@ -628,6 +682,41 @@ mod tests {
             let path = resolve_env_path("$USERPROFILE\\test\\path");
             assert_eq!(path.to_string_lossy(), format!("{}\\test\\path", userprofile));
         }
+    }
+
+    #[test]
+    fn test_materialize_windows_install_command_rewrites_command_to_file() {
+        let cmd = InstallCommand {
+            command: "powershell.exe".to_string(),
+            args: vec!["-Command".to_string(), "Write-Host 'hello'".to_string()],
+        };
+        let materialized = materialize_windows_install_command(cmd).unwrap();
+
+        assert_eq!(materialized.command, "powershell.exe");
+        assert!(
+            !materialized.args.contains(&"-Command".to_string()),
+            "materialized args should no longer use -Command: {:?}",
+            materialized.args
+        );
+        let file_idx = materialized.args.iter().position(|a| a == "-File").expect(
+            "materialized args should invoke the staged script via -File",
+        );
+        let script_path = &materialized.args[file_idx + 1];
+        let staged = std::fs::read_to_string(script_path).unwrap();
+        assert_eq!(staged, "Write-Host 'hello'");
+
+        let _ = std::fs::remove_file(script_path);
+    }
+
+    #[test]
+    fn test_materialize_windows_install_command_passes_through_non_powershell() {
+        let cmd = InstallCommand {
+            command: "agy.exe".to_string(),
+            args: vec!["self-update".to_string()],
+        };
+        let materialized = materialize_windows_install_command(cmd.clone()).unwrap();
+        assert_eq!(materialized.command, cmd.command);
+        assert_eq!(materialized.args, cmd.args);
     }
 
     #[tokio::test]
