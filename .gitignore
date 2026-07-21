@@ -63,6 +63,11 @@ python/skills/skill-catalog/catalog-index.md
 /config.toml
 /client_secret_*.json
 
+# Company/admin-only reference docs (this project's own working directory
+# doubles as an organization's private dev environment — see
+# docs/admin_guide.md §0). Not part of the OSS project itself.
+/docs/
+
 # Self-updater / release-bundling artifacts written at the project root.
 # agent-ui.* covers a pre-2026-07-16 local build/test artifact (before the
 # agent-ui -> agent-deck rename); agent-deck.* is the current name.

@@ -13,6 +13,10 @@ catalog_folder_id = "YOUR_CATALOG_FOLDER_ID"
 catalog_url       = "https://drive.google.com/drive/folders/YOUR_CATALOG_FOLDER_ID"
 catalog_file_id   = ""
 
+# Google Drive file ID to back up config.toml/client_secret_*.json/docs/ to
+# (see python/scripts/tools/backup_config.py). Leave empty to disable.
+config_backup_file_id = ""
+
 [user]
 # Your email address. If omitted, auto-detected from OS login name (requires
 # a wrapping project to supply [company].domain — see below).

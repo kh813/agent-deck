@@ -28,6 +28,10 @@ _drive = _cfg["drive"]
 CATALOG_FOLDER_ID = (_drive.get("catalog_folder_id") or _drive.get("library_folder_id", "")).strip()
 CATALOG_URL       = (_drive.get("catalog_url")       or _drive.get("library_url", "")).strip()
 CATALOG_FILE_ID   = (_drive.get("catalog_file_id")   or _drive.get("library_catalog_file_id", "")).strip()
+# Drive file ID for backup_config.py's config/secret backup ZIP. Empty by
+# default so a standalone install without this key configured just gets a
+# clear error if the script is ever run, rather than crashing on KeyError.
+CONFIG_BACKUP_FILE_ID = _drive.get("config_backup_file_id", "").strip()
 # [company] is not declared in agent-deck's own config.toml.template — it's an
 # optional overlay a wrapping project (e.g. agent-deck) supplies in its own
 # config.toml. Defaults to empty so standalone agent-deck installs don't crash.
