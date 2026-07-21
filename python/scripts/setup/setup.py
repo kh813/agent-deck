@@ -306,8 +306,21 @@ def _prompt(msg):
     a bare input() would raise EOFError and crash the whole preflight step.
     Missing credentials/email are already handled as "not yet configured"
     (re-prompted next time this runs from an interactive terminal), so
-    treating EOF the same as an empty answer is safe here.
+    treating a non-interactive stdin the same as an empty answer is safe
+    here.
+
+    Checking isatty() up front (rather than relying solely on catching
+    EOFError from a blocking input() call) matters on Windows: confirmed
+    for real that Tauri's pre_launch_command there leaves stdin open but
+    with no writer, rather than closed/EOF-at-first-read the way it is on
+    Mac -- input() then blocks forever waiting for a line that will never
+    arrive, hanging first-time setup indefinitely instead of gracefully
+    skipping. isatty() is false in both cases, so checking it first behaves
+    correctly on either platform without needing to know which stdin-wiring
+    quirk applies.
     """
+    if not sys.stdin.isatty():
+        return ""
     try:
         return input(msg)
     except EOFError:
