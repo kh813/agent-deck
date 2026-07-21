@@ -307,6 +307,45 @@ function App() {
     return unsubStatus;
   }, [isInstalling, isUpdating, checkAgentStatus, checkUpdateStatus]);
 
+  // Poll for install/update completion independent of the PTY session ever
+  // reporting "terminated".
+  //
+  // Confirmed for real (2026-07-21): agy's own installer can finish all of
+  // its visible work (binary placed, PATH registry updated, checkmark
+  // printed) while the underlying PTY/ConPTY pipe never reaches EOF -- most
+  // likely because the installer (or a helper/updater process it spawns)
+  // keeps a handle to the console open. Since "terminated" above is the
+  // ONLY thing that clears isInstalling/isUpdating, the UI was left stuck
+  // on "Installing..." forever despite the install having actually
+  // succeeded. Polling detect_agent directly sidesteps the problem
+  // entirely: the moment the binary is actually found on disk, we know the
+  // install succeeded, regardless of whether its process/console has
+  // technically exited yet.
+  useEffect(() => {
+    if (!isInstalling && !isUpdating) return;
+
+    const interval = setInterval(() => {
+      checkAgentStatus();
+      if (isUpdating) {
+        checkUpdateStatus();
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [isInstalling, isUpdating, checkAgentStatus, checkUpdateStatus]);
+
+  useEffect(() => {
+    if (isInstalling && currentAgentStatus.installed) {
+      setIsInstalling(false);
+    }
+  }, [isInstalling, currentAgentStatus.installed]);
+
+  useEffect(() => {
+    if (isUpdating && updateStatus && !updateStatus.update_available) {
+      setIsUpdating(false);
+    }
+  }, [isUpdating, updateStatus]);
+
   // Trigger installation via PTY
   const handleInstallAgy = async () => {
     try {
