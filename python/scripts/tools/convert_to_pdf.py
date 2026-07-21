@@ -18,6 +18,18 @@ import sys
 import os
 from pathlib import Path
 
+# Windows pipe (agy.exe's pty etc.) makes stdout fall back to CP932/CP1252,
+# corrupting or crashing outright (UnicodeEncodeError) on this file's
+# non-ASCII output. See python/tests/test_windows_utf8.py (or
+# src/tests/test_windows_utf8.py) for the incident history.
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except AttributeError:
+        pass
+
+
 SCRIPT_DIR   = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parents[2]
 
