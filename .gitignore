@@ -68,6 +68,10 @@ python/skills/skill-catalog/catalog-index.md
 # docs/admin_guide.md §0). Not part of the OSS project itself.
 /docs/
 
+# Org-specific agy project instructions (not part of the OSS project --
+# each deployment supplies its own, or none at all).
+/ANTIGRAVITY.md
+
 # Self-updater / release-bundling artifacts written at the project root.
 # agent-ui.* covers a pre-2026-07-16 local build/test artifact (before the
 # agent-ui -> agent-deck rename); agent-deck.* is the current name.
