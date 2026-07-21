@@ -1,0 +1,2 @@
+[ERROR] Python が見つかりませんでした。Python をインストールしてから、もう一度実行してください。
+[ERROR] Python was not found. Please install Python, then try again.

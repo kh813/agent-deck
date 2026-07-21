@@ -76,7 +76,7 @@ jobs:
           # -x __pycache__: the test step above ran pytest against this
           # checkout, leaving .pyc caches inside python/ — build artifacts,
           # not payload (one shipped in v0.0.13 for real).
-          zip -r agent-deck-mac.zip python config agent_config.json preflight.sh -x "*__pycache__*"
+          zip -r agent-deck-mac.zip python config agent_config.json preflight.sh messages -x "*__pycache__*"
 
       - name: package Windows exe to zip
         if: matrix.platform == 'windows-latest'
@@ -86,7 +86,7 @@ jobs:
           # checkout, leaving .pyc caches inside python/ (build artifacts,
           # not payload — one shipped in v0.0.13 for real).
           Get-ChildItem -Path python -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
-          Compress-Archive -Path src-tauri/target/release/agent-deck.exe,python,config,agent_config.json,preflight.bat -DestinationPath agent-deck-win.zip
+          Compress-Archive -Path src-tauri/target/release/agent-deck.exe,python,config,agent_config.json,preflight.bat,messages -DestinationPath agent-deck-win.zip
 
       # A broken release asset (truncated build, a bad zip step, an
       # accidentally-empty binary) has shipped silently before with no error

@@ -1,0 +1,2 @@
+[ERROR] セットアップに失敗しました。ネットワーク接続を確認してから、もう一度実行してください。
+[ERROR] Setup failed. Check your network connection, then try again.
