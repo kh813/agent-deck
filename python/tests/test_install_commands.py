@@ -36,6 +36,11 @@ def _windows_install_args() -> str:
     return " ".join(data["agy"]["install"]["windows"]["args"])
 
 
+def _macos_install_args() -> str:
+    data = json.loads(INSTALL_COMMANDS_PATH.read_text())
+    return " ".join(data["agy"]["install"]["macos"]["args"])
+
+
 class TestWindowsInstallCommandAvoidsFilelessExecution:
     def test_is_valid_json(self):
         json.loads(INSTALL_COMMANDS_PATH.read_text())
@@ -78,4 +83,37 @@ class TestWindowsInstallCommandAvoidsFilelessExecution:
         assert "Remove-Item $tmp" in args, (
             "install_commands.json's Windows agy install command no longer "
             "cleans up the downloaded temp script file."
+        )
+
+
+class TestInstallUrlsPointAtTheRealInstallerHost:
+    """Regression guard for a second, independent bug found 2026-07-21:
+    the URLs baked into install_commands.json (antigravity.google.com/
+    install.sh and .../install.ps1) returned the antigravity.google.com
+    website's own HTML/JS SPA shell instead of a real installer script --
+    confirmed via direct curl from a clean environment, so this was not
+    an AV/EDR block. The official download page documents a different
+    domain (antigravity.google, no ".com") and path (/cli/install.sh,
+    /cli/install.ps1), confirmed by curl to serve real scripts
+    (content-type application/x-sh and application/octet-stream
+    respectively). Do not revert to the antigravity.google.com host
+    without re-verifying it serves real script content, not the site
+    shell."""
+
+    def test_macos_uses_the_real_installer_host(self):
+        args = _macos_install_args()
+        assert "https://antigravity.google/cli/install.sh" in args, (
+            "install_commands.json's macOS agy install command should "
+            "fetch from antigravity.google/cli/install.sh (confirmed to "
+            "serve a real script) -- not antigravity.google.com/install.sh "
+            "(confirmed to serve the website's HTML shell instead)."
+        )
+
+    def test_windows_uses_the_real_installer_host(self):
+        args = _windows_install_args()
+        assert "https://antigravity.google/cli/install.ps1" in args, (
+            "install_commands.json's Windows agy install command should "
+            "fetch from antigravity.google/cli/install.ps1 (confirmed to "
+            "serve a real script) -- not antigravity.google.com/install.ps1 "
+            "(confirmed to serve the website's HTML shell instead)."
         )

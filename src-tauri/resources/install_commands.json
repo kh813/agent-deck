@@ -17,11 +17,11 @@
     "install": {
       "macos": {
         "command": "bash",
-        "args": ["-c", "mkdir -p app/bin && curl -fsSL https://antigravity.google.com/install.sh | BINDIR=./app/bin bash"]
+        "args": ["-c", "mkdir -p app/bin && curl -fsSL https://antigravity.google/cli/install.sh | BINDIR=./app/bin bash"]
       },
       "windows": {
         "command": "powershell.exe",
-        "args": ["-Command", "if (!(Test-Path 'app/bin')) { New-Item -ItemType Directory 'app/bin' }; $env:BINDIR='.\\app\\bin'; Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force; $tmp = Join-Path $env:TEMP ('antigravity-install-' + [guid]::NewGuid().ToString() + '.ps1'); Invoke-WebRequest -UseBasicParsing -Uri https://antigravity.google.com/install.ps1 -OutFile $tmp; try { & $tmp } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }"]
+        "args": ["-Command", "if (!(Test-Path 'app/bin')) { New-Item -ItemType Directory 'app/bin' }; $env:BINDIR='.\\app\\bin'; Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force; $tmp = Join-Path $env:TEMP ('antigravity-install-' + [guid]::NewGuid().ToString() + '.ps1'); Invoke-WebRequest -UseBasicParsing -Uri https://antigravity.google/cli/install.ps1 -OutFile $tmp; try { & $tmp } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }"]
       }
     },
     "update": {
