@@ -614,22 +614,15 @@ agent-deck は **二層のセキュリティ** でエージェントの動作範
 | 第1層（行動制約） | `ANTIGRAVITY.md` の記述 | モデルへのルールとして何を操作してよいか・悪いかを定義 |
 | 第2層（技術的強制） | agy ポリシーファイル（TOML） | ツール呼び出し自体をランタイムでブロック。YOLO モードでも有効 |
 
-### Google Workspace 認証チェック / Google Workspace Auth Check
+### Google Workspace アカウントでの利用 / Using a Google Workspace Account
 
-**背景 / Background:** BYOD（私物端末）では個人の Gmail アカウントで agy が認証されている可能性があるため、初回サインインを促して会社アカウントでの認証を確立します。
+**現状（技術的な強制チェックはない）/ Current state (no technical enforcement):** agent-deck 自体は、サインインしたアカウントが会社ドメインかどうかを検証するコード（sentinel ファイル・`google_accounts.json` の確認など）を持ちません。`preflight.sh`/`.bat`・`setup.py`・Rust 側のいずれにもそのようなチェックは実装されていません。
 
-**動作（現行: `preflight.sh`/`.bat` が制御）/ Behavior (now controlled by preflight.sh/.bat):**
+「会社の Google Workspace アカウントを使うこと」は `ANTIGRAVITY.md` の **Authentication** セクションにモデルへの指示として記載されているのみです（プロンプトレベルの指示であり、技術的なブロックではありません）。サインイン自体は agy 自身の標準的な Google OAuth フローで、初回起動時にブラウザが自動で開きます。
 
-| 状態 / State | 動作 / Action |
-|---|---|
-| sentinel ファイル（`~/.gemini/agent_deck_authed`）なし | `~/.gemini/google_accounts.json` の `active` フィールドを確認 → 会社ドメインなら sentinel を作成しスキップ → 別ドメイン・未認証なら案内メッセージを表示 |
-| sentinel ファイルあり | 認証チェックをスキップ（高速起動） |
+個人アカウントでの利用を技術的に防ぎたい場合は、Google Workspace 管理コンソール側で当該 OAuth クライアントの利用をドメイン内ユーザーに制限するなど、agent-deck の外側で対応する必要があります。
 
-**sentinel のリセット（再認証を強制したい場合）:**
-```bash
-rm ~/.gemini/agent_deck_authed          # Mac/Linux
-del "%USERPROFILE%\.gemini\agent_deck_authed"   # Windows
-```
+**再認証を強制したい場合 / To force re-authentication:** agy 自身のトークンファイル（`~/.gemini/antigravity-cli/antigravity-oauth-token` 等、バージョンにより異なる場合があります）を削除してください。
 
 ### ANTIGRAVITY.md の行動制約 / ANTIGRAVITY.md Behavioral Constraints
 
