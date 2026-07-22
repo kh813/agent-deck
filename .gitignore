@@ -63,10 +63,14 @@ python/skills/skill-catalog/catalog-index.md
 /config.toml
 /client_secret_*.json
 
-# Company/admin-only reference docs (this project's own working directory
-# doubles as an organization's private dev environment — see
-# docs/admin_guide.md §0). Not part of the OSS project itself.
-/docs/
+# This project's own working directory doubles as an organization's private
+# dev environment (see docs/admin_guide.md §0). admin_guide.md and
+# user_guide.md are generic enough to be public docs for the OSS project;
+# everything else under docs/ (e.g. org-specific migration notes) stays
+# private by default.
+/docs/*
+!/docs/admin_guide.md
+!/docs/user_guide.md
 
 # Org-specific agy project instructions (not part of the OSS project --
 # each deployment supplies its own, or none at all).
