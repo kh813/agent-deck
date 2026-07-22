@@ -42,7 +42,9 @@ SCRIPT_DIR   = Path(__file__).resolve().parent   # python/scripts/tools
 PROJECT_ROOT = SCRIPT_DIR.parents[2]              # project root
 
 SCOPES     = ["https://www.googleapis.com/auth/drive"]
-TOKEN_PATH = Path.home() / ".gemini" / "agent_deck_library_token.json"
+# Shared with skills_catalog.py/drive_upload.py/drive_migrator.py — same
+# scope, same token cache, so authorizing once via any of them covers all.
+TOKEN_PATH = Path.home() / ".gemini" / "agent_ui_library_token.json"
 
 # Paths (relative to PROJECT_ROOT) to include in the backup zip -- exactly
 # the gitignored, org-private files a fresh clone of this repo won't have,
