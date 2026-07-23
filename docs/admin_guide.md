@@ -273,16 +273,32 @@ Node.js and Python are self-contained inside the project folder, so agent-deck i
 
 ## 4. 自己更新の流れ / Self-Update Flow
 
-メニューバーの「**Settings**」→「**Check for agent-deck Updates...**」から、`kh813/agent-deck` の **GitHub Releases** を確認し、現在より新しいタグがあればダウンロード・置換します（Rust側の `check_self_update`/`get_self_update_command` コマンドが、公開リポジトリの `python/scripts/setup/self_update.py` を呼び出します）。**Google Drive は一切関与しません。**
+メニューバーの「**Update**」サブメニューには、`config.toml` の設定に応じて**どちらか一方**しか表示されません：
+
+| `config.toml` の状態 | 表示される項目 | 取得元 |
+|---|---|---|
+| `[drive] org_release_prod_file_id` / `org_release_test_file_id` が**どちらも未設定**（プレーンなOSS導入。`config.toml` 自体が無くても可） | 「Update to GitHub Latest...」のみ | `kh813/agent-deck` の GitHub Releases（`/releases/latest`） |
+| **どちらか一方でも設定済み**（組織管理下の導入） | 「Update to Org Latest...」「Update to Org Test...」（設定されている方だけ） | 組織のGoogle Drive上の設定済みファイル（`python/scripts/tools/package_release.py` がアップロードしたもの。§7c参照） |
+
+組織側が設定済みの場合にGitHub直取得の項目を隠すのは、組織管理下の導入は自組織の管理されたDriveチャネルを経由すべきで、GitHubから直接取得してバイパスすべきではないという方針のためです。この判定はメニュー構築時（アプリ起動時）に一度だけ行われます（`src-tauri/src/menu.rs` の `build_menu` → `self_update::org_release_configured()` が `config.toml` を直接読みます — Rust側が `config.toml` に触れる唯一の箇所です）。
 
 チャットスキルとして提供されていた `/update` は廃止され、メニューからの操作に置き換わりました（スキル自体は既に自動で毎回同期される仕組みだったため、実質的に必要だったのはagent-deck本体の更新トリガーだけでした — §2参照）。
 
-Selecting **Settings** → **Check for agent-deck Updates...** in the menu bar checks `kh813/agent-deck`'s **GitHub Releases** and downloads/replaces if a newer tag exists (the Rust-side `check_self_update`/`get_self_update_command` commands invoke the public repo's `python/scripts/setup/self_update.py`). **Google Drive is not involved at all.**
+Depending on `config.toml`, the **Update** submenu in the menu bar shows **exactly one** of two mutually exclusive sets:
+
+| `config.toml` state | Items shown | Source |
+|---|---|---|
+| Neither `[drive] org_release_prod_file_id` nor `org_release_test_file_id` set (a plain OSS install — works even with no `config.toml` at all) | "Update to GitHub Latest..." only | `kh813/agent-deck`'s GitHub Releases (`/releases/latest`) |
+| **Either** is set (an org-managed install) | "Update to Org Latest..."/"Update to Org Test..." (whichever is configured) | This org's own Google Drive file (uploaded by `python/scripts/tools/package_release.py` — see §7c) |
+
+The GitHub item is hidden once an org channel is configured because an org-managed install should go through its own controlled Drive channel rather than bypass it by hitting GitHub directly. This decision is made once, at menu-build time (on launch) — `src-tauri/src/menu.rs`'s `build_menu` calls `self_update::org_release_configured()`, which reads `config.toml` directly (the one place Rust ever touches it).
 
 The `/update` chat skill has been retired in favor of this menu action (skills themselves were already auto-synced on every launch regardless — see §2 — so the only thing actually gated behind a skill was triggering agent-deck's own update).
 
+### GitHub チャンネル / GitHub Channel
+
 ```
-Settings → Check for agent-deck Updates...（メニュー）
+Update to GitHub Latest...（メニュー）
         ↓
 python3 python/scripts/setup/self_update.py check --json   — 更新の有無だけ確認（ダウンロードしない）
         ↓ 更新が見つかりバナーの Update Now がクリックされたら / if found and "Update Now" is clicked in the resulting banner
@@ -294,26 +310,57 @@ python3 python/scripts/setup/self_update.py apply
    Download the asset and extract to a temp dir
 3. Mac: xattr でquarantine除去、実行ビット付与、ad-hoc 再署名
    Mac: strip quarantine, chmod +x, ad-hoc re-sign
-4. 既存バンドル/exe を新しいものと差し替え
+4. codesign --verify --deep --strict で署名を検証。失敗したら中断
+   （2026-07-23 追加 — 破損した署名は「開発元を確認できず、許可ボタンも
+   出ない」形でmacOSに拒否される。既存インストールは変更しない）
+   Verify the signature with codesign --verify --deep --strict; abort if
+   it fails (added 2026-07-23 — a broken signature makes macOS refuse to
+   launch it at all, with no user override available; the existing
+   install is left untouched)
+5. 既存バンドル/exe を新しいものと差し替え
    Swap the existing bundle/exe for the new one
    — Windows: 実行中の exe を直接 unlink するとロックで失敗するため、
      まず <name>.exe.old へリネームしてパスを空けてから新 exe を配置
-     （2026-07-19 修正。旧 install_agent_ui.py にも同じ問題があり同日修正済み）
      Windows: unlinking the running exe directly fails (locked); rename
      it aside to <name>.exe.old first, then move the new exe into the
-     now-free path (fixed 2026-07-19; install_agent_ui.py had the
-     identical bug, fixed the same day)
-5. python/ 一式を同じ zip から再展開（skills-personal/ は保持）
+     now-free path
+6. python/ 一式を同じ zip から再展開（skills-personal/ は保持）
    Refresh python/ from the same zip (skills-personal/ preserved)
-6. .sh ファイルを LF に正規化
+7. .sh ファイルを LF に正規化
    Normalize .sh files to LF
-7. マーカーファイル（<root>/<name>.version）に新タグを記録
+8. マーカーファイル（<root>/<name>.version）に新タグを記録
    Write the new tag to the marker file (<root>/<name>.version)
 ```
 
-実行中のプロセス自体を書き換えるわけではないため、**適用後はウィンドウの再起動が必要**です。
+### 組織Driveチャネル / Org Drive Channel
 
-This doesn't hot-swap the running process, so **a restart is required** to use the new version after applying an update.
+```
+Update to Org Latest... / Update to Org Test...（メニュー）
+        ↓
+Rust側が config.toml から org_release_prod_file_id / org_release_test_file_id を読み取り、
+self_update.py check/apply --drive-file-id <ID> として渡す
+Rust reads org_release_prod_file_id/org_release_test_file_id from config.toml
+and passes it as self_update.py check/apply --drive-file-id <ID>
+        ↓
+1. 既存の Google OAuth トークン（skill-catalog 等と共有）で Drive API 経由ダウンロード
+   Downloads via the Drive API using the existing Google OAuth token
+   (shared with skill-catalog etc.)
+2. 「更新あり」判定は Drive ファイルの modifiedTime を使用
+   （単一ファイルを上書きし続けるだけなので、リリースタグの概念がない）
+   "Update available" is decided from the Drive file's modifiedTime
+   (there's no release tag — it's a single file overwritten in place)
+3. GitHubチャネルと同じ atomic swap・codesign --verify ゲートを再利用
+   Reuses the same atomic swap and codesign --verify gate as the GitHub channel
+4. ダウンロードしたZIPに同梱されている config.toml でローカルの config.toml も上書き
+   （組織全体の設定変更を、アプリ・スキルと同じ経路で配布するため）
+   Also overwrites the local config.toml with the one bundled in the
+   downloaded ZIP (so org-wide config changes propagate the same way the
+   app/skills do)
+```
+
+実行中のプロセス自体を書き換えるわけではないため、**適用後はウィンドウの再起動が必要**です（両チャネル共通）。
+
+This doesn't hot-swap the running process, so **a restart is required** to use the new version after applying an update (both channels).
 
 **組織リブランド対応 / Organization rebrand support:** `self_update.py` はインストール済みバンドル/exe の実際の名前を検出して維持します（`agent-deck.*` 以外の名前、例えば `acme-console.app` でも動作）。リブランダー独自のマーカー（`app/<name>.version`）には一切書き込みません — 上書きすると、リブランダー側の固定ピンインストーラが「新しいタグが来た」と誤認して再インストール（ダウングレード）してしまうためです。
 
@@ -346,11 +393,11 @@ git tag -a v0.0.22-rc1 -m "Release candidate for v0.0.22"
 git push origin v0.0.22-rc1
 ```
 
-`release.yml` はタグが `vX.Y.Z-なにか` の形（例: `-rc1`・`-test1`・`-beta.2`）にマッチする場合、そのリリースを GitHub 上で **pre-release** としてマークします。`self_update.py` は GitHub の `/releases/latest` API だけを見ますが、これは仕様上「pre-releaseでもdraftでもない最新リリース」しか返しません。つまり pre-release は「Check for agent-deck Updates...」メニューにも既存インストールの自動チェックにも一切現れず、通常ユーザーへは配信されません。
+`release.yml` はタグが `vX.Y.Z-なにか` の形（例: `-rc1`・`-test1`・`-beta.2`）にマッチする場合、そのリリースを GitHub 上で **pre-release** としてマークします。`self_update.py` のGitHubプロダクションチャネルは `/releases/latest` API だけを見ますが、これは仕様上「pre-releaseでもdraftでもない最新リリース」しか返しません。つまり pre-release は「Update to GitHub Latest...」メニューにも既存インストールの自動チェックにも一切現れず、通常ユーザーへは配信されません。
 
-**テストする側 / For testers:** GitHub の Releases ページから該当バージョンの ZIP を手動でダウンロードし、既存インストールの上に展開してください（§7a・修復手順と同じ要領）。
+**テストする側 / For testers:** 組織Driveチャネルを設定済みなら、`package_release.py --test`（§7c）でこの pre-release を組織の `config.toml` と一緒にパッケージし、メニューの「Update to Org Test...」から取得させるのが簡単です。組織Driveを使わない場合は、GitHub の Releases ページから該当バージョンの ZIP を手動でダウンロードし、既存インストールの上に展開してください（§7a・修復手順と同じ要領）。
 
-**本番への昇格 / Promoting to production:** 検証OKになったら、GitHub の当該リリースを編集し、「Set as a pre-release」のチェックを外して保存するだけです。**再ビルド・再タグは不要** — 検証したのと全く同じバイナリがそのまま本番配信されます。次にメニューから確認したユーザー・次回起動時に自動チェックしたユーザーへ、そのまま配信されます。
+**本番への昇格 / Promoting to production:** 検証OKになったら、GitHub の当該リリースを編集し、「Set as a pre-release」のチェックを外して保存するだけです。**再ビルド・再タグは不要** — 検証したのと全く同じバイナリがそのまま本番配信されます。以降 `/releases/latest` はこのタグを返すようになるので、「Update to GitHub Latest...」で確認したユーザー・`package_release.py --prod` を実行した組織へ、そのまま配信されます。
 
 > タグ名がそのまま（例: `v0.0.22-rc1`）本番リリースとして残ることに違和感がある場合は、代わりに検証後もう一度クリーンな `vX.Y.Z` タグを打って再ビルドする運用でも構いません。ただしその場合は「テストしたバイナリ」と「実際に配信するバイナリ」が別物（同じソースからの再ビルド）になる点に注意してください。
 
@@ -373,6 +420,7 @@ cp config/config.toml.template config.toml
 |---|---|---|
 | `[oauth]` | `client_id` / `client_secret` | GCP OAuth2 クレデンシャル |
 | `[drive]` | `catalog_folder_id` / `catalog_url` / `catalog_file_id` | スキルカタログ（Drive）関連 |
+| `[drive]` | `org_release_test_file_id` / `org_release_prod_file_id` | 組織内配布ZIP（`package_release.py` がアップロード。§7c）。設定するとメニューの「Update」に組織内チャネルが出現し、GitHub直取得は隠れる（§4） |
 | `[company]`（任意 / optional） | `domain` / `portal_url` / `salesforce_url` | 公開版のテンプレートには**宣言されていない**。組織向け `config.toml` がこのセクションを上乗せするオーバーレイという位置づけ |
 | `[template]` | `name` / `url` | PPTX テンプレート |
 | `[user]` | `email` | 省略時は OS ログイン名から自動判定（`[company].domain` が必要） |
@@ -391,7 +439,7 @@ cp config/config.toml.template config.toml
 
 | スコープ / Scope | 用途 / Purpose | トークンファイル / Token file |
 |-----------------|----------------|-------------------------------|
-| `drive` (読み書き / read-write) | カタログ同期・公開・PPTXテンプレート取得・config/secretのバックアップ復元（`skills_catalog.py` / `drive_upload.py` / `drive_migrator.py` / `backup_config.py` / `restore_config.py`） | `~/.gemini/agent_ui_library_token.json` |
+| `drive` (読み書き / read-write) | カタログ同期・公開・PPTXテンプレート取得・config/secretのバックアップ復元・組織内配布ZIPの作成/アップロード・組織内Driveチャネルからの自己更新（`skills_catalog.py` / `drive_upload.py` / `drive_migrator.py` / `backup_config.py` / `restore_config.py` / `package_release.py` / `self_update.py` の `--drive-file-id` 経路） | `~/.gemini/agent_ui_library_token.json` |
 | `calendar.readonly` / `tasks.readonly` | カレンダー・タスク読み取り（`gcalendar.py`） | `~/.gemini/agent_ui_calendar_token.json` |
 
 > 全ての `drive` フルスコープ利用箇所が同一のトークンファイルを共有するよう統一済みです（旧: `backup_config.py`/`restore_config.py` のみ `agent_deck_library_token.json` という別名を使っており、`skill-catalog` 等で認可済みでも別途ブラウザ認可が要求される不整合があったが解消済み）。
@@ -417,6 +465,9 @@ The procedure for a new team member is just three steps:
 これで `preflight.sh`/`.bat` → venv 構築 → skill-catalog sync（組織固有スキル自動導入）→ スキルビルドまで、公開リポジトリのコードだけで完了します。ZIP は実行時生成ディレクトリ（`venv/`、`.gemini/skills/` 等）を含まないため、初回起動時に自動生成されます。
 
 This completes venv setup → skill-catalog sync (auto-pulling org-specific skills) → skills built, using only the public repo's own code. The ZIP doesn't include runtime-generated directories (`venv/`, `.gemini/skills/`, etc.) — those are created automatically on first launch.
+
+> ステップ1・2をまとめたい場合は、`config.toml` 同梱済みの組織内配布ZIP（§7c）をGoogle Driveから配ってもよい — その場合ステップ2（`config.toml` を別途配置）は不要になります。
+> To collapse steps 1–2 into one, distribute the config-bundled internal ZIP (§7c) from Google Drive instead — step 2 (placing `config.toml` separately) becomes unnecessary.
 
 ### 7b. 設定・秘匿情報のバックアップ / Config & Secret Backup
 
@@ -453,6 +504,26 @@ Without `config.toml` itself, there's no OAuth credential to call the Drive API 
 ```bash
 python3 python/scripts/tools/restore_config.py --zip ~/Downloads/agent-deck-config.zip
 ```
+
+### 7c. 組織内配布ZIPの作成・アップデート配信 / Building the Internal Distribution ZIP & Serving Updates
+
+`python/scripts/tools/package_release.py` が、`kh813/agent-deck` の公開GitHubビルド（mac/win両方）に、この作業ディレクトリ自身の `config.toml` をマージして再ZIP化し、組織のGoogle Driveにアップロードします。§4の「組織Driveチャネル」（メニューの「Update to Org Latest/Test」）が実際に取得しにいくのはこのZIPです。
+
+```bash
+python3 python/scripts/tools/package_release.py --test   # 最新のGitHub pre-release + config.toml を org_release_test_file_id へ
+python3 python/scripts/tools/package_release.py --prod   # 最新のGitHub安定版      + config.toml を org_release_prod_file_id へ
+```
+
+- チャンネル解決は `self_update.py` と共通（`--test` = 最新pre-release、`--prod` = `/releases/latest`）
+- マージ後のmacバンドルは `codesign --force --deep --sign -` で再署名し、直後に `codesign --verify --deep --strict` で検証（失敗時はZIP化・アップロードの前に中断 — §4のGitHubチャネルと同じゲート）
+- アップロード先のDriveファイルIDは `config.toml` の `[drive] org_release_test_file_id` / `org_release_prod_file_id`
+- 出力ZIPは公開ZIPと同じフラットな構造（ラップフォルダなし）なので、README/user_guide.md の展開手順がそのまま使えます
+
+Channel resolution is shared with `self_update.py` (`--test` = newest pre-release, `--prod` = `/releases/latest`). The merged mac bundle is re-signed (`codesign --force --deep --sign -`) and immediately verified (`codesign --verify --deep --strict`) — aborting before packaging/upload on failure, the same gate as the GitHub channel in §4. Upload targets come from `config.toml`'s `[drive] org_release_test_file_id`/`org_release_prod_file_id`. The output ZIP matches the public ZIP's own flat layout (no wrapper folder), so README/user_guide.md's extraction steps apply unchanged.
+
+**`--prod` を実行する前に**、その時点で `/releases/latest` が指す版を実際に配布したいか確認してください — 未検証のpre-releaseを本番導線に乗せてしまわないよう、`--prod` は常に安定版タグだけを取得します。
+
+**Before running `--prod`**, confirm you actually want to ship whatever `/releases/latest` currently points at — `--prod` only ever fetches a stable tag, so it can't accidentally push out an unverified pre-release.
 
 ---
 
