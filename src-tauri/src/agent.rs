@@ -40,8 +40,10 @@ pub struct AgentConfig {
     pub binary: String,
     pub detect_paths: DetectPaths,
     pub version_args: Vec<String>,
-    pub install: InstallConfig,
-    pub update: InstallConfig,
+    #[serde(default)]
+    pub install: Option<InstallConfig>,
+    #[serde(default)]
+    pub update: Option<InstallConfig>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -353,10 +355,14 @@ pub async fn get_install_command_internal<R: tauri::Runtime>(
     let config = configs.get(&agent_id).ok_or_else(|| format!("Unknown agent: {}", agent_id))?;
 
     let is_windows = cfg!(target_os = "windows");
-    let cmd = if is_windows {
-        config.install.windows.clone()
+    let cmd = if let Some(ref install_cfg) = config.install {
+        if is_windows {
+            install_cfg.windows.clone()
+        } else {
+            install_cfg.macos.clone()
+        }
     } else {
-        config.install.macos.clone()
+        None
     };
 
     let cmd = cmd.ok_or_else(|| "Install command not defined for this OS".to_string())?;
@@ -402,10 +408,14 @@ pub async fn get_update_command_internal<R: tauri::Runtime>(
     let config = configs.get(&agent_id).ok_or_else(|| format!("Unknown agent: {}", agent_id))?;
 
     let is_windows = cfg!(target_os = "windows");
-    let cmd = if is_windows {
-        config.update.windows.clone()
+    let cmd = if let Some(ref update_cfg) = config.update {
+        if is_windows {
+            update_cfg.windows.clone()
+        } else {
+            update_cfg.macos.clone()
+        }
     } else {
-        config.update.macos.clone()
+        None
     };
 
     let cmd = cmd.ok_or_else(|| "Update command not defined for this OS".to_string())?;
@@ -459,6 +469,10 @@ pub async fn build_skill_internal<R: tauri::Runtime>(
     agent_id: String,
     app: tauri::AppHandle<R>,
 ) -> Result<String, String> {
+    if agent_id != "agy" {
+        return Ok("Skipped build for non-agy engine".to_string());
+    }
+
     if cwd.is_empty() {
         return Err("Current working directory is empty".to_string());
     }
@@ -487,6 +501,32 @@ pub async fn build_skill_internal<R: tauri::Runtime>(
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Err(format!("Build failed.\nStdout: {}\nStderr: {}", stdout, stderr))
     }
+}
+
+#[tauri::command]
+pub fn read_skill_file(cwd: String) -> Result<String, String> {
+    if cwd.is_empty() {
+        return Err("Current working directory is empty".to_string());
+    }
+    
+    // Check for SKILL.md in project root or skill/ subdirectory
+    let path = std::path::Path::new(&cwd).join("SKILL.md");
+    if path.exists() {
+        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read SKILL.md: {}", e))
+    } else {
+        let alt_path = std::path::Path::new(&cwd).join("skill").join("SKILL.md");
+        if alt_path.exists() {
+            std::fs::read_to_string(&alt_path).map_err(|e| format!("Failed to read skill/SKILL.md: {}", e))
+        } else {
+            Err("SKILL.md not found".to_string())
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn open_file_in_editor(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_path(path, None::<String>).map_err(|e| e.to_string())
 }
 
 // --- Generic pre-launch command (config.AppConfig.pre_launch_command) ---
@@ -668,6 +708,52 @@ fn start_pre_launch_command_internal<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_build_skill_skips_non_agy() {
+        use tauri::test::mock_app;
+        let app = mock_app();
+        let handle = app.handle().clone();
+
+        let result = build_skill_internal("".to_string(), "claude".to_string(), handle.clone()).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("Skipped build for non-agy engine"));
+
+        let result = build_skill_internal("".to_string(), "codex".to_string(), handle).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("Skipped build for non-agy engine"));
+    }
+
+    #[test]
+    fn test_read_skill_file_success_and_fallback() {
+        let temp_dir = std::env::temp_dir().join(format!("agent_deck_test_skill_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // 1. No SKILL.md initially
+        let result = read_skill_file(temp_dir.to_string_lossy().to_string());
+        assert!(result.is_err());
+
+        // 2. SKILL.md at root
+        let skill_content = "Hello Skill";
+        std::fs::write(temp_dir.join("SKILL.md"), skill_content).unwrap();
+        let result = read_skill_file(temp_dir.to_string_lossy().to_string());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), skill_content);
+
+        // Remove root SKILL.md
+        std::fs::remove_file(temp_dir.join("SKILL.md")).unwrap();
+
+        // 3. SKILL.md inside skill/ directory
+        let skill_sub = temp_dir.join("skill");
+        std::fs::create_dir_all(&skill_sub).unwrap();
+        std::fs::write(skill_sub.join("SKILL.md"), "Sub Skill").unwrap();
+        let result = read_skill_file(temp_dir.to_string_lossy().to_string());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Sub Skill");
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 
     #[test]
     fn test_resolve_env_path() {

@@ -77,6 +77,16 @@ pub fn strip_ansi_rust(text: &str) -> String {
 
 // Detect prompts (y/n, folder path, login oauth url) from text
 pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
+    // 0. Claude Code / Generic Tool Permission Prompt
+    if text.contains("Allow tool execution?") || text.contains("Allow file edit?") || text.contains("Allow web search?") || text.contains("Allow tool call?") {
+        return Some(PtyPromptPayload {
+            prompt_type: "confirm".to_string(),
+            message: "Claude Code is requesting tool/file permission.".to_string(),
+            options: Some(vec!["y".to_string(), "n".to_string()]),
+            url: None,
+        });
+    }
+
     // 1. Login/Authentication URL (Google OAuth or device login url)
     let login_re = Regex::new(r"https://[a-zA-Z0-9./?=&_-]*(oauth|auth|device)[a-zA-Z0-9./?=&_-]*").unwrap();
     if let Some(mat) = login_re.find(text) {
@@ -568,6 +578,43 @@ pub async fn stop_pty(state: State<'_, PtyState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn force_kill_pty(app: AppHandle, state: State<'_, PtyState>) -> Result<(), String> {
+    let mut child_guard = state.child.lock().await;
+    if let Some(mut child) = child_guard.take() {
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(pid) = child.process_id() {
+                let _ = std::process::Command::new("taskkill")
+                    .args(&["/F", "/T", "/PID", &pid.to_string()])
+                    .output();
+            } else {
+                let _ = child.kill();
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Some(pid) = child.process_id() {
+                let _ = std::process::Command::new("kill")
+                    .args(&["-9", &format!("-{}", pid)])
+                    .output();
+            } else {
+                let _ = child.kill();
+            }
+        }
+    }
+
+    let mut writer_guard = state.writer.lock().await;
+    *writer_guard = None;
+
+    let mut session_guard = state.session.lock().await;
+    *session_guard = None;
+
+    let _ = app.emit("pty-status", "terminated");
+
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_app_bundle_dir() -> Result<String, String> {
     if let Ok(exe_path) = std::env::current_exe() {
         Ok(resolve_app_bundle_dir(exe_path).to_string_lossy().to_string())
@@ -581,6 +628,23 @@ pub fn get_app_bundle_dir() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_detect_prompts_claude_code() {
+        let text = "Allow tool execution? [y/N]";
+        let payload = detect_prompts(text).unwrap();
+        assert_eq!(payload.prompt_type, "confirm");
+        assert_eq!(payload.message, "Claude Code is requesting tool/file permission.");
+        assert_eq!(payload.options.unwrap(), vec!["y".to_string(), "n".to_string()]);
+
+        let text = "Allow file edit? [y/N]";
+        let payload = detect_prompts(text).unwrap();
+        assert_eq!(payload.prompt_type, "confirm");
+
+        let text = "Allow web search? [y/N]";
+        let payload = detect_prompts(text).unwrap();
+        assert_eq!(payload.prompt_type, "confirm");
+    }
 
     #[test]
     fn test_pty_spawn_and_cwd() {

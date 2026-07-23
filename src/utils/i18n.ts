@@ -39,6 +39,12 @@ export const translations = {
     selectPromptPath: "CLIプロンプト用のパス選択",
     installAgyRequired: "Antigravity CLI が必要です",
     installAgyDesc: "このデスクトップクライアントは、バックグラウンドで Antigravity CLI (agy) を実行してタスクを実行します。現在 'agy' がインストールされていないか、システムパスに見つかりません。",
+    recentCwds: "最近使ったフォルダ",
+    previewSkill: "SKILL.md プレビュー",
+    editSkill: "エディタで編集",
+    skillFile: "SKILL.md ファイル",
+    close: "閉じる",
+    noSkillFound: "このディレクトリには SKILL.md がありません",
   },
   en: {
     appTitle: "agent-deck Chat Console",
@@ -78,5 +84,11 @@ export const translations = {
     selectPromptPath: "Select Path for CLI Prompt",
     installAgyRequired: "Antigravity CLI required",
     installAgyDesc: "This desktop client runs Antigravity CLI (agy) under the hood to perform tasks. We detected that 'agy' is currently not installed or not in your system path.",
+    recentCwds: "Recent Folders",
+    previewSkill: "Preview SKILL.md",
+    editSkill: "Edit in Editor",
+    skillFile: "SKILL.md File",
+    close: "Close",
+    noSkillFound: "No SKILL.md found in this directory",
   }
 };

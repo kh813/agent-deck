@@ -691,9 +691,15 @@ The `ask_user` tool is built into Antigravity CLI. Instead of asking questions v
 
 ### 他の Agent AI で SKILL.md を実行する場合 / Running SKILL.md on Other Agent AIs
 
-SKILL.md は Markdown 形式の指示書であるため、Antigravity CLI 以外のエージェント（Claude Code、GitHub Copilot Agent、OpenAI Codex 等）でも原則として読み込んで実行できます。ただし `ask_user` は Antigravity CLI 固有の組み込みツールのため、他のエージェントでは利用できません（テキスト出力→ユーザー返信、に自然に読み替えられることが多い）。
+`SKILL.md` は Markdown 形式の指示書であるため、Antigravity CLI 以外のエージェント（Claude Code や OpenAI Codex 等）でも原則として読み込んで実行できます。
+`agent-deck` ではマルチエンジン対応を導入しており、システムパスにインストールされているこれら他エージェントを自動検出し、動作エンジンとして直接切り替えて使用することができます。
 
-現時点で agent-deck のスキルは Antigravity CLI 専用として設計されており、クロスエージェント対応は行っていません。
+#### ⚙️ 他エンジン使用時の仕組み / How Non-Agy Engines Work
+* **自動メタプロンプト注入 (Metaprompt Injection)**: `agy` 以外のエンジン（`claude` や `codex`）でセッションを開始した際、フロントエンドは選択された作業ディレクトリ内の `SKILL.md` を読み込み、セッション開始時に**最初のシステムメッセージ（メタプロンプト）として自動的に注入**します。これにより、汎用自律エージェントに対して一連のタスク指示を漏れなく伝えることができます。
+* **プロンプト検出の最適化 (Prompt Detection)**: `pty.rs` 内で各エンジンの標準出力を監視し、例えば Claude Code が「`Allow tool execution? [y/N]`」（ツール実行許可の確認）などの対話型確認プロンプトを出力した際、アプリ上の対話インターフェースを介してユーザーが直接応答できるようにバッファおよび判定処理を拡張しています。
+
+#### ⚠️ クロスエージェント用スキルの設計（ポータビリティ） / Portable Skill Design
+他エンジンを利用する場合、`agy` 特有の組み込みツール（`ask_user` など）は動作しません。他の自律エージェントでも全く同一にポータブルに動作する `SKILL.md` を作成する際の具体的な注意点や設計原則については、[スキル・ポータビリティ・ガイド](skill_portability_guide.md) を参照してください。
 
 ---
 

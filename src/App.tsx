@@ -49,10 +49,28 @@ function App() {
   const [shellArgs, setShellArgs] = useState("");
   const [input, setInput] = useState("");
 
+  // CWD History State
+  const [recentCwds, setRecentCwds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem("recentCwds");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isRecentOpen, setIsRecentOpen] = useState(false);
+
+  // SKILL.md State
+  const [skillContent, setSkillContent] = useState<string | null>(null);
+  const [skillPath, setSkillPath] = useState<string | null>(null);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
   // Theme State
   const [currentThemeId, setCurrentThemeId] = useState(() => {
     return localStorage.getItem("agent-ui-theme") || "light";
   });
+
+
 
   // Sync theme with body class
   useEffect(() => {
@@ -210,6 +228,103 @@ function App() {
     preLaunchArgs: appConfig?.pre_launch_args,
     preLaunchRequired: appConfig?.pre_launch_required,
   });
+
+  // Load SKILL.md content when CWD changes
+  useEffect(() => {
+    const loadSkillFile = async () => {
+      if (!cwd) {
+        setSkillContent(null);
+        setSkillPath(null);
+        return;
+      }
+      try {
+        const content = await invoke<string>("read_skill_file", { cwd });
+        setSkillContent(content);
+        setSkillPath(`${cwd}/SKILL.md`);
+      } catch (e) {
+        setSkillContent(null);
+        setSkillPath(null);
+      }
+    };
+    loadSkillFile();
+  }, [cwd]);
+
+  // Update CWD history list
+  const updateRecentCwds = useCallback((newCwd: string) => {
+    if (!newCwd) return;
+    setRecentCwds((prev) => {
+      const list = [newCwd, ...prev.filter((x) => x !== newCwd)].slice(0, 5);
+      localStorage.setItem("recentCwds", JSON.stringify(list));
+      return list;
+    });
+  }, []);
+
+  // Update history on CWD change
+  useEffect(() => {
+    if (cwd) {
+      updateRecentCwds(cwd);
+    }
+  }, [cwd, updateRecentCwds]);
+
+  // Sync engine changes from native menu
+  useEffect(() => {
+    const unsub = subscribeToTauriEvent(
+      listen<string>("engine-changed", (event) => {
+        setSelectedAgentId(event.payload);
+      })
+    );
+    return unsub;
+  }, []);
+
+  // Update native menu checkmarks when selected engine changes in-app
+  useEffect(() => {
+    invoke("set_engine", { engineId: selectedAgentId }).catch(() => {});
+  }, [selectedAgentId]);
+
+  // Disable engine native menu during active session to prevent desync
+  useEffect(() => {
+    invoke("set_engine_menu_enabled", { enabled: status !== "running" }).catch(() => {});
+  }, [status]);
+
+  // Notify backend of installed engines so native menu items can be enabled/disabled
+  useEffect(() => {
+    const installed = Object.entries(agentStatuses)
+      .filter(([_, s]) => s.installed)
+      .map(([id]) => id);
+    invoke("update_engine_menu_status", { installedEngines: installed }).catch(() => {});
+  }, [agentStatuses]);
+
+  // Subscribe to Native Force Kill Session menu event
+  useEffect(() => {
+    const unsub = subscribeToTauriEvent(
+      listen("menu-force-kill-requested", async () => {
+        try {
+          await invoke("force_kill_pty");
+        } catch (e) {
+          console.error("Failed to force kill PTY:", e);
+        }
+      })
+    );
+    return unsub;
+  }, []);
+
+  // Auto-inject SKILL.md content as a metaprompt for non-agy engines on session start
+  const hasAutoInjectedRef = useRef(false);
+  useEffect(() => {
+    if (status === "running") {
+      if (!hasAutoInjectedRef.current) {
+        hasAutoInjectedRef.current = true;
+        if (selectedAgentId !== "agy" && skillContent) {
+          // Delay to ensure the PTY process has initialized and is ready
+          setTimeout(() => {
+            sendMessage(`[SYSTEM: SKILL RUNNER MODE]\nPlease follow the instructions in the SKILL.md content below:\n\n${skillContent}`);
+          }, 1500);
+        }
+      }
+    } else {
+      hasAutoInjectedRef.current = false;
+    }
+  }, [status, selectedAgentId, skillContent, sendMessage]);
 
   // Detect installer CLI path and version for all configured engines
   const checkAgentStatus = useCallback(async () => {
@@ -525,14 +640,100 @@ function App() {
         <div className="controls-group">
           {currentAgentStatus.installed && (
             <>
+              {/* Agent Select Dropdown */}
               <div className="cwd-display agent-type-display" title={selectedEngine?.name}>
                 <span className="cwd-label">{t("agentLabel")}:</span>
-                <span className="cwd-path">{selectedEngine?.name}</span>
+                <select
+                  value={selectedAgentId}
+                  onChange={(e) => setSelectedAgentId(e.target.value)}
+                  disabled={status === "running"}
+                  className="agent-select-dropdown"
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "inherit",
+                    fontFamily: "inherit",
+                    fontSize: "inherit",
+                    fontWeight: "600",
+                    cursor: status === "running" ? "not-allowed" : "pointer",
+                    outline: "none",
+                    paddingRight: "8px"
+                  }}
+                >
+                  {Object.entries(agentStatuses)
+                    .filter(([_, info]) => info.installed)
+                    .map(([id]) => (
+                      <option key={id} value={id} style={{ background: "var(--input-bg)", color: "var(--text-color)" }}>
+                        {appConfig?.engines.find(e => e.id === id)?.name || id}
+                      </option>
+                    ))}
+                </select>
               </div>
 
-              <div className="cwd-display" title={cwd || "Default working directory"}>
-                <span className="cwd-label">CWD:</span>
-                <span className="cwd-path">{cwd || t("appLocationDefault")}</span>
+              {/* CWD Display & History Menu */}
+              <div className="cwd-display-container" style={{ position: "relative", display: "flex", gap: "6px", alignItems: "center" }}>
+                <div className="cwd-display" title={cwd || "Default working directory"}>
+                  <span className="cwd-label">CWD:</span>
+                  <span className="cwd-path">{cwd || t("appLocationDefault")}</span>
+                </div>
+                
+                {recentCwds.length > 0 && (
+                  <div style={{ position: "relative" }}>
+                    <button
+                      className="secondary"
+                      onClick={() => setIsRecentOpen(!isRecentOpen)}
+                      style={{ padding: "2px 6px", fontSize: "0.7rem", display: "flex", alignItems: "center", justifyContent: "center" }}
+                      disabled={status === "running"}
+                    >
+                      ▼
+                    </button>
+                    {isRecentOpen && (
+                      <div className="recent-cwds-dropdown" style={{
+                        position: "absolute",
+                        top: "100%",
+                        right: 0,
+                        background: "var(--input-bg)",
+                        border: "1px solid var(--input-border)",
+                        borderRadius: "6px",
+                        boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                        zIndex: 1000,
+                        minWidth: "250px",
+                        marginTop: "4px",
+                        padding: "4px 0"
+                      }}>
+                        <div style={{ padding: "6px 12px", fontSize: "0.75rem", color: "#94a3b8", borderBottom: "1px solid var(--input-border)" }}>
+                          {t("recentCwds")}
+                        </div>
+                        {recentCwds.map((path) => (
+                          <button
+                            key={path}
+                            onClick={() => {
+                              changeCwd(path);
+                              setIsRecentOpen(false);
+                            }}
+                            style={{
+                              width: "100%",
+                              textAlign: "left",
+                              padding: "8px 12px",
+                              background: "none",
+                              border: "none",
+                              color: "var(--text-color)",
+                              fontSize: "0.8rem",
+                              cursor: "pointer",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap"
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}
+                            onMouseLeave={(e) => e.currentTarget.style.background = "none"}
+                          >
+                            {path}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <button
@@ -542,6 +743,33 @@ function App() {
               >
                 {t("changeDir")}
               </button>
+
+              {/* SKILL.md Actions */}
+              {skillContent && (
+                <div style={{ display: "flex", gap: "6px" }}>
+                  <button
+                    className="secondary"
+                    onClick={() => setIsPreviewOpen(true)}
+                    style={{ background: "rgba(16, 185, 129, 0.1)", color: "#10b981", border: "1px solid rgba(16, 185, 129, 0.2)" }}
+                  >
+                    {t("previewSkill")}
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={async () => {
+                      if (skillPath) {
+                        try {
+                          await invoke("open_file_in_editor", { path: skillPath });
+                        } catch (e) {
+                          console.error("Failed to open file in editor:", e);
+                        }
+                      }
+                    }}
+                  >
+                    {t("editSkill")}
+                  </button>
+                </div>
+              )}
 
               <div className={`status-badge ${status}`}>
                 {status}
@@ -855,6 +1083,63 @@ function App() {
                   {t("send")}
                 </button>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* SKILL.md Preview Modal */}
+        {isPreviewOpen && (
+          <div style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            background: "rgba(0,0,0,0.6)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 2000,
+            backdropFilter: "blur(4px)"
+          }}>
+            <div style={{
+              background: "var(--input-bg)",
+              border: "1px solid var(--input-border)",
+              borderRadius: "12px",
+              width: "80%",
+              maxWidth: "800px",
+              maxHeight: "80%",
+              display: "flex",
+              flexDirection: "column",
+              boxShadow: "0 10px 25px rgba(0,0,0,0.3)"
+            }}>
+              <div style={{
+                padding: "16px 20px",
+                borderBottom: "1px solid var(--input-border)",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center"
+              }}>
+                <h3 style={{ margin: 0, color: "var(--text-color)" }}>{t("skillFile")}</h3>
+                <button
+                  className="secondary"
+                  onClick={() => setIsPreviewOpen(false)}
+                  style={{ padding: "6px 12px" }}
+                >
+                  {t("close")}
+                </button>
+              </div>
+              <div style={{
+                padding: "20px",
+                overflowY: "auto",
+                flex: 1,
+                color: "var(--text-color)",
+                whiteSpace: "pre-wrap",
+                fontFamily: "monospace",
+                fontSize: "0.9rem"
+              }}>
+                {skillContent}
+              </div>
             </div>
           </div>
         )}

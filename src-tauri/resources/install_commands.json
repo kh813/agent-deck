@@ -36,5 +36,35 @@
         "args": ["self-update"]
       }
     }
+  },
+  "claude": {
+    "name": "Claude Code",
+    "binary": "claude",
+    "detect_paths": {
+      "macos": [
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+        "$HOME/.npm-global/bin/claude"
+      ],
+      "windows": [
+        "$USERPROFILE\\AppData\\Roaming\\npm\\claude.cmd"
+      ]
+    },
+    "version_args": ["--version"]
+  },
+  "codex": {
+    "name": "Codex",
+    "binary": "codex",
+    "detect_paths": {
+      "macos": [
+        "/opt/homebrew/bin/codex",
+        "/usr/local/bin/codex",
+        "$HOME/.npm-global/bin/codex"
+      ],
+      "windows": [
+        "$USERPROFILE\\AppData\\Roaming\\npm\\codex.cmd"
+      ]
+    },
+    "version_args": ["--version"]
   }
 }

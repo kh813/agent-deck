@@ -38,12 +38,18 @@ pub fn run() {
             agent::get_update_command,
             agent::check_skill_folder,
             agent::build_skill,
+            agent::read_skill_file,
+            agent::open_file_in_editor,
             agent::start_pre_launch_command,
             self_update::check_self_update,
             self_update::get_self_update_command,
             config::get_app_config,
             menu::set_theme,
-            menu::set_auto_check_update
+            menu::set_auto_check_update,
+            pty::force_kill_pty,
+            menu::set_engine,
+            menu::set_engine_menu_enabled,
+            menu::update_engine_menu_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
