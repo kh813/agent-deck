@@ -17,6 +17,12 @@ catalog_file_id   = ""
 # (see python/scripts/tools/backup_config.py). Leave empty to disable.
 config_backup_file_id = ""
 
+# Google Drive file IDs for the config-bundled internal distribution ZIP
+# (see python/scripts/tools/package_release.py). Leave empty to disable --
+# the script errors out clearly instead of uploading nowhere.
+org_release_test_file_id = ""
+org_release_prod_file_id = ""
+
 [user]
 # Your email address. If omitted, auto-detected from OS login name (requires
 # a wrapping project to supply [company].domain — see below).

@@ -32,6 +32,11 @@ CATALOG_FILE_ID   = (_drive.get("catalog_file_id")   or _drive.get("library_cata
 # default so a standalone install without this key configured just gets a
 # clear error if the script is ever run, rather than crashing on KeyError.
 CONFIG_BACKUP_FILE_ID = _drive.get("config_backup_file_id", "").strip()
+# Drive file IDs for package_release.py's config-bundled internal
+# distribution ZIP (rebuilds the public GitHub release with this org's own
+# config.toml merged in). Empty by default for the same reason as above.
+ORG_RELEASE_TEST_FILE_ID = _drive.get("org_release_test_file_id", "").strip()
+ORG_RELEASE_PROD_FILE_ID = _drive.get("org_release_prod_file_id", "").strip()
 # [company] is not declared in agent-deck's own config.toml.template — it's an
 # optional overlay a wrapping project (e.g. agent-deck) supplies in its own
 # config.toml. Defaults to empty so standalone agent-deck installs don't crash.
