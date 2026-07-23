@@ -53,8 +53,9 @@ running binary's open file — it replaces it on disk and asks the user to
 relaunch. It does not attempt a hot in-place self-replace.
 
 Usage:
-  python3 self_update.py check    # print whether an update is available
-  python3 self_update.py apply    # download and install the latest release
+  python3 self_update.py check          # print whether an update is available
+  python3 self_update.py check --json   # same, as a single JSON line (for callers like the Tauri menu)
+  python3 self_update.py apply          # download and install the latest release
 """
 import json
 import shutil
@@ -259,7 +260,13 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "check"
     if cmd == "check":
         available, installed, latest = check()
-        if available:
+        if "--json" in sys.argv[2:]:
+            print(json.dumps({
+                "update_available": available,
+                "installed_tag": installed,
+                "latest_tag": latest,
+            }))
+        elif available:
             print(f"Update available: {installed or 'unknown'} -> {latest}")
         else:
             print(f"Already up to date: {latest}")

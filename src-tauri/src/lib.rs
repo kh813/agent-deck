@@ -2,6 +2,7 @@ mod pty;
 mod agent;
 mod config;
 mod menu;
+mod self_update;
 
 use pty::PtyState;
 
@@ -38,6 +39,8 @@ pub fn run() {
             agent::check_skill_folder,
             agent::build_skill,
             agent::start_pre_launch_command,
+            self_update::check_self_update,
+            self_update::get_self_update_command,
             config::get_app_config,
             menu::set_theme,
             menu::set_auto_check_update

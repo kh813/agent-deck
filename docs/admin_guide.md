@@ -273,15 +273,19 @@ Node.js and Python are self-contained inside the project folder, so agent-deck i
 
 ## 4. 自己更新の流れ / Self-Update Flow
 
-Antigravity CLI 内で `/update` を実行すると、`kh813/agent-deck` の **GitHub Releases** を確認し、現在より新しいタグがあればダウンロード・置換します（公開リポジトリの `python/scripts/setup/self_update.py`）。**Google Drive は一切関与しません。**
+メニューバーの「**Settings**」→「**Check for agent-deck Updates...**」から、`kh813/agent-deck` の **GitHub Releases** を確認し、現在より新しいタグがあればダウンロード・置換します（Rust側の `check_self_update`/`get_self_update_command` コマンドが、公開リポジトリの `python/scripts/setup/self_update.py` を呼び出します）。**Google Drive は一切関与しません。**
 
-Running `/update` in Antigravity CLI checks `kh813/agent-deck`'s **GitHub Releases** and downloads/replaces if a newer tag exists (`self_update.py` in the public repo). **Google Drive is not involved at all.**
+チャットスキルとして提供されていた `/update` は廃止され、メニューからの操作に置き換わりました（スキル自体は既に自動で毎回同期される仕組みだったため、実質的に必要だったのはagent-deck本体の更新トリガーだけでした — §2参照）。
+
+Selecting **Settings** → **Check for agent-deck Updates...** in the menu bar checks `kh813/agent-deck`'s **GitHub Releases** and downloads/replaces if a newer tag exists (the Rust-side `check_self_update`/`get_self_update_command` commands invoke the public repo's `python/scripts/setup/self_update.py`). **Google Drive is not involved at all.**
+
+The `/update` chat skill has been retired in favor of this menu action (skills themselves were already auto-synced on every launch regardless — see §2 — so the only thing actually gated behind a skill was triggering agent-deck's own update).
 
 ```
-/update（Antigravity CLI 内）
+Settings → Check for agent-deck Updates...（メニュー）
         ↓
-python3 python/scripts/setup/self_update.py check   — 更新の有無だけ確認（ダウンロードしない）
-        ↓ 新しいタグがあれば / if a newer tag exists
+python3 python/scripts/setup/self_update.py check --json   — 更新の有無だけ確認（ダウンロードしない）
+        ↓ 更新が見つかりバナーの Update Now がクリックされたら / if found and "Update Now" is clicked in the resulting banner
 python3 python/scripts/setup/self_update.py apply
         ↓
 1. GitHub Releases API で最新タグ・アセット URL を取得

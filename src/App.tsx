@@ -113,6 +113,14 @@ function App() {
     latest_version: null,
     update_available: false,
   });
+  // agent-deck's own update status, distinct from updateStatus above (which
+  // is about the agy engine). Triggered on demand from the native menu, not
+  // auto-checked on startup.
+  const [selfUpdateStatus, setSelfUpdateStatus] = useState<UpdateStatus>({
+    current_version: null,
+    latest_version: null,
+    update_available: false,
+  });
   const [autoCheckUpdate, setAutoCheckUpdate] = useState(() => {
     const saved = localStorage.getItem("autoCheckUpdate");
     return saved !== "false"; // Default to true
@@ -137,6 +145,7 @@ function App() {
 
   const [isInstalling, setIsInstalling] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isSelfUpdating, setIsSelfUpdating] = useState(false);
   const [isInstallTerminalOpen, setIsInstallTerminalOpen] = useState(false);
 
   const terminalRef = useRef<Terminal | null>(null);
@@ -226,6 +235,39 @@ function App() {
     }
   }, [selectedAgentId]);
 
+  // Check for agent-deck's own update. Returns the result (unlike
+  // checkUpdateStatus above) so an explicit, user-triggered check can report
+  // "already up to date" -- there's no startup auto-check for this one to
+  // silently fall back to.
+  const checkSelfUpdateStatus = useCallback(async () => {
+    try {
+      const res = await invoke<UpdateStatus>("check_self_update");
+      setSelfUpdateStatus(res);
+      return res;
+    } catch (e) {
+      console.error("Failed to check agent-deck update:", e);
+      return null;
+    }
+  }, []);
+
+  // "Check for agent-deck Updates..." native menu item. Unlike the agy
+  // auto-check above, this is always an explicit user action, so an
+  // "already up to date" result needs its own feedback rather than
+  // silently doing nothing.
+  useEffect(() => {
+    const unsub = subscribeToTauriEvent(
+      listen("check-self-update-requested", () => {
+        checkSelfUpdateStatus().then((res) => {
+          if (res && !res.update_available) {
+            alert(t("selfUpdateUpToDate"));
+          }
+        });
+      })
+    );
+
+    return unsub;
+  }, [checkSelfUpdateStatus]);
+
   // 1. Load dynamic configuration
   useEffect(() => {
     const loadAppConfig = async () => {
@@ -300,12 +342,20 @@ function App() {
               checkUpdateStatus();
             });
           }
+          if (isSelfUpdating) {
+            // Unlike agy above, there's no "re-detect" step that makes sense
+            // here: the running process's own version can't change without
+            // an actual restart, so self_update.py apply's own completion
+            // (this process exiting) is the whole signal -- just relay it.
+            setIsSelfUpdating(false);
+            alert(t("selfUpdateAppliedRestart"));
+          }
         }
       })
     );
 
     return unsubStatus;
-  }, [isInstalling, isUpdating, checkAgentStatus, checkUpdateStatus]);
+  }, [isInstalling, isUpdating, isSelfUpdating, checkAgentStatus, checkUpdateStatus]);
 
   // Poll for install/update completion independent of the PTY session ever
   // reporting "terminated".
@@ -395,6 +445,29 @@ function App() {
     } catch (e: any) {
       setIsUpdating(false);
       console.error("Update failed to launch:", e);
+      alert(`${t("failedToUpdate")}: ${e.toString()}`);
+    }
+  };
+
+  // Trigger agent-deck's own self-update via PTY, same reused-terminal
+  // pattern as handleUpdateAgy above. self_update.py resolves its own
+  // project root from its file path, so no explicit cwd is needed here --
+  // start_pty falls back to the project root on its own.
+  const handleUpdateSelf = async () => {
+    try {
+      setIsSelfUpdating(true);
+
+      const updateCmd = await invoke<{ command: string; args: string[] }>("get_self_update_command");
+
+      await invoke("start_pty", {
+        command: updateCmd.command,
+        args: updateCmd.args,
+        rows: terminalSizeRef.current?.rows,
+        cols: terminalSizeRef.current?.cols,
+      });
+    } catch (e: any) {
+      setIsSelfUpdating(false);
+      console.error("agent-deck update failed to launch:", e);
       alert(`${t("failedToUpdate")}: ${e.toString()}`);
     }
   };
@@ -514,6 +587,43 @@ function App() {
         </div>
       )}
 
+      {/* agent-deck Self-Update Alert Banner (distinct color from the agy
+          banner above so the two are never mistaken for each other) */}
+      {selfUpdateStatus.update_available && (
+        <div className="update-banner" style={{
+          background: "rgba(59, 130, 246, 0.15)",
+          borderBottom: "1px solid rgba(59, 130, 246, 0.25)",
+          padding: "10px 20px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          fontSize: "0.85rem",
+          color: "#3b82f6",
+          backdropFilter: "blur(8px)"
+        }}>
+          <div>
+            {t("selfUpdateAvailableMsg").replace("{latest}", selfUpdateStatus.latest_version || "").replace("{current}", selfUpdateStatus.current_version || "")}
+          </div>
+          <button
+            className="primary"
+            onClick={handleUpdateSelf}
+            disabled={isSelfUpdating}
+            style={{
+              background: "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)",
+              border: "none",
+              color: "#fff",
+              padding: "6px 14px",
+              borderRadius: "6px",
+              fontWeight: "600",
+              cursor: "pointer",
+              fontSize: "0.8rem"
+            }}
+          >
+            {isSelfUpdating ? t("updating") : t("updateNow")}
+          </button>
+        </div>
+      )}
+
       {/* Session status banner (former system messages: session start, skill
           rebuild progress, stop, errors). Always rendered at the same size
           (padding/border/margin never change, only color/content do) so
@@ -587,7 +697,7 @@ function App() {
             <div className="chat-panel">
               <div className="terminal-panel" style={{ flex: 1 }}>
                 <div className="terminal-header">
-                  <span>{isUpdating ? t("updateLogs") : "ANTIGRAVITY CLI"}</span>
+                  <span>{isUpdating || isSelfUpdating ? t("updateLogs") : "ANTIGRAVITY CLI"}</span>
                   <span style={{ color: status === "running" ? "#4caf50" : "#94a3b8" }}>
                     {status.toUpperCase()}
                   </span>

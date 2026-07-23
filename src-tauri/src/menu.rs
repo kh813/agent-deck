@@ -1,9 +1,10 @@
 use std::sync::Mutex;
-use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, Submenu, HELP_SUBMENU_ID};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, Submenu, HELP_SUBMENU_ID};
 use tauri::{AppHandle, Emitter, Manager};
 
 const THEME_MENU_ID_PREFIX: &str = "theme:";
 const AUTO_CHECK_UPDATE_MENU_ID: &str = "settings:auto-check-update";
+const CHECK_SELF_UPDATE_MENU_ID: &str = "settings:check-self-update";
 
 // Keep in sync with the theme ids/names in src/utils/themes.ts
 const THEMES: &[(&str, &str)] = &[
@@ -55,7 +56,23 @@ pub fn build_menu(
         initial_auto_check_update,
         None::<&str>,
     )?;
-    let settings_submenu = Submenu::with_items(handle, "Settings", true, &[&auto_check_update_item])?;
+    // Distinct from the toggle above: that one is about auto-checking agy
+    // (the Antigravity CLI engine) on launch. This is an on-demand action
+    // for agent-deck's own GitHub-Releases-based self-update (previously
+    // only reachable via the now-retired `/update` chat skill).
+    let check_self_update_item = MenuItem::with_id(
+        handle,
+        CHECK_SELF_UPDATE_MENU_ID,
+        "Check for agent-deck Updates...",
+        true,
+        None::<&str>,
+    )?;
+    let settings_submenu = Submenu::with_items(
+        handle,
+        "Settings",
+        true,
+        &[&auto_check_update_item, &check_self_update_item],
+    )?;
 
     // Place Theme/Settings just before Help, matching where most apps put extra top-level menus.
     let help_index = menu.items()?.iter().position(|item| item.id() == HELP_SUBMENU_ID);
@@ -107,6 +124,11 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             let enabled = state.0.is_checked().unwrap_or(true);
             let _ = app.emit("auto-check-update-changed", enabled);
         }
+        return;
+    }
+
+    if id == CHECK_SELF_UPDATE_MENU_ID {
+        let _ = app.emit("check-self-update-requested", ());
     }
 }
 

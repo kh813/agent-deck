@@ -121,7 +121,6 @@ Once the tool launches, you can operate it through conversation. Skills can be i
 | `/agy-schedule` | 定型プロンプトの定期実行を設定 / Schedule a recurring prompt |
 | `/notify-chat` | 定期実行の結果を Google Chat に通知する設定 / Set up Google Chat notifications for scheduled runs |
 | `/setup` | 環境の初期化・スキル管理 / Setup and skill management |
-| `/update` | ツールを最新版に更新 / Update the tool to the latest version |
 | `/skill-catalog` | グループ共有のスキルカタログを閲覧・取得 / Browse and import shared skills from the group catalog |
 | `/my-skills` | オリジナルスキルの作成・更新・無効化・共有・削除 / Create, update, disable, share, and delete your own skills |
 
@@ -567,28 +566,20 @@ A confirmation prompt appears. If you own the skill, you can choose to delete it
 
 ## 11. ツールのアップデート / Updating the Tool
 
-新しいバージョンが公開されたときは、以下の方法で最新版に更新できます。
-When a new version is published, update to the latest as follows.
-
-```
-/update
-```
-または / or:
-```
-ツールをアップデートして
-```
+新しいバージョンが公開されたときは、メニューバーから最新版に更新できます（チャットでのコマンド入力は不要です）。
+When a new version is published, you can update to the latest from the menu bar (no chat command needed).
 
 **アップデートの流れ / What happens:**
 
-1. 最新版があるか確認します。
-   Checks whether a newer version is available.
-2. あれば自動でダウンロード・適用します。
-   If so, downloads and applies it automatically.
-3. 完了後に再起動を案内されます。ウィンドウを閉じて `agent-deck.app`/`agent-deck.exe` を起動し直してください。
-   When complete, you'll be asked to restart. Close the window and relaunch `agent-deck.app`/`agent-deck.exe`.
+1. メニューバーの「**Settings**」→「**Check for agent-deck Updates...**」をクリックします。
+   Click **Settings** → **Check for agent-deck Updates...** in the menu bar.
+2. 更新がある場合、画面上部にオレンジ色の通知バナーが表示されます。「**Update Now**」をクリックすると、ダウンロード・適用が自動で行われます（進行状況はターミナル画面に表示されます）。
+   If an update is available, a notification banner appears at the top of the window. Click **Update Now** to download and apply it automatically (progress is shown in the terminal view).
+3. 完了後に再起動を案内するメッセージが表示されます。ウィンドウを閉じて `agent-deck.app`/`agent-deck.exe` を起動し直してください。
+   When complete, a message asks you to restart. Close the window and relaunch `agent-deck.app`/`agent-deck.exe`.
 
-> すでに最新版の場合は「Already up to date」と表示されてスキップされます。
-> If you already have the latest version, "Already up to date" is shown and no changes are made.
+> すでに最新版の場合は、その旨を伝えるメッセージが表示されます。
+> If you already have the latest version, a message says so and no changes are made.
 
 ### ツールが起動しないとき / If the Tool Won't Launch
 
