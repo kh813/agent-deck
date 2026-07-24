@@ -944,7 +944,7 @@ function App() {
             <div className="chat-panel">
               <div className="terminal-panel" style={{ flex: 1 }}>
                 <div className="terminal-header">
-                  <span>{isUpdating || isSelfUpdating ? t("updateLogs") : "ANTIGRAVITY CLI"}</span>
+                  <span>{isUpdating || isSelfUpdating ? t("updateLogs") : ""}</span>
                   <span style={{ color: status === "running" ? "#4caf50" : "#94a3b8" }}>
                     {status.toUpperCase()}
                   </span>
