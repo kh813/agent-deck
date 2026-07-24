@@ -5,7 +5,6 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::self_update::org_release_configured;
 
 const THEME_MENU_ID_PREFIX: &str = "theme:";
-const ENGINE_MENU_ID_PREFIX: &str = "engine:";
 const AUTO_CHECK_UPDATE_MENU_ID: &str = "settings:auto-check-update";
 const UPDATE_GITHUB_MENU_ID: &str = "update:github";
 const UPDATE_ORG_PROD_MENU_ID: &str = "update:org-prod";
@@ -22,14 +21,7 @@ const THEMES: &[(&str, &str)] = &[
     ("oneDark", "One Dark"),
 ];
 
-const ENGINES: &[(&str, &str)] = &[
-    ("agy", "Antigravity CLI"),
-    ("claude", "Claude Code"),
-    ("codex", "Codex"),
-];
-
 struct ThemeMenuState(Mutex<Vec<(String, CheckMenuItem<tauri::Wry>)>>);
-struct EngineMenuState(Mutex<Vec<(String, CheckMenuItem<tauri::Wry>)>>);
 struct AutoCheckUpdateMenuState(CheckMenuItem<tauri::Wry>);
 
 // Tauri only builds its default Edit/Window/Help menu automatically on macOS,
@@ -60,26 +52,6 @@ pub fn build_menu(
     let theme_submenu_items: Vec<&dyn IsMenuItem<tauri::Wry>> =
         items.iter().map(|(_, item)| item as &dyn IsMenuItem<tauri::Wry>).collect();
     let theme_submenu = Submenu::with_items(handle, "Theme", true, &theme_submenu_items)?;
-
-    // Engine submenu
-    let engine_items: Vec<(String, CheckMenuItem<tauri::Wry>)> = ENGINES
-        .iter()
-        .map(|(id, label)| {
-            let item = CheckMenuItem::with_id(
-                handle,
-                format!("{ENGINE_MENU_ID_PREFIX}{id}"),
-                *label,
-                *id == "agy", // Only agy is enabled by default until others are detected as installed
-                *id == "agy", // Default to agy (Checked)
-                None::<&str>,
-            )?;
-            Ok((id.to_string(), item))
-        })
-        .collect::<tauri::Result<_>>()?;
-
-    let engine_submenu_items: Vec<&dyn IsMenuItem<tauri::Wry>> =
-        engine_items.iter().map(|(_, item)| item as &dyn IsMenuItem<tauri::Wry>).collect();
-    let engine_submenu = Submenu::with_items(handle, "Engine", true, &engine_submenu_items)?;
 
     // Session submenu
     let force_kill_item = MenuItem::with_id(
@@ -131,16 +103,11 @@ pub fn build_menu(
         Submenu::with_items(handle, "Update", true, &[&github_item])?
     };
 
-    // Place Theme/Engine/Session/Update/Settings just before Help, matching where most apps put extra top-level menus.
+    // Place Theme/Session/Update/Settings just before Help, matching where most apps put extra top-level menus.
     let help_index = menu.items()?.iter().position(|item| item.id() == HELP_SUBMENU_ID);
     match help_index {
         Some(index) => menu.insert(&theme_submenu, index)?,
         None => menu.append(&theme_submenu)?,
-    }
-    let help_index = menu.items()?.iter().position(|item| item.id() == HELP_SUBMENU_ID);
-    match help_index {
-        Some(index) => menu.insert(&engine_submenu, index)?,
-        None => menu.append(&engine_submenu)?,
     }
     let help_index = menu.items()?.iter().position(|item| item.id() == HELP_SUBMENU_ID);
     match help_index {
@@ -159,7 +126,6 @@ pub fn build_menu(
     }
 
     handle.manage(ThemeMenuState(Mutex::new(items)));
-    handle.manage(EngineMenuState(Mutex::new(engine_items)));
     handle.manage(AutoCheckUpdateMenuState(auto_check_update_item));
 
     Ok(menu)
@@ -170,15 +136,6 @@ fn set_checked_theme(app: &AppHandle, theme_id: &str) {
         let items = state.0.lock().unwrap();
         for (id, item) in items.iter() {
             let _ = item.set_checked(id == theme_id);
-        }
-    }
-}
-
-fn set_checked_engine(app: &AppHandle, engine_id: &str) {
-    if let Some(state) = app.try_state::<EngineMenuState>() {
-        let items = state.0.lock().unwrap();
-        for (id, item) in items.iter() {
-            let _ = item.set_checked(id == engine_id);
         }
     }
 }
@@ -195,12 +152,6 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
     if let Some(theme_id) = id.strip_prefix(THEME_MENU_ID_PREFIX) {
         set_checked_theme(app, theme_id);
         let _ = app.emit("theme-changed", theme_id.to_string());
-        return;
-    }
-
-    if let Some(engine_id) = id.strip_prefix(ENGINE_MENU_ID_PREFIX) {
-        set_checked_engine(app, engine_id);
-        let _ = app.emit("engine-changed", engine_id.to_string());
         return;
     }
 
@@ -240,37 +191,6 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
 #[tauri::command]
 pub fn set_theme(app: AppHandle, theme_id: String) {
     set_checked_theme(&app, &theme_id);
-}
-
-// Invoked by the frontend when the engine changes via the in-app selector,
-// so the menu checkmarks stay in sync.
-#[tauri::command]
-pub fn set_engine(app: AppHandle, engine_id: String) {
-    set_checked_engine(&app, &engine_id);
-}
-
-// Disable/enable engine menu options during active session to prevent desync
-#[tauri::command]
-pub fn set_engine_menu_enabled(app: AppHandle, enabled: bool) {
-    if let Some(state) = app.try_state::<EngineMenuState>() {
-        let items = state.0.lock().unwrap();
-        for (_, item) in items.iter() {
-            let _ = item.set_enabled(enabled);
-        }
-    }
-}
-
-// Update enabled status based on installed engines list from frontend
-#[tauri::command]
-pub fn update_engine_menu_status(app: AppHandle, installed_engines: Vec<String>) {
-    if let Some(state) = app.try_state::<EngineMenuState>() {
-        let items = state.0.lock().unwrap();
-        for (id, item) in items.iter() {
-            // agy is always enabled/available (it's the onboarding target)
-            let is_available = id == "agy" || installed_engines.contains(id);
-            let _ = item.set_enabled(is_available);
-        }
-    }
 }
 
 // Invoked by the frontend on load (and whenever the setting changes some

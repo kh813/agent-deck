@@ -9,6 +9,18 @@
       "name": "Antigravity",
       "command": "agy",
       "args": []
+    },
+    {
+      "id": "claude",
+      "name": "Claude Code",
+      "command": "claude",
+      "args": []
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "command": "codex",
+      "args": []
     }
   ],
   "pre_launch_macos": {

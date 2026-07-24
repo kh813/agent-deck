@@ -46,10 +46,7 @@ pub fn run() {
             config::get_app_config,
             menu::set_theme,
             menu::set_auto_check_update,
-            pty::force_kill_pty,
-            menu::set_engine,
-            menu::set_engine_menu_enabled,
-            menu::update_engine_menu_status
+            pty::force_kill_pty
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

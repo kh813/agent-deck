@@ -66,9 +66,15 @@ export function useChatSession({
     }
   }, []);
 
-  // Start PTY Session
+  // Start PTY Session. overrideCommand/overrideArgs let a caller start with
+  // a command/args pair that hasn't propagated into the `command`/
+  // `defaultArgs` props yet -- e.g. switching engines updates those via a
+  // state setter in a sibling effect, which doesn't take effect until next
+  // render, so a same-pass startSession() call would otherwise launch with
+  // the previous engine's command (confirmed for real: switching engines
+  // right after Stop silently relaunched the old one).
   const startSession = useCallback(
-    async (targetCwd: string = cwdRef.current) => {
+    async (targetCwd: string = cwdRef.current, overrideCommand?: string, overrideArgs?: string[]) => {
       const isJa = navigator.language.startsWith("ja");
       setStatus("idle");
       setActivePrompt(null);
@@ -202,8 +208,8 @@ export function useChatSession({
 
         const size = getTerminalSize?.();
         await invoke("start_pty", {
-          command,
-          args: defaultArgs,
+          command: overrideCommand ?? command,
+          args: overrideArgs ?? defaultArgs,
           cwd: targetCwd || null,
           rows: size?.rows,
           cols: size?.cols,

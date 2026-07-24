@@ -266,34 +266,6 @@ function App() {
     }
   }, [cwd, updateRecentCwds]);
 
-  // Sync engine changes from native menu
-  useEffect(() => {
-    const unsub = subscribeToTauriEvent(
-      listen<string>("engine-changed", (event) => {
-        setSelectedAgentId(event.payload);
-      })
-    );
-    return unsub;
-  }, []);
-
-  // Update native menu checkmarks when selected engine changes in-app
-  useEffect(() => {
-    invoke("set_engine", { engineId: selectedAgentId }).catch(() => {});
-  }, [selectedAgentId]);
-
-  // Disable engine native menu during active session to prevent desync
-  useEffect(() => {
-    invoke("set_engine_menu_enabled", { enabled: status !== "running" }).catch(() => {});
-  }, [status]);
-
-  // Notify backend of installed engines so native menu items can be enabled/disabled
-  useEffect(() => {
-    const installed = Object.entries(agentStatuses)
-      .filter(([_, s]) => s.installed)
-      .map(([id]) => id);
-    invoke("update_engine_menu_status", { installedEngines: installed }).catch(() => {});
-  }, [agentStatuses]);
-
   // Subscribe to Native Force Kill Session menu event
   useEffect(() => {
     const unsub = subscribeToTauriEvent(
@@ -452,6 +424,35 @@ function App() {
       startSession();
     }
   }, [currentAgentStatus.installed, status, terminalSizeSettled, startSession]);
+
+  // Start a fresh session when the engine selection actually changes while
+  // idle (e.g. switching from agy to Claude Code after Stop). Without this,
+  // picking a different engine only updated shellPath/shellArgs -- nothing
+  // launched it, which read as "nothing happens" (confirmed for real: the
+  // dropdown and the native menu it used to mirror both had this same gap).
+  // Guarded on a real *change* (not the initial value) so it never fights
+  // with the one-shot auto-start above or re-launches the same engine
+  // immediately after a plain Stop.
+  //
+  // Passes the new engine's command/args as explicit startSession overrides
+  // rather than relying on shellPath/shellArgs state: effect #3 above (which
+  // sets that state) runs in the same pass, and a state update doesn't take
+  // effect until next render -- calling startSession() here with no
+  // overrides would still capture the *previous* engine's command (confirmed
+  // for real).
+  const previousAgentIdRef = useRef(selectedAgentId);
+  useEffect(() => {
+    const changed = previousAgentIdRef.current !== selectedAgentId;
+    previousAgentIdRef.current = selectedAgentId;
+    if (!changed || !appConfig || status !== "idle" || !terminalSizeSettled) return;
+
+    const engine = appConfig.engines.find(e => e.id === selectedAgentId);
+    const engineStatus = agentStatuses[selectedAgentId];
+    if (engine && engineStatus?.installed && engineStatus.path) {
+      hasAutoStartedRef.current = true;
+      startSession(undefined, engineStatus.path, engine.args || []);
+    }
+  }, [selectedAgentId, appConfig, agentStatuses, status, terminalSizeSettled, startSession]);
 
   // Listen to PTY termination during installation and updates
   useEffect(() => {
