@@ -6,6 +6,10 @@
 # Google OAuth2 credentials (GCP Console -> APIs & Services -> Credentials)
 client_id     = "YOUR_CLIENT_ID.apps.googleusercontent.com"
 client_secret = "YOUR_CLIENT_SECRET"
+# Optional. Only used by [gws] below to fill in client_secret.json's
+# required project_id field -- gws never validates it against Google, so
+# any non-empty placeholder works if you don't want to look up the real one.
+project_id = ""
 
 [drive]
 # Google Drive -- Skill Catalog shared folder (used by the skill-catalog skill)
@@ -22,6 +26,18 @@ config_backup_file_id = ""
 # the script errors out clearly instead of uploading nowhere.
 org_release_test_file_id = ""
 org_release_prod_file_id = ""
+
+[gws]
+# Google Workspace CLI (gws -- https://github.com/googleworkspace/cli; NOT an
+# official Google product despite the org name) for agy: Gmail / Drive /
+# Calendar / Docs / Sheets from the command line. setup.py auto-installs the
+# `gws` binary to app/bin/ and reuses the [oauth] client above as its
+# client_secret.json -- no separate credentials needed. See
+# docs/admin_guide.md §15 before enabling: the Gmail/Docs/Sheets APIs must be
+# enabled on the same GCP project, and you must run `gws auth login` once
+# yourself afterward (interactive browser consent -- cannot be automated).
+# Leave false to disable (default).
+enabled = false
 
 [user]
 # Your email address (optional). Used only as an OAuth login_hint pre-fill

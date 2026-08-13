@@ -72,9 +72,6 @@ python/skills/skill-catalog/catalog-index.md
 !/docs/admin_guide.md
 !/docs/user_guide.md
 
-# Org-specific agy project instructions (not part of the OSS project --
-# each deployment supplies its own, or none at all).
-/ANTIGRAVITY.md
 
 # Self-updater / release-bundling artifacts written at the project root.
 # agent-ui.* covers a pre-2026-07-16 local build/test artifact (before the
@@ -91,6 +88,8 @@ python/skills/skill-catalog/catalog-index.md
 # Runtime artifacts created by setup.py at first launch
 /app/bin/
 /.gemini/
+# mermaid.js vendored by diagram-generator's ensure_mermaid_js.py on first use
+/python/skills/diagram-generator/scripts/assets/
 /files/*
 !/files/.gitkeep
 /tmp/

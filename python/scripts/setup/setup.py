@@ -370,10 +370,192 @@ def setup_config():
     # honored as a login_hint pre-fill (see USER_EMAIL usages) for anyone
     # who sets it by hand.
 
+_GWS_VERSION = "v0.22.5"
+_GWS_MIN_VALID_BINARY_SIZE = 1_000_000
+_GWS_CONFIG_DIR = Path.home() / ".config" / "gws"
+_GWS_MANAGED_MARKER = ".agent_deck_managed"
+
+
+def _gws_target():
+    """darwin/windows only, matching this project's supported platforms
+    (see ensure_marp.py's _target_for() for the same scope decision)."""
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    is_arm = machine in ("arm64", "aarch64")
+    targets = {
+        "darwin": {
+            "url": f"https://github.com/googleworkspace/cli/releases/download/{_GWS_VERSION}/"
+                   f"google-workspace-cli-{'aarch64' if is_arm else 'x86_64'}-apple-darwin.tar.gz",
+            "file": "gws",
+            "is_tar": True,
+        },
+        "windows": {
+            "url": f"https://github.com/googleworkspace/cli/releases/download/{_GWS_VERSION}/"
+                   f"google-workspace-cli-x86_64-pc-windows-msvc.zip",
+            "file": "gws.exe",
+            "is_zip": True,
+        },
+    }
+    return targets.get(system)
+
+
+def ensure_gws_installed() -> bool:
+    """Download+extract the gws (Google Workspace CLI) binary into app/bin/
+    if missing or corrupted -- mirrors slide-generator/scripts/ensure_marp.py's
+    download-a-binary-release pattern exactly, so `gws` becomes directly
+    callable inside agy's PTY shell (src-tauri/src/pty.rs already puts
+    <project_root>/app/bin on PATH for tools "like marp or agy").
+
+    gws (https://github.com/googleworkspace/cli) is NOT an official Google
+    product despite living under the `googleworkspace` GitHub org -- see
+    docs/admin_guide.md §15.
+    """
+    target = _gws_target()
+    if target is None:
+        print(f"[WARN] gws install not supported on this OS: {platform.system()}")
+        return False
+
+    app_bin = Path(SCRIPT_DIR).parents[2] / "app" / "bin"
+    app_bin.mkdir(parents=True, exist_ok=True)
+    path = app_bin / target["file"]
+
+    if path.exists() and path.stat().st_size < _GWS_MIN_VALID_BINARY_SIZE:
+        print(f"  [WARN] gws at {path} looks corrupted "
+              f"({path.stat().st_size} bytes) -- re-downloading.")
+        path.unlink()
+
+    if not path.exists() or path.stat().st_size < _GWS_MIN_VALID_BINARY_SIZE:
+        print("gws not found. Downloading...")
+        ext = ".tar.gz" if target.get("is_tar") else ".zip"
+        tmp_file = app_bin / f"tmp_gws{ext}"
+        try:
+            subprocess.run(["curl", "-fsSL", "-o", str(tmp_file), target["url"]],
+                            check=True, stdin=subprocess.DEVNULL)
+            if target.get("is_tar"):
+                # Extract only the binary member -- the tarball also bundles
+                # README/LICENSE/CHANGELOG, which would otherwise litter app/bin/.
+                subprocess.run(["tar", "-xzf", str(tmp_file), "-C", str(app_bin), target["file"]],
+                                check=True, stdin=subprocess.DEVNULL)
+            else:
+                import shutil
+                extract_dir = app_bin / "_gws_extract_tmp"
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                     f"Expand-Archive -Path '{tmp_file}' -DestinationPath '{extract_dir}' -Force"],
+                    check=True, stdin=subprocess.DEVNULL,
+                )
+                extracted = extract_dir / target["file"]
+                if extracted.exists():
+                    extracted.replace(path)
+                shutil.rmtree(extract_dir, ignore_errors=True)
+        except subprocess.CalledProcessError as e:
+            print(f"  [ERROR] gws download/extraction failed: {e}")
+            return False
+        finally:
+            tmp_file.unlink(missing_ok=True)
+
+        if not path.exists() or path.stat().st_size < _GWS_MIN_VALID_BINARY_SIZE:
+            print("  [ERROR] Download of gws failed or produced a corrupted "
+                  "file. Check your network connection and try again.")
+            return False
+        print(f"  gws installed to {path}.")
+    else:
+        print(f"  gws already exists at {path}.")
+
+    if platform.system().lower() == "darwin":
+        path.chmod(path.stat().st_mode | 0o111)
+        subprocess.run(["xattr", "-d", "com.apple.quarantine", str(path)],
+                        check=False, stdin=subprocess.DEVNULL)
+
+    return True
+
+
+def setup_gws():
+    """Install gws and register the reused [oauth] client as its
+    client_secret.json, but only when config.toml's [gws] enabled = true.
+
+    client_secret.json is written in the standard Google "installed app"
+    OAuth schema gws expects (confirmed for real: gws rejects the file
+    outright as "No OAuth client configured" unless `project_id` is also
+    present, even though it's never validated against Google -- any
+    non-empty placeholder satisfies it).
+
+    A `.agent_deck_managed` marker file records that we wrote it, so a user
+    who instead ran `gws auth setup`/`gws auth login` by hand (their own,
+    real GCP project) never gets that file silently overwritten or deleted
+    by us. Runs on every launch (called from both `init` and `config`) so
+    toggling the flag in config.toml takes effect on the next launch either
+    way. This only stages the client config -- `gws auth login` itself still
+    needs one interactive browser consent, same as this project's own Drive/
+    Calendar OAuth flows (see docs/admin_guide.md §15).
+    """
+    import json
+    import re
+    if not CONFIG_PATH.exists():
+        return
+    text = CONFIG_PATH.read_text(encoding="utf-8")
+
+    def _get_str(key):
+        m = re.search(rf'^{key}\s*=\s*"([^"]*)"', text, re.MULTILINE)
+        return m.group(1).strip() if m else ""
+
+    def _get_bool(key):
+        m = re.search(rf'^{key}\s*=\s*(true|false)', text, re.MULTILINE)
+        return m is not None and m.group(1) == "true"
+
+    enabled = _get_bool("enabled")
+    secret_path = _GWS_CONFIG_DIR / "client_secret.json"
+    marker_path = _GWS_CONFIG_DIR / _GWS_MANAGED_MARKER
+
+    if not enabled:
+        if secret_path.exists() and marker_path.exists():
+            secret_path.unlink()
+            marker_path.unlink()
+            print("==> gws の client_secret.json の登録を解除しました / Unregistered gws client_secret.json.")
+        return
+
+    client_id = _get_str("client_id")
+    client_secret = _get_str("client_secret")
+    project_id = _get_str("project_id") or "agent-deck"
+    if not client_id or not client_secret:
+        return  # OAuth not configured yet -- setup_config() prompts for it first
+
+    if secret_path.exists() and not marker_path.exists():
+        return  # user's own gws credentials (e.g. `gws auth setup`) -- don't touch
+
+    entry = {
+        "installed": {
+            "client_id": client_id,
+            "project_id": project_id,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_secret": client_secret,
+            "redirect_uris": ["http://localhost"],
+        }
+    }
+    if secret_path.exists():
+        try:
+            existing = json.loads(secret_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = None
+        if existing == entry:
+            return  # already up to date -- avoid rewriting the file every launch
+
+    if not ensure_gws_installed():
+        return
+
+    _GWS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    secret_path.write_text(json.dumps(entry, indent=2), encoding="utf-8")
+    marker_path.write_text("", encoding="utf-8")
+    print("==> gws の client_secret.json を ~/.config/gws に登録しました / Registered gws client_secret.json.")
+    print("    次に一度だけ `gws auth login` を実行してブラウザで認可してください。")
+    print("    Run `gws auth login` once to complete browser consent.")
+
 # ── entrypoint ────────────────────────────────────────────────
 
 def _usage():
-    print("Usage: setup.py [init|config|trust|skills [list|rebuild|enable <name>|disable <name>]]")
+    print("Usage: setup.py [init|config|gws|trust|skills [list|rebuild|enable <name>|disable <name>]]")
     sys.exit(1)
 
 if __name__ == "__main__":
@@ -382,6 +564,7 @@ if __name__ == "__main__":
 
     if cmd == "init":
         setup_config()
+        setup_gws()
         setup_venv()
         build_skills()
         install_skills()
@@ -411,6 +594,10 @@ if __name__ == "__main__":
 
     elif cmd == "config":
         setup_config()
+        setup_gws()
+
+    elif cmd == "gws":
+        setup_gws()
 
     elif cmd == "trust":
         trust_project_folder()
