@@ -42,6 +42,11 @@ def _make_mac_zip(zip_path: Path) -> None:
         zf.writestr("agent_config.json", "{}")
         zf.writestr("preflight.sh", "#!/bin/bash\necho ok\n")
         zf.writestr("messages/no_python.txt", "no python")
+        # Public, secret-free, git-tracked -- release.yml bakes these into
+        # the public ZIP directly (see docs/admin_guide.md §15); this
+        # script merges no org-specific counterpart for either anymore.
+        zf.writestr("AGENTS.md", "## Startup\n...\n")
+        zf.writestr("CLAUDE.md", "@AGENTS.md\n")
 
 
 def _make_win_zip(zip_path: Path) -> None:
@@ -52,6 +57,8 @@ def _make_win_zip(zip_path: Path) -> None:
         zf.writestr("agent_config.json", "{}")
         zf.writestr("preflight.bat", "@echo off\r\necho ok\r\n")
         zf.writestr("messages/no_python.txt", "no python")
+        zf.writestr("AGENTS.md", "## Startup\n...\n")
+        zf.writestr("CLAUDE.md", "@AGENTS.md\n")
 
 
 @pytest.fixture
@@ -92,6 +99,10 @@ class TestBuildPackage:
         assert "python/skills/translator/SKILL.md" in names
         assert "preflight.sh" in names
         assert "preflight.bat" in names
+        # AGENTS.md/CLAUDE.md ride through unchanged -- release.yml already
+        # baked them into the public ZIP; this script merges no extra copy.
+        assert "AGENTS.md" in names
+        assert "CLAUDE.md" in names
 
     def test_prod_channel_uses_prod_zip_name(self, tmp_path, fake_org_config, monkeypatch, no_op_signing):
         monkeypatch.setattr(su, "_fetch_release", lambda channel: _fake_release("v0.0.21"))

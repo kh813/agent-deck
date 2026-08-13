@@ -12,6 +12,12 @@ the public ZIP itself, so README/docs/user_guide.md's extraction
 instructions apply unchanged), drops in this project's own config.toml
 (the one thing the public ZIP can never include), and re-zips.
 
+AGENTS.md (agy's project-instructions file, see docs/admin_guide.md §15)
+and its CLAUDE.md `@AGENTS.md` stub are NOT handled here -- both are
+public, git-tracked, secret-free files that release.yml already bakes
+into the public ZIP this script downloads, so they ride along through
+the merge automatically.
+
 Channel resolution is shared with self_update.py: --test bundles
 kh813/agent-deck's newest GitHub pre-release (a tag with a semver
 prerelease suffix -- see release.yml); --prod bundles its

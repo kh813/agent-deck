@@ -58,7 +58,6 @@ TOKEN_PATH = Path.home() / ".gemini" / "agent_ui_library_token.json"
 _BACKUP_GLOBS = [
     "config.toml",
     "client_secret_*.json",
-    "ANTIGRAVITY.md",
     "docs/**/*",
     "python/skills-personal/**/*",
 ]
