@@ -391,6 +391,16 @@ For a full manual repair, re-extract the GitHub Releases ZIP over the existing f
 
 Since this directory is itself the `kh813/agent-deck` development environment, there's no separate "track/pin to upstream" concept. Regular development proceeds via commits/pushes to `main`; a release is cut by pushing a `vX.Y.Z` tag, which `.github/workflows/release.yml` builds, signs, and publishes automatically (see CLAUDE.md). Keep version numbers in sync across `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
 
+> **タグを打つだけでは終わりません（実際に見落とされたことあり、2026-08-14）/ Tagging alone is not the whole job (confirmed missed for real, 2026-08-14):** タグのpushが動かすのは**公開GitHubリリースのみ**です。組織Driveチャネル（`config.toml` の `[drive] org_release_test_file_id`/`org_release_prod_file_id`）を使っている場合、そのDrive上のZIPは**別途** `python3 python/scripts/tools/package_release.py --test`（または `--prod`）を実行するまで更新されません — アプリの「Update to Org Test/Latest...」メニューや同僚が実際に取得するのはこちらのZIPです。手順は必ず次の2段階セットで行ってください：
+>
+> 1. `git tag vX.Y.Z[-rcN] && git push origin vX.Y.Z[-rcN]` — 公開GitHubリリースを作成
+> 2. `python3 python/scripts/tools/package_release.py --test`（または `--prod`）— 同じリリースを組織のDriveファイルへ反映
+>
+> Pushing the tag only triggers the **public** GitHub release. If an org Drive channel is configured, that Drive-hosted ZIP is **not** updated until you separately run `python3 python/scripts/tools/package_release.py --test` (or `--prod`) — that's what the app's "Update to Org Test/Latest..." menu items and colleagues actually pull from. Always do both steps together:
+>
+> 1. `git tag vX.Y.Z[-rcN] && git push origin vX.Y.Z[-rcN]` — publishes the public GitHub release
+> 2. `python3 python/scripts/tools/package_release.py --test` (or `--prod`) — syncs that same release to the org's Drive file
+
 #### テスト→本番の昇格フロー / Test-Then-Promote Flow
 
 先にテスト版を配って動作確認し、問題なければ本番へ、という流れが必要な場合は、タグ名にsemverのプレリリース識別子（ハイフン付き）を使ってください：
