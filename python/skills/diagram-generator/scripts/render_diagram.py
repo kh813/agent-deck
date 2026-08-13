@@ -45,13 +45,6 @@ def _reexec_with_venv():
             sys.exit(1)
 
 
-_reexec_with_venv()
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ensure_mermaid_js import ensure_mermaid_js  # noqa: E402
-
-from playwright.sync_api import sync_playwright  # noqa: E402
-
 _HTML_TEMPLATE = """<!doctype html>
 <html><head><meta charset="utf-8"></head>
 <body style="margin:0;background:#ffffff;">
@@ -65,6 +58,14 @@ _HTML_TEMPLATE = """<!doctype html>
 
 
 def render(input_path: Path, output_path: Path) -> None:
+    # Deferred until here (not module level): argument validation in main()
+    # must work with zero dependencies beyond stdlib, since this script runs
+    # fine standalone -- only actually rendering needs playwright/venv.
+    _reexec_with_venv()
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from ensure_mermaid_js import ensure_mermaid_js
+    from playwright.sync_api import sync_playwright
+
     diagram_src = input_path.read_text(encoding="utf-8")
     mermaid_js = ensure_mermaid_js().read_text(encoding="utf-8")
     html_doc = _HTML_TEMPLATE.format(
