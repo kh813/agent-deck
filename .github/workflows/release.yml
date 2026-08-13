@@ -110,7 +110,14 @@ jobs:
           # -x __pycache__: the test step above ran pytest against this
           # checkout, leaving .pyc caches inside python/ — build artifacts,
           # not payload (one shipped in v0.0.13 for real).
-          zip -r agent-deck-mac.zip python config agent_config.json preflight.sh messages AGENTS.md CLAUDE.md -x "*__pycache__*"
+          #
+          # "Launch agent-deck.command" clears the quarantine bit before
+          # opening agent-deck.app -- without it, a freshly-downloaded app
+          # gets macOS App Translocation'd to a random ephemeral path on
+          # every launch, breaking agy's per-folder trust memory (confirmed
+          # for real). git preserves its executable bit through checkout,
+          # and zip preserves it into the archive.
+          zip -r agent-deck-mac.zip python config agent_config.json preflight.sh messages AGENTS.md CLAUDE.md "Launch agent-deck.command" -x "*__pycache__*"
 
       - name: package Windows exe to zip
         if: matrix.platform == 'windows-latest'

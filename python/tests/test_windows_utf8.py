@@ -32,6 +32,7 @@ bilingual message now lives in its own file under messages/, printed via
 Run:
   pytest python/tests/test_windows_utf8.py -v
 """
+import os
 import subprocess
 from pathlib import Path
 
@@ -174,3 +175,31 @@ class TestReleaseWorkflowPackagesMessagesFolder:
         assert ",messages" in zip_line, (
             f"Windows zip step no longer packages messages/: {zip_line!r}"
         )
+
+
+class TestReleaseWorkflowPackagesMacLauncher:
+    """Regression guard (2026-08-14): a freshly-downloaded agent-deck.app
+    still carries com.apple.quarantine, so macOS App Translocation runs it
+    from a random, ephemeral path on every launch -- confirmed for real:
+    this breaks agy's per-folder trust memory, since that path differs
+    every time. "Launch agent-deck.command" clears quarantine before
+    opening the app; if release.yml stops packaging it, or it loses its
+    executable bit, double-clicking it does nothing useful instead of
+    fixing the problem."""
+
+    def test_mac_zip_includes_launcher(self):
+        src = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+        zip_line = next(ln for ln in src.splitlines() if ln.strip().startswith("zip -r agent-deck-mac.zip"))
+        assert "Launch agent-deck.command" in zip_line, (
+            f"macOS zip step no longer packages the launcher: {zip_line!r}"
+        )
+
+    def test_launcher_is_executable(self):
+        launcher = ROOT / "Launch agent-deck.command"
+        assert launcher.exists()
+        assert os.access(launcher, os.X_OK), "Launch agent-deck.command lost its executable bit"
+
+    def test_launcher_clears_quarantine_before_opening(self):
+        text = (ROOT / "Launch agent-deck.command").read_text()
+        assert "xattr -cr" in text
+        assert "open ./agent-deck.app" in text

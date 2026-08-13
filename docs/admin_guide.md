@@ -656,6 +656,16 @@ Drive 上の共有カタログファイル（`skill-catalog.md`）が誤って�
 
 Known bug (fixed 2026-07-19): both `install_agent_ui.py` and `self_update.py` used to `unlink()` the running exe, then try to create a new file at the same path. Windows allows deleting/renaming a running exe but won't let you recreate one at that exact path until the last handle closes (i.e. until restart). Both are now fixed to rename the old exe aside instead of deleting it. If you see the exe missing from the project root right after an update, suspect this pattern first.
 
+### 「このフォルダを信頼する」確認が毎回出る（macOS）/ Repeated "trust this folder" prompt (macOS)
+
+**原因（実機で確認済み）:** `agent-deck.app` に quarantine 属性が付いたまま直接ダブルクリックすると、macOS の App Translocation により `/private/var/folders/.../AppTranslocation/<ランダムID>/d/` という**毎回変わるパス**からアプリが実行されます。agy の「このフォルダを信頼する」記憶はパス単位（`~/.gemini/trustedFolders.json`）なので、パスが毎回変わると確認ダイアログが何度でも再表示されます。過去にこの問題を自動で回避するコードは存在したことがなく、README.md には以前から手動での `xattr -cr` 回避策のみが記載されていました。
+
+**修正（2026-08-14）:** ZIP に `Launch agent-deck.command`（`agent-deck.app` と同階層）を同梱し、これをダブルクリックして起動する運用に変更しました（`.github/workflows/release.yml` の macOS zip ステップ参照）。中身は `xattr -cr ./agent-deck.app && open ./agent-deck.app` のみ — 起動前に quarantine を解除するため、App Translocation が発生せず、作業ディレクトリも安定します。`agent-deck.app` を直接ダブルクリックした場合はこれまで通り発生するので、ユーザーには `Launch agent-deck.command` の使用を案内してください（README.md 参照）。
+
+**Root cause (confirmed for real):** double-clicking `agent-deck.app` directly while it still carries the quarantine attribute triggers macOS App Translocation, which runs it from `/private/var/folders/.../AppTranslocation/<random-ID>/d/` — a path that changes on every launch. agy's "trust this folder" memory (`~/.gemini/trustedFolders.json`) is keyed by path, so a different path every time means the prompt never stops reappearing. No code ever automated a workaround for this; README.md only ever documented a manual `xattr -cr` step.
+
+**Fix (2026-08-14):** the ZIP now bundles `Launch agent-deck.command` (sibling to `agent-deck.app`) as the recommended way to launch — see the macOS zip step in `.github/workflows/release.yml`. It's just `xattr -cr ./agent-deck.app && open ./agent-deck.app`, clearing quarantine before the app ever runs, so App Translocation never triggers and the working directory stays stable. Double-clicking `agent-deck.app` directly still hits the old behavior — point users at `Launch agent-deck.command` instead (see README.md).
+
 ---
 
 ## 13. ユーザー入力の設計 / Designing User Input in Skills

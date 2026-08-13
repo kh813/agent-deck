@@ -189,8 +189,11 @@ OS ごとに異なるコマンドを実行したい場合は、`pre_launch_macos
 
 ### macOS (Apple Silicon 向け)
 1. GitHubの Releases から `agent-deck-mac.zip` をダウンロードします。
-2. ZIPを展開し、`agent-deck.app` を任意の場所に配置します。
-3. 未署名アプリとしての macOS 隔離属性（quarantine）を解除する必要があります。方法は以下のどちらでも構いません。
+2. ZIPを展開すると、`agent-deck.app` と同じ階層に `Launch agent-deck.command` が入っています。**通常はこれをダブルクリックして起動してください**（初回はFinderの警告が出るので「開く」を選択）。中身は `xattr -cr` でmacOSの隔離属性（quarantine）を解除してから `agent-deck.app` を開くだけの単純なスクリプトです。
+
+   > **なぜこれが必要か**: quarantine属性が付いたまま `agent-deck.app` を直接ダブルクリックすると、macOSの「App Translocation」機能により、起動のたびに `/private/var/folders/.../AppTranslocation/<ランダムなID>/d/` という**毎回変わる場所**からアプリが実行されます。agyの「このフォルダを信頼する」確認は場所（パス）ごとに記憶されるため、パスが毎回変わると確認ダイアログが**何度でも**再表示されてしまいます。`Launch agent-deck.command` で事前に隔離属性を解除しておけば、この問題は起きません。
+
+   `Launch agent-deck.command` を使わず `agent-deck.app` を直接開きたい場合は、事前に手動で隔離属性を解除してください。方法は以下のどちらでも構いません。
 
    **方法A: ターミナルを使わず「システム設定」から許可する**
 
@@ -205,22 +208,13 @@ OS ごとに異なるコマンドを実行したい場合は、`pre_launch_macos
    6. Macのログインパスワードの入力や Touch ID を求められた場合は入力・認証します。
    7. 再度 `agent-deck.app` をダブルクリックすると、もう一度確認ダイアログが表示されます。今度は「開く」ボタンがあるので、それをクリックすればアプリが起動します。
 
-   ※ 一度この手順で許可すると、そのアプリについては次回以降ダイアログなしで起動できるようになります（ZIPを展開し直した場合は再度この手順が必要です）。
+   ※ この方法は隔離属性そのものは解除しないため、App Translocationは起きたままです（上記の「このフォルダを信頼する」再確認の問題は解決しません）。この問題も解決したい場合は `Launch agent-deck.command` を使うか、方法Bで隔離属性を解除してください。
 
    **方法B: ターミナルを使う（慣れている方向け）**
    ```bash
    xattr -cr /path/to/agent-deck.app
    ```
-4. アプリをダブルクリックして起動します。
-5. 初回起動時に Antigravity CLI (`agy`) が見つからない場合、自動インストールを促すオンボーディング画面が表示されます。「Install Antigravity CLI」をクリックすると、アプリケーションと同階層の `./bin/` ディレクトリ配下に自動インストールされ、すぐに利用可能になります（ポータブル構成）。
-
-💡 同階層に以下のシェルスクリプト（`.command`）ファイルを作成しておくと、次回からダブルクリックだけで起動できます。
-```bash
-#!/bin/bash
-cd "$(dirname "$0")"
-xattr -cr ./agent-deck.app
-open ./agent-deck.app
-```
+3. 初回起動時に Antigravity CLI (`agy`) が見つからない場合、自動インストールを促すオンボーディング画面が表示されます。「Install Antigravity CLI」をクリックすると、アプリケーションと同階層の `./bin/` ディレクトリ配下に自動インストールされ、すぐに利用可能になります（ポータブル構成）。
 
 ### Windows
 1. GitHubの Releases から `agent-deck-win.zip` をダウンロードします。
