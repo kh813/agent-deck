@@ -59,8 +59,8 @@ Git-tracked files and `.gitignore`d org-specific files share the same tree.
 
 ```
 agent-deck/
-├── ANTIGRAVITY.md               # agy 用プロジェクト指示
-├── CLAUDE.md                    # Claude Code 向け開発ルール（release へのタグ付けは要許可、等）
+├── AGENTS.md                     # agy 用プロジェクト指示（機密情報なし、公開・git 管理下。Claude Code 等も自動/@import で読める共通形式）
+├── CLAUDE.md                    # ★Claude Code 向け開発ルール（release へのタグ付けは要許可、等。git 除外・個人/組織ローカル）
 ├── README.md
 ├── config/
 │   └── config.toml.template     # 設定テンプレート（実値は含まない、git 管理）
@@ -155,7 +155,7 @@ Public, bundled skills (`python/skills/`) win over `python/skills-personal/` (in
 **`python/scripts/setup/setup.py`** (in the public repo — every reference below is to this file) is the unified entry point for maintenance operations.
 
 ```bash
-python3 python/scripts/setup/setup.py [init|config|trust|skills [list|rebuild|enable <name>|disable <name>]]
+python3 python/scripts/setup/setup.py [init|config|gws|trust|skills [list|rebuild|enable <name>|disable <name>]]
 # Windows では python3 を python に読み替え / On Windows, replace python3 with python
 ```
 
@@ -177,9 +177,9 @@ preflight.sh / preflight.bat
 agy を起動 / Launch agy
 ```
 
-**`init`** は以下を順に実行します（`setup_config()` → `setup_venv()` → `build_skills()` → `install_skills()` → `install_gemini_policies()` → `trust_project_folder()` → `setup_files_folder()`）。venv の有無で初回セットアップ済みかを判定するため、`venv/` は配布 ZIP に含まれません。
+**`init`** は以下を順に実行します（`setup_config()` → `setup_gws()` → `setup_venv()` → `build_skills()` → `install_skills()` → `install_gemini_policies()` → `trust_project_folder()` → `setup_files_folder()`）。venv の有無で初回セットアップ済みかを判定するため、`venv/` は配布 ZIP に含まれません。
 
-**`init`** runs, in order: `setup_config()` → `setup_venv()` → `build_skills()` → `install_skills()` → `install_gemini_policies()` → `trust_project_folder()` → `setup_files_folder()`. The presence of `venv/` is how the launcher decides whether first-run setup is already done, so it's excluded from the distribution ZIP.
+**`init`** runs, in order: `setup_config()` → `setup_gws()` → `setup_venv()` → `build_skills()` → `install_skills()` → `install_gemini_policies()` → `trust_project_folder()` → `setup_files_folder()`. The presence of `venv/` is how the launcher decides whether first-run setup is already done, so it's excluded from the distribution ZIP.
 
 #### agy (Antigravity CLI) のインストール先 / Where agy actually installs
 
@@ -231,6 +231,16 @@ python3 python/scripts/setup/setup.py config
 `preflight.sh`/`.bat` は agy からstdinなしで呼ばれるため、`setup_config()` の `input()` 呼び出しは EOF を空文字列として扱う `_prompt()` ヘルパー経由です（未設定のまま次回に持ち越されるだけで、クラッシュしません）。メールアドレスの入力プロンプトは以前ここにありましたが廃止しました — 実際の Google アカウント選択は agy 自身のサインインや Drive/Calendar OAuth 自体のアカウント選択画面で行われるため、非対話起動（`AGENT_DECK_NONINTERACTIVE=1`）では絶対に解決しないこの確認は無意味な繰り返し表示でしかなかったためです。`[user] email`（config.toml）は手動で設定すれば引き続き OAuth の `login_hint` として使われます。
 
 `preflight.sh`/`.bat` invoke this with no stdin attached, so `setup_config()`'s `input()` calls go through a `_prompt()` helper that treats EOF as an empty answer — the field just stays unset until the next run, no crash. The email prompt that used to live here has been removed — actual Google account selection happens at agy's own sign-in or the Drive/Calendar OAuth flow's own account picker regardless, so a prompt that could never resolve under non-interactive launches (`AGENT_DECK_NONINTERACTIVE=1`) was just pointless repeated noise. `[user] email` in config.toml is still honored as an OAuth `login_hint` pre-fill if set by hand.
+
+### setup gws — Google Workspace CLI の登録 / Registering the Google Workspace CLI
+
+```bash
+python3 python/scripts/setup/setup.py gws
+```
+
+`config.toml` の `[gws] enabled` を見て、`gws` バイナリを `app/bin/` にダウンロードし、`[oauth]` のクライアントを `~/.config/gws/client_secret.json` として登録・削除します（`setup_config()` の直後、`init`/`config` 実行のたびに自動でも呼ばれます）。詳細は §15。
+
+Reads `config.toml`'s `[gws] enabled`, downloads the `gws` binary into `app/bin/`, and registers/removes the `[oauth]` client as `~/.config/gws/client_secret.json` (also called automatically right after `setup_config()` on every `init`/`config` run). See §15 for details.
 
 ### スキルカタログ管理 / Skill Catalog Management
 
@@ -418,6 +428,8 @@ cp config/config.toml.template config.toml
 | `[oauth]` | `client_id` / `client_secret` | GCP OAuth2 クレデンシャル |
 | `[drive]` | `catalog_folder_id` / `catalog_url` / `catalog_file_id` | スキルカタログ（Drive）関連 |
 | `[drive]` | `org_release_test_file_id` / `org_release_prod_file_id` | 組織内配布ZIP（`package_release.py` がアップロード。§7c）。設定するとメニューの「Update」に組織内チャネルが出現し、GitHub直取得は隠れる（§4） |
+| `[oauth]` | `project_id`（任意） | `gws`（§15）の `client_secret.json` に必要な `project_id` を埋めるためだけの値。Google 側の検証は無いのでプレースホルダで可 |
+| `[gws]` | `enabled` | Google Workspace CLI `gws`（Gmail/Drive/Calendar/Docs/Sheets、§15）の有効化。`[oauth]` のクライアントを流用するため追加クレデンシャル不要。デフォルト `false` |
 | `[company]`（任意 / optional） | `domain` / `portal_url` / `salesforce_url` | 公開版のテンプレートには**宣言されていない**。組織向け `config.toml` がこのセクションを上乗せするオーバーレイという位置づけ |
 | `[template]` | `name` / `url` | PPTX テンプレート |
 | `[user]` | `email` | 手動設定のみ。OAuth（Drive/Calendar 等）の `login_hint` として使われる。省略可 — 未設定でも各 OAuth フロー自体のアカウント選択画面で認証できる。ブラウザ自動化系スキルだけは別ロジック（`common.py` の `get_email_account()`）で OS ログイン名 + `[company].domain` から自動判定するフォールバックを持つ |
@@ -433,17 +445,19 @@ cp config/config.toml.template config.toml
 |-----|----------------|
 | Google Drive API | スキルカタログの同期・公開（`skills_catalog.py`）/ Skill catalog sync & publish |
 | Google Calendar API / Tasks API | `/daily-schedule` |
+| Gmail API / Docs API / Sheets API | Google Workspace CLI `gws`（§15、`[gws] enabled`）を有効化する場合のみ必要。同じ GCP プロジェクト・同じ `[oauth]` クライアントで有効化する |
 
 | スコープ / Scope | 用途 / Purpose | トークンファイル / Token file |
 |-----------------|----------------|-------------------------------|
 | `drive` (読み書き / read-write) | カタログ同期・公開・PPTXテンプレート取得・config/secretのバックアップ復元・組織内配布ZIPの作成/アップロード・組織内Driveチャネルからの自己更新（`skills_catalog.py` / `drive_upload.py` / `drive_migrator.py` / `backup_config.py` / `restore_config.py` / `package_release.py` / `self_update.py` の `--drive-file-id` 経路） | `~/.gemini/agent_ui_library_token.json` |
 | `calendar.readonly` / `tasks.readonly` | カレンダー・タスク読み取り（`gcalendar.py`） | `~/.gemini/agent_ui_calendar_token.json` |
+| Gmail / Drive / Calendar / Docs / Sheets の各スコープ | `gws`（§15）が `gws auth login` 時にユーザーが選んだサービス分だけ要求する | `gws` 自身が `~/.config/gws/` で管理（このリポジトリの `~/.gemini/agent_ui_*_token.json` とは別） |
 
 > 全ての `drive` フルスコープ利用箇所が同一のトークンファイルを共有するよう統一済みです（旧: `backup_config.py`/`restore_config.py` のみ `agent_deck_library_token.json` という別名を使っており、`skill-catalog` 等で認可済みでも別途ブラウザ認可が要求される不整合があったが解消済み）。
 
 新しい Google API を追加する場合: (1) GCP コンソールで有効化 (2) 対応スクリプトの `SCOPES` に追加 (3) 既存トークンにスコープが無ければ次回実行時に自動で再認証されます。
 
-> **OAuth 同意画面の公開ステータスに注意 / Watch the OAuth consent screen publishing status:** `drive`（フル読み書き）は Google 側で「制限付き（restricted）」スコープに分類されます。同意画面を「テスト」ステータスのまま運用する場合、テストユーザーとして個別登録したアカウントしか認可できず（上限100人）、かつ未検証アプリが発行するリフレッシュトークンは7日で失効し、期限が切れると全員が再認可を求められます。全社展開する場合は同意画面を「本番」に公開する（Google のアプリ検証が必要になることがある）か、少なくとも対象ユーザー全員をテストユーザーとして登録してください。
+> **OAuth 同意画面の公開ステータスに注意 / Watch the OAuth consent screen publishing status:** `drive`（フル読み書き）は Google 側で「制限付き（restricted）」スコープに分類されます。同意画面を「テスト」ステータスのまま運用する場合、テストユーザーとして個別登録したアカウントしか認可できず（上限100人）、かつ未検証アプリが発行するリフレッシュトークンは7日で失効し、期限が切れると全員が再認可を求められます。全社展開する場合は同意画面を「本番」に公開する（Google のアプリ検証が必要になることがある）か、少なくとも対象ユーザー全員をテストユーザーとして登録してください。**Gmail のスコープ（特に送信・下書き作成系）も同様に「制限付き」に分類されるため、`gws`（§15）を有効化する場合はこの制約がさらに強く効きます** — 全社展開前に同意画面のステータスと対象スコープを確認してください。
 
 ---
 
@@ -506,6 +520,10 @@ python3 python/scripts/tools/restore_config.py --zip ~/Downloads/agent-deck-conf
 
 `python/scripts/tools/package_release.py` が、`kh813/agent-deck` の公開GitHubビルド（mac/win両方）に、この作業ディレクトリ自身の `config.toml` をマージして再ZIP化し、組織のGoogle Driveにアップロードします。§4の「組織Driveチャネル」（メニューの「Update to Org Latest/Test」）が実際に取得しにいくのはこのZIPです。
 
+`AGENTS.md`（agy用プロジェクト指示、§15）と、中身が `@AGENTS.md` だけの `CLAUDE.md` スタブは、この段階では一切マージされません — どちらも機密情報を含まない公開・git管理下のファイルとして `release.yml` が公開GitHub ZIP自体に既に焼き込んでいるため、`package_release.py` がダウンロード・マージするその公開ZIPにそのまま乗ってきます（実機で動作確認済み — agy は `AGENTS.md` を単体でも自動検出、`@`-import も両対応。展開後のフォルダを Claude Code で開くと、その `CLAUDE.md` スタブ経由で同じ指示が読み込まれます）。
+
+`AGENTS.md`/`CLAUDE.md` are not merged at this stage at all — as public, secret-free, git-tracked files, `release.yml` already bakes both directly into the public GitHub ZIP, so they simply ride along through the download-and-merge `package_release.py` does for `config.toml` (confirmed working for real — agy both auto-discovers a bare `AGENTS.md` and resolves `@`-imports; opening the extracted folder with Claude Code picks up the same instructions via that `CLAUDE.md` stub).
+
 ```bash
 python3 python/scripts/tools/package_release.py --test   # 最新のGitHub pre-release + config.toml を org_release_test_file_id へ
 python3 python/scripts/tools/package_release.py --prod   # 最新のGitHub安定版      + config.toml を org_release_prod_file_id へ
@@ -557,7 +575,9 @@ The PPTX template isn't in the distribution ZIP. Each skill's bundled `fetch_tem
 | スキルカタログ / Skill catalog | Google Drive（`_default/` フォルダの自動同期 + 個人カタログの手動 download/upload） |
 | 自己更新 / Self-update | GitHub Releases API（`self_update.py`） |
 | スライド生成 / Slide generation | Marp CLI + python-pptx |
+| 図表生成 / Diagram generation | Mermaid（`diagram-generator` スキル）— Playwright + Chromium でオフラインレンダリング、Node.js/mermaid-cli 不要 |
 | ブラウザ自動化 / Browser automation | Playwright（スクリプト）+ Playwright MCP（自然言語） |
+| Google Workspace CLI | `gws`（非公式 OSS、§15）— Gmail/Drive/Calendar/Docs/Sheets をコマンドラインで操作。オプトイン |
 | セットアップスクリプト / Setup scripting | Python 3（クロスプラットフォーム）、Windows は追加で Batch/PowerShell |
 
 ---
@@ -646,7 +666,7 @@ Antigravity CLI に組み込まれた `ask_user` ツールを使うと、テキ�
 
 The `ask_user` tool is built into Antigravity CLI. Instead of asking questions via plain text output, it displays a styled dialog box with an "Answer Questions" header, and allows canceling with Esc.
 
-**ANTIGRAVITY.md のグローバルルール:** 「ユーザーへの入力要求は必ず `ask_user` ツールを使用すること」を記載。SKILL.md 側でも呼び出し例を明示することで、モデルが確実に従います。
+**AGENTS.md のグローバルルール:** 「ユーザーへの入力要求は必ず `ask_user` ツールを使用すること」を記載。SKILL.md 側でも呼び出し例を明示することで、モデルが確実に従います。
 
 ### `ask_user` パラメーター詳細 / Parameter Reference
 
@@ -706,22 +726,22 @@ agent-deck は **二層のセキュリティ** でエージェントの動作範
 
 | 層 / Layer | 仕組み / Mechanism | 役割 / Role |
 |---|---|---|
-| 第1層（行動制約） | `ANTIGRAVITY.md` の記述 | モデルへのルールとして何を操作してよいか・悪いかを定義 |
+| 第1層（行動制約） | `AGENTS.md` の記述 | モデルへのルールとして何を操作してよいか・悪いかを定義 |
 | 第2層（技術的強制） | agy ポリシーファイル（TOML） | ツール呼び出し自体をランタイムでブロック。YOLO モードでも有効 |
 
 ### Google Workspace アカウントでの利用 / Using a Google Workspace Account
 
 **現状（技術的な強制チェックはない）/ Current state (no technical enforcement):** agent-deck 自体は、サインインしたアカウントが会社ドメインかどうかを検証するコード（sentinel ファイル・`google_accounts.json` の確認など）を持ちません。`preflight.sh`/`.bat`・`setup.py`・Rust 側のいずれにもそのようなチェックは実装されていません。
 
-「会社の Google Workspace アカウントを使うこと」は `ANTIGRAVITY.md` の **Authentication** セクションにモデルへの指示として記載されているのみです（プロンプトレベルの指示であり、技術的なブロックではありません）。サインイン自体は agy 自身の標準的な Google OAuth フローで、初回起動時にブラウザが自動で開きます。
+「会社の Google Workspace アカウントを使うこと」は `AGENTS.md` の **Authentication** セクションにモデルへの指示として記載されているのみです（プロンプトレベルの指示であり、技術的なブロックではありません）。サインイン自体は agy 自身の標準的な Google OAuth フローで、初回起動時にブラウザが自動で開きます。
 
 個人アカウントでの利用を技術的に防ぎたい場合は、Google Workspace 管理コンソール側で当該 OAuth クライアントの利用をドメイン内ユーザーに制限するなど、agent-deck の外側で対応する必要があります。
 
 **再認証を強制したい場合 / To force re-authentication:** agy 自身のトークンファイル（`~/.gemini/antigravity-cli/antigravity-oauth-token` 等、バージョンにより異なる場合があります）を削除してください。
 
-### ANTIGRAVITY.md の行動制約 / ANTIGRAVITY.md Behavioral Constraints
+### AGENTS.md の行動制約 / AGENTS.md Behavioral Constraints
 
-`ANTIGRAVITY.md` の **File Access Policy** セクションで、`files/`・`tmp/`・OS標準フォルダ以外の操作、システムディレクトリ、認証情報・設定ドットファイル、アプリケーション設定フォルダへの書き込みを禁止しています。
+`AGENTS.md` の **File Access Policy** セクションで、`files/`・`tmp/`・OS標準フォルダ以外の操作、システムディレクトリ、認証情報・設定ドットファイル、アプリケーション設定フォルダへの書き込みを禁止しています。
 
 ### ポリシーファイル / Policy File
 
@@ -735,13 +755,19 @@ agent-deck は **二層のセキュリティ** でエージェントの動作範
 
 ### 既知の制限 / Known Limitations
 
-`list_directory`・`glob`・`grep_search` ツールはパスパターンによるブロック対象外のため、設定ファイルの探索は ANTIGRAVITY.md の行動制約のみに依存します。同様に `files/`・`tmp/` 以外への新規ファイル作成や、Windows のバックスラッシュパスも技術的にはブロックされないケースがあります。
+`list_directory`・`glob`・`grep_search` ツールはパスパターンによるブロック対象外のため、設定ファイルの探索は AGENTS.md の行動制約のみに依存します。同様に `files/`・`tmp/` 以外への新規ファイル作成や、Windows のバックスラッシュパスも技術的にはブロックされないケースがあります。
 
 ---
 
-## 15. MCP サーバー設定 / MCP Server Configuration
+## 15. 外部ツール連携（MCP / CLI）/ External Tool Integrations (MCP / CLI)
 
-agy の `.gemini/settings.json` に `mcpServers` を登録することで、追加ツールを提供します。現在は Playwright MCP（ブラウザ自然言語操作）を設定しています。
+> **既存の Drive/Calendar 直接 API 連携（§6）とは完全に独立・別経路です。** `skills_catalog.py` / `drive_download.py` / `drive_upload.py` / `drive_migrator.py` / `gcalendar.py` などは本セクションのツールを一切経由しない直接 API 呼び出しで、本セクションの設定（有効・無効いずれも）の影響を受けず、デフォルトのまま動作し続けます。以下の `gws` はこれらを置き換えるものではなく、`[gws] enabled`（デフォルト `false`）で明示的に有効化しない限り何も変更されないオプション機能です。
+>
+> **Completely independent of the existing direct-API Drive/Calendar integrations (§6).** `skills_catalog.py` / `drive_download.py` / `drive_upload.py` / `drive_migrator.py` / `gcalendar.py`, etc. call the Google APIs directly and never go through the tools below — they're unaffected either way and keep working by default. `gws` does not replace them; it's an opt-in feature that changes nothing unless `[gws] enabled` (default `false`) is explicitly turned on.
+
+### MCP サーバー / MCP Servers
+
+agy（Gemini CLI）は `~/.gemini/settings.json`（ホームディレクトリ側。プロジェクト側の `.gemini/` は現状 `skills/` のみ）の `mcpServers` を読んで追加ツールを提供します。現在は Playwright MCP（ブラウザ自然言語操作）を手動設定できます:
 
 ```json
 "mcpServers": {
@@ -752,7 +778,51 @@ agy の `.gemini/settings.json` に `mcpServers` を登録することで、追�
 }
 ```
 
-`--browser chrome` はシステムインストール済みの Google Chrome を使用（Playwright 内蔵 Chromium ではない）。別の MCP サーバーを追加する場合は `mcpServers` オブジェクトにエントリを追記してください。
+`--browser chrome` はシステムインストール済みの Google Chrome を使用（Playwright 内蔵 Chromium ではない）。これは完全に手動設定です — `setup.py` はこのエントリを一切管理しません。
+
+### Google Workspace CLI（`gws`）— `setup.py` が自動管理
+
+Gmail・Drive・Calendar・Docs・Sheets をコマンドラインから操作できる [`gws`](https://github.com/googleworkspace/cli) を使います。**Google の公式プロダクトではありません**（README に "This is not an officially supported Google product." と明記されている、`googleworkspace` という GitHub org 名だけの非公式 OSS）。MCP ではなく素の CLI で、構造化 JSON 出力・終了コード設計により agy（シェルコマンドで結果を解釈するタイプのエージェント）とそのまま相性が良く、100以上の同梱 `SKILL.md`（Gemini CLI extension 対応）を持ちます。
+
+`[gws] enabled` トグル一つで `setup.py`（`init`/`config`/`gws` のいずれでも）が以下を自動で行います — 手作業は不要です:
+
+1. `gws` バイナリを [GitHub Releases](https://github.com/googleworkspace/cli/releases) から `app/bin/gws`（Windows は `gws.exe`）にダウンロード（`slide-generator` スキルの `ensure_marp.py` と同じ、バイナリを直接取得する方式 — Node.js/npm 不要）。`app/bin/` は agy の PTY シェルで PATH に追加済みなので、素の `gws` コマンドとして呼び出せます（`src-tauri/src/pty.rs`）。
+2. `[oauth]` のクライアントを、`gws` が要求する標準スキーマで `~/.config/gws/client_secret.json` として登録（`project_id` フィールドは Google 側の検証は無いため `[oauth] project_id` が空ならプレースホルダを使用）。
+
+**前提条件 / Prerequisites**
+
+- §6 の Gmail API / Docs API / Sheets API を、既存の `[oauth]` クライアントと同じ GCP プロジェクトで有効化しておくこと
+- OAuth 同意画面のスコープ・公開ステータス（§6 末尾の注意）を確認しておくこと — 特に Gmail の送信・下書き系スコープは「制限付き」扱いになる
+- OAuth 同意画面の「テストユーザー」に自分のアカウントを追加しておくこと（無いと `gws auth login` が "Access blocked" で失敗する）
+
+**有効化手順 / How to enable**
+
+```toml
+# config.toml
+[gws]
+enabled = true
+```
+
+次回 `setup.py init`（初回起動時のみ実行）または `setup.py config`（毎起動時に実行）で `gws` バイナリと `client_secret.json` が用意されます。**その後、一度だけ手動で**下記を実行してブラウザ認可を完了させてください（既存の Drive/Calendar OAuth フローと同じく、初回同意は自動化できません）:
+
+```bash
+gws auth login -s gmail,drive,calendar,sheets,docs
+```
+
+`-s` で対象サービスを絞らないと、`recommended` プリセット（85以上のスコープ）は未検証アプリの上限（約25スコープ）を超えて失敗します。
+
+`enabled = false` に戻すと、次回起動時に `setup.py` が自動生成した `client_secret.json`（`.agent_deck_managed` マーカー付きのもののみ — `gws auth setup` 等でユーザー自身が用意したものは触りません）を削除します。手動で `python3 python/scripts/setup/setup.py gws` を実行すれば、起動を待たずにその場で反映されます。
+
+**agy からの呼び出し例 / Example calls from agy**
+
+```bash
+gws gmail +triage
+gws calendar +agenda
+gws drive files list --params '{"pageSize": 10}'
+gws sheets +read --spreadsheet SPREADSHEET_ID --range 'Sheet1!A1:C10'
+```
+
+各サービスの `gws <service> --help` は認証なしでもオフラインで確認できます（Discovery ドキュメントはバイナリに同梱）。よく使う操作は `python/skills/google-workspace/SKILL.md`（§2 のスキル形式）にまとめてあります。上流の `skills/gws-*`（100以上）を丸ごと使いたい場合は、admin が個別に `~/.gemini/skills/` へコピーするか `gemini extensions install https://github.com/googleworkspace/cli` を試してください（agy がこのサブコマンドを持つかは未検証 — 本プロジェクトの自動化対象には含めていません）。
 
 ---
 
@@ -803,7 +873,7 @@ with sync_playwright() as p:
     save_csv(data, "result.csv")
 ```
 
-`ANTIGRAVITY.md` の **Browser Automation Skills** セクションで、`run.py` 生成時は共通関数を使うよう明記しています。新しい関数を追加したら `ANTIGRAVITY.md` の関数テーブルも更新してください。
+`AGENTS.md` の **Browser Automation Skills** セクションで、`run.py` 生成時は共通関数を使うよう明記しています。新しい関数を追加したら `AGENTS.md` の関数テーブルも更新してください。
 
 ---
 
@@ -853,4 +923,4 @@ append_rows(sheet, records)
 save_workbook(wb, "~/Downloads/data.xlsx")
 ```
 
-`ANTIGRAVITY.md` の **Excel Automation Skills** セクションに使用ルールを明記。新しい関数を追加したら関数テーブルも更新してください。
+`AGENTS.md` の **Excel Automation Skills** セクションに使用ルールを明記。新しい関数を追加したら関数テーブルも更新してください。
