@@ -10,6 +10,7 @@ const UPDATE_GITHUB_MENU_ID: &str = "update:github";
 const UPDATE_ORG_PROD_MENU_ID: &str = "update:org-prod";
 const UPDATE_ORG_TEST_MENU_ID: &str = "update:org-test";
 const FORCE_KILL_SESSION_MENU_ID: &str = "session:force-kill";
+const VERSION_MENU_ID: &str = "app:version";
 
 // Keep in sync with the theme ids/names in src/utils/themes.ts
 const THEMES: &[(&str, &str)] = &[
@@ -123,6 +124,24 @@ pub fn build_menu(
     match help_index {
         Some(index) => menu.insert(&settings_submenu, index)?,
         None => menu.append(&settings_submenu)?,
+    }
+
+    // Disabled (non-clickable) item just showing the running version -- no
+    // dedicated "About"/version display existed before this, so users
+    // couldn't tell an old install apart from a fresh one without checking
+    // Update menu availability itself (see docs/admin_guide.md §4).
+    let version_item = MenuItem::with_id(
+        handle,
+        VERSION_MENU_ID,
+        format!("Version {}", env!("CARGO_PKG_VERSION")),
+        false,
+        None::<&str>,
+    )?;
+    match menu.get(HELP_SUBMENU_ID).and_then(|item| item.as_submenu().cloned()) {
+        Some(help_submenu) => help_submenu.prepend(&version_item)?,
+        // No Help submenu on this platform -- surface it as its own
+        // top-level entry rather than silently dropping it.
+        None => menu.append(&version_item)?,
     }
 
     handle.manage(ThemeMenuState(Mutex::new(items)));
