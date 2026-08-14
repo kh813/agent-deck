@@ -8,6 +8,7 @@ this repo's existing convention for backup_config.py/drive_upload.py.
 Run:
   pytest python/tests/test_package_release.py -v
 """
+import os
 import subprocess
 import sys
 import zipfile
@@ -47,6 +48,7 @@ def _make_mac_zip(zip_path: Path) -> None:
         # script merges no org-specific counterpart for either anymore.
         zf.writestr("AGENTS.md", "## Startup\n...\n")
         zf.writestr("CLAUDE.md", "@AGENTS.md\n")
+        zf.writestr("Launch agent-deck.command", "#!/bin/bash\nxattr -cr ./agent-deck.app\nopen ./agent-deck.app\n")
 
 
 def _make_win_zip(zip_path: Path) -> None:
@@ -152,6 +154,23 @@ class TestBuildPackage:
 
         with pytest.raises(RuntimeError, match="config.toml"):
             pr.build_package("test", tmp_path, config_toml=tmp_path / "does-not-exist.toml")
+
+    def test_launcher_survives_merge_as_executable(self, tmp_path, fake_org_config, monkeypatch, no_op_signing):
+        """zipfile.extractall() does NOT restore the executable bit even
+        though it's present in the zip's external_attr -- confirmed for
+        real (2026-08-14): a real package_release.py --test run produced a
+        non-executable "Launch agent-deck.command", so double-clicking it
+        failed with a Finder permission error instead of launching."""
+        monkeypatch.setattr(su, "_fetch_release", lambda channel: _fake_release("v0.0.22-rc1"))
+        monkeypatch.setattr(pr, "_download", lambda url, dest: (
+            _make_mac_zip(dest) if "mac.zip" in url else _make_win_zip(dest)
+        ))
+
+        pr.build_package("test", tmp_path, config_toml=fake_org_config)
+
+        launcher = tmp_path / "merged" / "Launch agent-deck.command"
+        assert launcher.exists()
+        assert os.access(launcher, os.X_OK), "launcher lost its executable bit after merge"
 
     def test_zip_has_no_wrapper_folder(self, tmp_path, fake_org_config, monkeypatch, no_op_signing):
         """Matches the public release ZIP's own flat layout, so

@@ -142,6 +142,16 @@ def build_package(channel: str, staging: Path, config_toml: Path = None) -> Path
         with zipfile.ZipFile(zip_path) as zf:
             zf.extractall(merged)
 
+    # zipfile.extractall() does NOT restore the executable bit even though
+    # it's present in the zip's external_attr -- confirmed for real
+    # (2026-08-14): "Launch agent-deck.command" came out of this merge as
+    # non-executable, so double-clicking it failed with a Finder permission
+    # error. Same underlying issue the mac_binary chmod below already
+    # existed to work around.
+    launcher = merged / "Launch agent-deck.command"
+    if launcher.exists():
+        launcher.chmod(0o755)
+
     mac_binary = merged / "agent-deck.app" / "Contents" / "MacOS" / "agent-deck"
     if mac_binary.exists():
         mac_binary.chmod(0o755)
