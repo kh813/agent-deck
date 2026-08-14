@@ -40,6 +40,10 @@ python3 python/skills/google-workspace/scripts/open_gws_auth_login.py
 
 This only opens a new Terminal (macOS) / cmd.exe (Windows) window and runs `gws auth login` in it. **The actual browser consent (choosing an account, clicking Allow) still requires the user's own action** (the agent cannot complete browser consent on their behalf). After running it, tell the user to complete the sign-in in the newly-opened terminal window and browser. See `docs/admin_guide.md` §15 for the admin-side enable steps.
 
+**`gws <service> ...` コマンドがエラーを返しても、いきなり `open_gws_auth_login.py` を実行しないでください。** まず `gws auth status` で本当に未認証かを確認する。認証済み（`"auth_method"` が `"none"` 以外）なのに別のエラーが出る場合は、下記「エラー対応」の表を参照 — 特に「APIが有効化されていない」エラーは認証とは無関係で、`open_gws_auth_login.py` を何度実行しても直りません。
+
+**Do not jump straight to running `open_gws_auth_login.py` just because a `gws <service> ...` command returned an error.** Check `gws auth status` first to confirm it's actually unauthenticated. If it's already authenticated (`"auth_method"` is not `"none"`) but some other error occurs, see the "Error Handling" table below — in particular, a "service not enabled" error is unrelated to authentication, and re-running `open_gws_auth_login.py` will never fix it.
+
 ## よくある操作 / Common Operations
 
 | やりたいこと / Task | コマンド / Command |
@@ -78,6 +82,7 @@ If an error occurs, **do not modify any source files under `python/`** — repor
 |---|---|
 | `gws: command not found` | この機能が無効です。管理者に `docs/admin_guide.md` §15 の有効化手順を確認してもらってください / This feature isn't enabled — ask an admin to follow the enable steps in `docs/admin_guide.md` §15 |
 | `"auth_method": "none"` / `No OAuth client configured` | 上記「事前確認」の通り `open_gws_auth_login.py` を実行してターミナルを開く / Run `open_gws_auth_login.py` per "Preflight Check" above to open a terminal |
+| `SERVICE_DISABLED` / `"<API> has not been used in project ... or it is disabled"`（`PERMISSION_DENIED`、コード403） | **これは認証切れではありません — `open_gws_auth_login.py` を再実行しても直りません。** エラーメッセージに含まれるURL（`https://console.developers.google.com/apis/api/<api>.googleapis.com/overview?project=<ID>`）でそのAPIをGCPコンソール上で有効化する必要があります（管理者権限が必要、`docs/admin_guide.md` §6参照）。ユーザーにそのURLをそのまま伝え、管理者に有効化を依頼するよう案内してください。 / **This is NOT an auth problem — re-running `open_gws_auth_login.py` will not fix it.** The API named in the error must be enabled in GCP Console at the URL included in the error message (`https://console.developers.google.com/apis/api/<api>.googleapis.com/overview?project=<ID>`) — requires admin access (see `docs/admin_guide.md` §6). Give the user that exact URL and tell them to ask an admin to enable it. |
 | `Access blocked`（ログイン時）/ "Access blocked" during login | OAuth 同意画面のテストユーザーにアカウントが追加されていない。管理者に確認を依頼 / The account isn't added as a test user on the OAuth consent screen — ask an admin |
 | スコープ不足のエラー / Scope-related error | `python3 python/skills/google-workspace/scripts/open_gws_auth_login.py <services>`（カンマ区切り）で必要なサービスを指定して再認可 / Re-run `open_gws_auth_login.py <services>` (comma-separated) naming the needed services |
 
