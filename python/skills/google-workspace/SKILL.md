@@ -24,8 +24,21 @@ On first use, or if something seems off, check auth status:
 gws auth status
 ```
 
-`"auth_method": "none"` または `client_config_exists: false` の場合、`gws` は未設定またはブラウザ認可が未完了です。**ユーザー自身にブラウザで `gws auth login` を実行してもらう必要があります**（エージェントが代行してブラウザ認可を完了させることはできません）。管理者向けの有効化手順は `docs/admin_guide.md` §15 を参照。
-If `"auth_method": "none"` or `client_config_exists: false`, `gws` is not configured or hasn't completed browser consent yet. **The user must run `gws auth login` themselves in a browser** (the agent cannot complete browser consent on their behalf). See `docs/admin_guide.md` §15 for the admin-side enable steps.
+`"auth_method": "none"` または `client_config_exists: false` の場合、`gws` は未設定またはブラウザ認可が未完了です。ターミナル操作に不慣れなユーザーのために、以下を実行してターミナルを自動で開いて`gws auth login`を実行してください:
+
+```bash
+python3 python/skills/google-workspace/scripts/open_gws_auth_login.py
+```
+
+これは新しいTerminal（macOS）/ cmd.exe（Windows）ウィンドウを開いて`gws auth login`を実行するだけです。**ブラウザでの実際の同意操作（アカウント選択・許可ボタン）はユーザー自身が行う必要があります**（エージェントが代行してブラウザ認可を完了させることはできません）。実行したら、ユーザーに「新しく開いたターミナルウィンドウとブラウザで、ログイン・許可を完了してください」と伝えてください。管理者向けの有効化手順は `docs/admin_guide.md` §15 を参照。
+
+If `"auth_method": "none"` or `client_config_exists: false`, `gws` is not configured or hasn't completed browser consent yet. For users unfamiliar with a terminal, run this to open one automatically and start `gws auth login` there:
+
+```bash
+python3 python/skills/google-workspace/scripts/open_gws_auth_login.py
+```
+
+This only opens a new Terminal (macOS) / cmd.exe (Windows) window and runs `gws auth login` in it. **The actual browser consent (choosing an account, clicking Allow) still requires the user's own action** (the agent cannot complete browser consent on their behalf). After running it, tell the user to complete the sign-in in the newly-opened terminal window and browser. See `docs/admin_guide.md` §15 for the admin-side enable steps.
 
 ## よくある操作 / Common Operations
 
@@ -64,9 +77,9 @@ If an error occurs, **do not modify any source files under `python/`** — repor
 | エラー / Error | 対処 / Fix |
 |---|---|
 | `gws: command not found` | この機能が無効です。管理者に `docs/admin_guide.md` §15 の有効化手順を確認してもらってください / This feature isn't enabled — ask an admin to follow the enable steps in `docs/admin_guide.md` §15 |
-| `"auth_method": "none"` / `No OAuth client configured` | 上記「事前確認」の通り、ユーザー自身に `gws auth login` を実行してもらう / Have the user run `gws auth login` themselves, per "Preflight Check" above |
+| `"auth_method": "none"` / `No OAuth client configured` | 上記「事前確認」の通り `open_gws_auth_login.py` を実行してターミナルを開く / Run `open_gws_auth_login.py` per "Preflight Check" above to open a terminal |
 | `Access blocked`（ログイン時）/ "Access blocked" during login | OAuth 同意画面のテストユーザーにアカウントが追加されていない。管理者に確認を依頼 / The account isn't added as a test user on the OAuth consent screen — ask an admin |
-| スコープ不足のエラー / Scope-related error | `gws auth login -s <services>` で必要なサービスを指定して再認可 / Re-run `gws auth login -s <services>` naming the needed services |
+| スコープ不足のエラー / Scope-related error | `python3 python/skills/google-workspace/scripts/open_gws_auth_login.py <services>`（カンマ区切り）で必要なサービスを指定して再認可 / Re-run `open_gws_auth_login.py <services>` (comma-separated) naming the needed services |
 
 ## 使用例 / Examples
 
