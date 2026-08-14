@@ -1,6 +1,6 @@
 [package]
 name = "agent-deck"
-version = "0.1.2-rc3"
+version = "0.1.2-rc4"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
