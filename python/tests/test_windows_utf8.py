@@ -182,7 +182,7 @@ class TestReleaseWorkflowPackagesMacLauncher:
     still carries com.apple.quarantine, so macOS App Translocation runs it
     from a random, ephemeral path on every launch -- confirmed for real:
     this breaks agy's per-folder trust memory, since that path differs
-    every time. "Launch agent-deck.command" clears quarantine before
+    every time. "Initial_setup_for_Mac.command" clears quarantine before
     opening the app; if release.yml stops packaging it, or it loses its
     executable bit, double-clicking it does nothing useful instead of
     fixing the problem."""
@@ -190,16 +190,48 @@ class TestReleaseWorkflowPackagesMacLauncher:
     def test_mac_zip_includes_launcher(self):
         src = (ROOT / ".github" / "workflows" / "release.yml").read_text()
         zip_line = next(ln for ln in src.splitlines() if ln.strip().startswith("zip -r agent-deck-mac.zip"))
-        assert "Launch agent-deck.command" in zip_line, (
+        assert "Initial_setup_for_Mac.command" in zip_line, (
             f"macOS zip step no longer packages the launcher: {zip_line!r}"
         )
 
+    def test_windows_zip_does_not_include_launcher(self):
+        """It's macOS-only -- the Windows-only GitHub zip never needs it
+        (see TestWindowsCleansUpMacLauncher below for the org-Drive merge
+        case, where it CAN still end up in a Windows install)."""
+        src = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+        zip_line = next(ln for ln in src.splitlines() if "Compress-Archive" in ln)
+        assert "Initial_setup_for_Mac" not in zip_line, (
+            f"Windows zip step now packages the macOS-only launcher: {zip_line!r}"
+        )
+
     def test_launcher_is_executable(self):
-        launcher = ROOT / "Launch agent-deck.command"
+        launcher = ROOT / "Initial_setup_for_Mac.command"
         assert launcher.exists()
-        assert os.access(launcher, os.X_OK), "Launch agent-deck.command lost its executable bit"
+        assert os.access(launcher, os.X_OK), "Initial_setup_for_Mac.command lost its executable bit"
 
     def test_launcher_clears_quarantine_before_opening(self):
-        text = (ROOT / "Launch agent-deck.command").read_text()
+        text = (ROOT / "Initial_setup_for_Mac.command").read_text()
         assert "xattr -cr" in text
         assert "open ./agent-deck.app" in text
+
+    def test_launcher_relocates_itself_into_tmp_after_running(self):
+        """One-time use: once quarantine is cleared, agent-deck.app can be
+        double-clicked directly from then on, so this script moves itself
+        out of the main folder instead of lingering there forever."""
+        text = (ROOT / "Initial_setup_for_Mac.command").read_text()
+        assert 'mv -f -- "$0" "tmp/' in text
+
+
+class TestWindowsCleansUpMacLauncher:
+    """Regression guard (2026-08-14): package_release.py's org-Drive
+    distribution (see docs/admin_guide.md §7c) merges the mac and Windows
+    GitHub zips into one flat tree, so Initial_setup_for_Mac.command (only
+    ever added to the mac zip) rides along into Windows installs that pull
+    that combined zip too, even though it's useless there. preflight.bat
+    runs on every Windows launch, so it's the natural place to clean this
+    up (confirmed for real this scenario is possible)."""
+
+    def test_preflight_bat_deletes_the_launcher(self):
+        src = (ROOT / "preflight.bat").read_bytes().decode("ascii")
+        assert "Initial_setup_for_Mac.command" in src
+        assert "del " in src

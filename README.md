@@ -189,11 +189,11 @@ OS ごとに異なるコマンドを実行したい場合は、`pre_launch_macos
 
 ### macOS (Apple Silicon 向け)
 1. GitHubの Releases から `agent-deck-mac.zip` をダウンロードします。
-2. ZIPを展開すると、`agent-deck.app` と同じ階層に `Launch agent-deck.command` が入っています。**通常はこれをダブルクリックして起動してください**（初回はFinderの警告が出るので「開く」を選択）。中身は `xattr -cr` でmacOSの隔離属性（quarantine）を解除してから `agent-deck.app` を開くだけの単純なスクリプトです。
+2. ZIPを展開すると、`agent-deck.app` と同じ階層に `Initial_setup_for_Mac.command` が入っています。**初回だけこれをダブルクリックして起動してください**（Finderの警告が出るので「開く」を選択）。中身は `xattr -cr` でmacOSの隔離属性（quarantine）を解除してから `agent-deck.app` を開くだけの単純なスクリプトで、実行後は自動的に `tmp/` フォルダへ移動します（一度実行すれば隔離属性は解除済みになるので、2回目以降は `agent-deck.app` を直接ダブルクリックするだけで構いません）。
 
-   > **なぜこれが必要か**: quarantine属性が付いたまま `agent-deck.app` を直接ダブルクリックすると、macOSの「App Translocation」機能により、起動のたびに `/private/var/folders/.../AppTranslocation/<ランダムなID>/d/` という**毎回変わる場所**からアプリが実行されます。agyの「このフォルダを信頼する」確認は場所（パス）ごとに記憶されるため、パスが毎回変わると確認ダイアログが**何度でも**再表示されてしまいます。`Launch agent-deck.command` で事前に隔離属性を解除しておけば、この問題は起きません。
+   > **なぜこれが必要か**: quarantine属性が付いたまま `agent-deck.app` を直接ダブルクリックすると、macOSの「App Translocation」機能により、起動のたびに `/private/var/folders/.../AppTranslocation/<ランダムなID>/d/` という**毎回変わる場所**からアプリが実行されます。agyの「このフォルダを信頼する」確認は場所（パス）ごとに記憶されるため、パスが毎回変わると確認ダイアログが**何度でも**再表示されてしまいます。`Initial_setup_for_Mac.command` で事前に隔離属性を解除しておけば、この問題は起きません。
 
-   `Launch agent-deck.command` を使わず `agent-deck.app` を直接開きたい場合は、事前に手動で隔離属性を解除してください。方法は以下のどちらでも構いません。
+   `Initial_setup_for_Mac.command` を使わず `agent-deck.app` を直接開きたい場合は、事前に手動で隔離属性を解除してください。方法は以下のどちらでも構いません。
 
    **方法A: ターミナルを使わず「システム設定」から許可する**
 
@@ -208,7 +208,7 @@ OS ごとに異なるコマンドを実行したい場合は、`pre_launch_macos
    6. Macのログインパスワードの入力や Touch ID を求められた場合は入力・認証します。
    7. 再度 `agent-deck.app` をダブルクリックすると、もう一度確認ダイアログが表示されます。今度は「開く」ボタンがあるので、それをクリックすればアプリが起動します。
 
-   ※ この方法は隔離属性そのものは解除しないため、App Translocationは起きたままです（上記の「このフォルダを信頼する」再確認の問題は解決しません）。この問題も解決したい場合は `Launch agent-deck.command` を使うか、方法Bで隔離属性を解除してください。
+   ※ この方法は隔離属性そのものは解除しないため、App Translocationは起きたままです（上記の「このフォルダを信頼する」再確認の問題は解決しません）。この問題も解決したい場合は `Initial_setup_for_Mac.command` を使うか、方法Bで隔離属性を解除してください。
 
    **方法B: ターミナルを使う（慣れている方向け）**
    ```bash

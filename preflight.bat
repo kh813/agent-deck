@@ -23,6 +23,14 @@ rem statements instead of a multi-line ( ... ) block. Do not reintroduce
 rem either pattern without testing the FULL script on a real Windows
 rem machine.
 cd /d "%~dp0"
+rem Initial_setup_for_Mac.command is macOS-only (clears quarantine before
+rem first launch there) and is never added to the Windows-only GitHub zip,
+rem but package_release.py's org-Drive distribution merges BOTH platform
+rem zips into one flat tree, so a Windows install pulling that combined
+rem zip ends up with this useless file sitting in its folder. Delete it
+rem here since preflight.bat already runs on every Windows launch anyway.
+if exist "Initial_setup_for_Mac.command" del /f /q "Initial_setup_for_Mac.command"
+
 rem Tells setup.py's _prompt() helper to skip straight to an empty answer
 rem instead of trying to detect non-interactivity itself -- confirmed for
 rem real that relying on sys.stdin.isatty() alone still hung indefinitely
