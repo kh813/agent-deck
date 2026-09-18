@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { resolvePromptResponseInput } from "../lib/promptResponse";
 import { subscribeToTauriEvent } from "../lib/tauriListener";
+import { isTauri, webClient } from "../lib/webClient";
 
 export interface PtyPrompt {
   prompt_type: "confirm" | "path" | "login";
@@ -68,11 +69,7 @@ export function useChatSession({
 
   // Start PTY Session. overrideCommand/overrideArgs let a caller start with
   // a command/args pair that hasn't propagated into the `command`/
-  // `defaultArgs` props yet -- e.g. switching engines updates those via a
-  // state setter in a sibling effect, which doesn't take effect until next
-  // render, so a same-pass startSession() call would otherwise launch with
-  // the previous engine's command (confirmed for real: switching engines
-  // right after Stop silently relaunched the old one).
+  // `defaultArgs` props yet
   const startSession = useCallback(
     async (targetCwd: string = cwdRef.current, overrideCommand?: string, overrideArgs?: string[]) => {
       const isJa = navigator.language.startsWith("ja");
@@ -84,15 +81,23 @@ export function useChatSession({
           : `Starting session in directory: ${targetCwd || "default"}`
       );
 
+      if (!isTauri()) {
+        const size = getTerminalSize?.();
+        webClient.sendAction("start_session", {
+          command: overrideCommand ?? command,
+          args: overrideArgs ?? defaultArgs,
+          cwd: targetCwd || null,
+          rows: size?.rows,
+          cols: size?.cols,
+        });
+        setStatus("running");
+        setCwd(targetCwd);
+        return;
+      }
+
       try {
         if (preLaunchCommand) {
-          // Config-driven pre-launch check (AppConfig.pre_launch_command),
-          // e.g. a parent project's own setup/update/auth checks. Streamed
-          // live into the same terminal as the PTY session itself (via
-          // onRawOutput) since a first-run check can take several minutes
-          // (portable runtime download, venv creation, package installs) —
-          // a static "running checks..." message with no visible progress
-          // would read as a hang.
+          // Config-driven pre-launch check (AppConfig.pre_launch_command)
           showStatusMessage(
             isJa ? "起動前処理を実行しています..." : "Running pre-launch checks...",
             false
@@ -121,9 +126,6 @@ export function useChatSession({
               args: preLaunchArgs,
             });
 
-            // First-run setup (portable Python/venv/deps) can take several
-            // minutes; fail closed (treat as failure) if it never reports
-            // back at all rather than waiting forever.
             const timeoutMs = 10 * 60 * 1000;
             const timeoutPromise = new Promise<boolean>((resolve) =>
               setTimeout(() => resolve(false), timeoutMs)
@@ -153,8 +155,6 @@ export function useChatSession({
               );
             }
           } catch (preLaunchErr: any) {
-            // invoke() itself rejected (e.g. the configured command doesn't
-            // exist at all) — treat the same as a failed check.
             if (preLaunchRequired) {
               setStatus("error");
               showStatusMessage(
@@ -177,7 +177,6 @@ export function useChatSession({
           }
         } else {
           // Fallback (Task 9-5 & 9-6): check and auto-rebuild a `skill` folder
-          // if no pre_launch_command is configured for this project.
           const hasSkill = await invoke<boolean>("check_skill_folder", { cwd: targetCwd || "" });
           if (hasSkill) {
             showStatusMessage(
@@ -232,6 +231,11 @@ export function useChatSession({
   // Stop PTY Session
   const stopSession = useCallback(async () => {
     const isJa = navigator.language.startsWith("ja");
+    if (!isTauri()) {
+      webClient.sendAction("stop_session");
+      setStatus("idle");
+      return;
+    }
     try {
       await invoke("stop_pty");
       setStatus("idle");
@@ -246,6 +250,10 @@ export function useChatSession({
   // Send input query to PTY
   const sendMessage = useCallback(async (text: string) => {
     if (statusRef.current !== "running") return;
+    if (!isTauri()) {
+      webClient.sendAction("write_pty", { input: text + "\r" });
+      return;
+    }
     try {
       await invoke("write_to_pty", { input: text + "\r" });
     } catch (e: any) {
@@ -257,11 +265,13 @@ export function useChatSession({
   const respondToPrompt = useCallback(async (responseText: string) => {
     if (statusRef.current !== "running") return;
 
-    // Optimistically clear right away so the panel disappears the moment the
-    // user clicks, instead of waiting for the next PTY redraw.
     setActivePrompt(null);
-
     const inputToSend = resolvePromptResponseInput(responseText);
+
+    if (!isTauri()) {
+      webClient.sendAction("respond_prompt", { input: inputToSend });
+      return;
+    }
 
     try {
       await invoke("write_to_pty", { input: inputToSend });
@@ -281,25 +291,49 @@ export function useChatSession({
 
   // Listen to PTY outputs, status changes, and prompt detections
   useEffect(() => {
-    // Raw bytes (not a decoded string - see PtyOutputPayload in pty.rs) go
-    // straight to the terminal view. It's a real terminal emulator with its
-    // own UTF-8 decoder that correctly buffers a multi-byte character split
-    // across separate write() calls, so it resolves cursor movement,
-    // redraws, and chunk-boundary encoding all on its own.
+    if (!isTauri()) {
+      const offOutput = webClient.on("output", (data: number[]) => {
+        onRawOutput?.(new Uint8Array(data));
+      });
+      const offPreLaunch = webClient.on("pre_launch_output", (data: number[]) => {
+        onRawOutput?.(new Uint8Array(data));
+      });
+      const offPrompt = webClient.on("prompt", (prompt: PtyPrompt) => {
+        setActivePrompt(prompt);
+      });
+      const offStatus = webClient.on("status", (s: string) => {
+        if (s === "terminated" || s === "idle") {
+          setStatus("idle");
+        } else if (s === "running") {
+          setStatus("running");
+        }
+      });
+      const offCwd = webClient.on("cwd_changed", (newCwd: string) => {
+        setCwd(newCwd);
+      });
+
+      return () => {
+        offOutput();
+        offPreLaunch();
+        offPrompt();
+        offStatus();
+        offCwd();
+      };
+    }
+
+    // Tauri Desktop Listeners
     const unsubOutput = subscribeToTauriEvent(
       listen<{ data: number[] }>("pty-output", (event) => {
         onRawOutput?.(new Uint8Array(event.payload.data));
       })
     );
 
-    // PTY interactive prompt detection receiver
     const unsubPrompt = subscribeToTauriEvent(
       listen<PtyPrompt>("pty-prompt", (event) => {
         setActivePrompt(event.payload);
       })
     );
 
-    // PTY status receiver
     const unsubStatus = subscribeToTauriEvent(
       listen<string>("pty-status", (event) => {
         if (event.payload === "terminated") {

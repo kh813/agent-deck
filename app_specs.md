@@ -1,5 +1,11 @@
 ご提示いただいたビジョンに基づき、クロスコンパイル可能な各言語（Rust, Go, Zig）のフレームワークを比較し、最も連携とPty（疑似ターミナル）制御がスムーズなRust + Tauriを採用した基本仕様書に更新しました。
 
+**【v13 更新概要：Web UI リモートアクセス機能（HTTPS/WSS、自己署名SSL、パスワード必須認証）】**
+- **背景と目的**: iPadやLAN内の別端末からブラウザ経由でデスクトップアプリ（`agent-deck`）にアクセスし、ローカルにインストールされた `agy` 等をリモート操作できるようにする。
+- **SSL/TLS必須（HTTPS/WSS）**: 通信の盗聴・改ざんを防ぎ、PWAやWeb Crypto等の最新ブラウザ機能が安全に動作するよう、HTTPSおよびWSS通信を必須とする。証明書はローカルで自動生成される自己署名SSL証明書を使用。
+- **パスワード認証の必須化**: Web UI有効化時はパスワード設定を必須（空文字・未設定の場合はサーバー起動を拒否）。Webブラウザ初回接続時にパスワードログイン画面を表示し、トークン認証を通した上でWebSocket（WSS）接続とPTY操作を許可する。
+- **リアルタイム双方向ミラーリング**: デスクトップアプリとWebブラウザで同一のPTYセッションをリアルタイム共有（ブロードキャスト）。Webブラウザ側のxterm.jsからもCLIへのキー入力・プロンプト応答・セッション制御が可能。
+
 **【v12 更新概要：PTY出力の動的バッファリング／バッチングによる描画性能向上】**
 - **問題**: 大量のCLI出力（ログ出力やビルド実行時）が発生した際、xterm.jsの画面描画がカクついたり、アプリの操作応答性が一時的に著しく低下（フリーズ）することがあった。
 - **調査**: TauriのIPC（プロセス間通信）はJSONシリアライズを介したメッセージパッシングで行われる。バックエンドのPTY読み込み（1024バイト単位）が超高速に繰り返されると、超高頻度のイベント通信がフロントエンドのJSメインスレッドを占有し、ブラウザの描画フレームレート（リフレッシュレート）が低下していた。
@@ -273,30 +279,79 @@
   * `skill` フォルダが検出された場合、Ptyでの本セッション（対話型シェル）を起動する前に、バックエンドで自動的に `agy build` 相当のスキルリビルドコマンドを実行します。
   * このリビルドプロセスはバックグラウンドプロセスで実行され、ビルド完了を検知した後に、本セッションの対話プロセスを立ち上げます。これにより、ユーザーは常に最新のカスタムスキルが適用されたエージェントと会話を開始することができます。
 
+### 5.8 Web UI リモートアクセス機能（新設）
+
+**課題**: `agy` や `claude` などのCLIはローカル環境にインストールされて動作するため、同一LAN内の別端末（iPadやスマートフォン、サブPC等）から外出先や離れた場所で操作したい場合、デスクトップ画面を直接見に行く必要があった。
+
+* **HTTPS/WSS暗号化通信（自己署名SSLの自動生成）**:
+  * セキュリティと最新Webブラウザ機能（PWA、Clipboard API、Web Crypto等）を担保するため、HTTPではなく**HTTPS（ポート例: `8443`）およびWSS（Secure WebSocket）**による暗号化通信を必須とする。
+  * 証明書が存在しない場合、Rustバックエンド（`rcgen` 等）で初回起動時に自己署名SSL証明書（SANにローカルIPおよび `localhost` を含む）を自動生成してローカルストレージ/設定領域に安全に保存・再利用する。
+  * ユーザーが自前の正規SSL証明書（Let's Encryptや社内CA等）を指定できる拡張設定（`cert_path`, `key_path`）も提供する。
+
+* **セキュリティ・パスワード認証の必須化**:
+  * ネットワーク上に開放されるため、Web UIを有効（ON）にする場合は**パスワード設定を必須**とする（パスワード未設定または空の場合はWeb UIサーバーの起動をブロックする）。
+  * Webブラウザからアクセス時、未認証クライアントにはログイン画面を表示し、パスワード検証に成功した場合にセッション認証トークン（Cookie または Authorizationヘッダー）を発行。
+  * WebSocket接続ハンドシェイク時にもこのトークンを検証し、未認証の不正な接続を即時遮断する。
+
+* **リアルタイム双方向ミラーリング（WebSocketブリッジ）**:
+  * デスクトップアプリの画面とWebブラウザの間で、同一のPTY対話セッションをリアルタイム共有する。
+  * バックエンドから出力されるPTYデータ（ANSI生バイト列）はデスクトップ側（Tauri IPC）とWeb UI側（WebSocket接続中の全認証クライアント）へ同時にブロードキャストされる。
+  * Webブラウザ側（iPad等）のxterm.jsからのキー入力やプロンプトボタン押下、コマンド送信もWebSocket経由でPTY入力ストリームに反映される。
+
+* **Web UIサーバーの制御UI**:
+  * アプリ上部ヘッダーまたは設定画面から、Web UIサーバーの稼働状態（停止中／稼働中）、ローカルアクセス用URL（例: `https://192.168.1.10:8443`）、およびQRコード表示（iPadですぐ読み取れる導線）を提供。
+  * ワンクリックでサーバーの起動／停止を切り替え可能。
+
 ---
 
 ## 6. データフロー（シーケンス）
 
+### 6.1 デスクトップローカル操作時
 ```mermaid
 sequenceDiagram
     autonumber
     actor User as ユーザー (GUI)
     participant FE as フロントエンド (Chat UI)
     participant BE as Rust バックエンド (Tauri)
-    participant CLI as AI CLI (Claude Code 等)
+    participant CLI as AI CLI (Antigravity CLI 等)
 
     User->>FE: 作業ディレクトリ選択 (初回のみ、以降は変更時)
     FE->>BE: Tauri dialog経由でディレクトリパス取得
     User->>FE: メッセージ入力 + 送信ボタンクリック
-    FE->>BE: Tauri Command経由で文字列送信 (例: "Rustの関数を作って")
+    FE->>BE: Tauri Command経由で文字列送信
     BE->>CLI: 指定cwdでPtyプロセスを起動 (初回のみ) / Ptyの入力ストリーム経由でCLIへ書き込み
     Note over CLI: AIが処理を実行
     loop リアルタイム出力
         CLI-->>BE: Ptyの出力ストリーム経由でバッファ出力 (ANSI/テキスト)
         BE-->>FE: Tauri Event経由で文字データをプッシュ
-        FE->>FE: xterm.jsターミナルへ生バイト列をそのまま書き込み描画（v8：解析・整形なし）
+        FE->>FE: xterm.jsターミナルへ生バイト列をそのまま書き込み描画
     end
+```
 
+### 6.2 Web UI (iPad / リモート端末) 操作時
+```mermaid
+sequenceDiagram
+    autonumber
+    actor RemoteUser as リモートユーザー (iPad Browser)
+    participant WebFE as Webクライアント (Vite/xterm.js)
+    participant Server as Web UI サーバー (Rust / HTTPS+WSS)
+    participant BE as コアPTY管理 (Rust)
+    participant CLI as AI CLI (Antigravity CLI 等)
+
+    RemoteUser->>WebFE: HTTPSアクセス (例: https://192.168.x.x:8443)
+    WebFE->>Server: ログイン認証要求 (パスワード送信)
+    Server-->>WebFE: 認証成功 (トークン発行)
+    WebFE->>Server: WSS (WebSocket) 接続確立 (トークン検証)
+    RemoteUser->>WebFE: メッセージ入力またはターミナルキー入力
+    WebFE->>Server: WebSocket経由で入力送信
+    Server->>BE: Pty入力ストリームへ書き込み
+    BE->>CLI: CLIへ転送
+    loop リアルタイム出力ブロードキャスト
+        CLI-->>BE: Pty出力
+        BE-->>Server: 出力データ受取
+        Server-->>WebFE: WebSocket経由で全クライアントへバイナリプッシュ
+        WebFE->>WebFE: iPad上のxterm.jsへ描画
+    end
 ```
 
 ---
@@ -307,3 +362,9 @@ sequenceDiagram
 * **マルチプラットフォーム対応の自動ビルド(CI/CD)**: GitHub Actionsを利用し、Windows用の `.exe`/`.msi` と Mac用の `.app`/`.dmg` を自動的にコンパイル・リリースする環境の構築。
   * **トリガー条件**: 無駄なCI/CDリソース消費や不要なリリースドラフトの作成を防ぐため、通常のコミットや `push` ではコンパイル・リリース処理を実行しない。`v*` などのバージョンタグがプッシュされた場合、またはバージョン番号が更新された場合のみビルド＆リリースワークフローをトリガーする。
 * **CLI仕様変更への追従**: Antigravity CLI・Claude Code・Codex CLIはいずれも活発に開発されており、出力フォーマットや認証フロー、インストールコマンドが変更される可能性が高い。5.4で定義した`install_commands.json`のような「外部仕様への依存箇所」は疎結合に保ち、定期的な棚卸しタスクをリリース運用に組み込むことを推奨する。
+* **Web UIのOAuth/IdP認証連携（Google/Microsoftアカウント認証）**:
+  * **目的・メリット**: `agy`（Google）や `claude` / `codex`（Microsoft / GitHub / Anthropic等）の利用アカウントと紐づけることで、Webブラウザからアクセスするユーザーがホスト側で実行中のAI CLIアカウント所有者と同一であることを担保し、実質的な多要素認証（MFA/2FA）およびゼロトラスト的な本人確認を実現する。
+  * **アーキテクチャ検討**:
+    * 許可されたメールアドレス（例: `allowed_emails: ["user@gmail.com"]`）のホワイトリスト設定。
+    * OAuth 2.0 / OIDC（OpenID Connect）の Authorization Code Flow + PKCE をローカルWebサーバーでハンドリング、またはOAuth Proxy / Cloudflare Access / Tailscale Funnel 等のゼロトラストプロキシとの連携考慮。
+    * ローカルIP（LAN）環境でのOAuth Redirect URI制限（`https://192.168.x.x`）への対処（カスタムドメイン/mDNS/Tailscale URLの活用など）。

@@ -1,6 +1,6 @@
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,10 +10,12 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::Mutex;
 
+#[derive(Clone)]
 pub struct PtyState {
     pub session: Arc<Mutex<Option<Box<dyn portable_pty::MasterPty + Send>>>>,
     pub writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
     pub child: Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>,
+    pub broadcast_tx: Arc<tokio::sync::RwLock<Option<tokio::sync::broadcast::Sender<crate::web_server::WsServerEvent>>>>,
 }
 
 impl Default for PtyState {
@@ -22,6 +24,7 @@ impl Default for PtyState {
             session: Arc::new(Mutex::new(None)),
             writer: Arc::new(Mutex::new(None)),
             child: Arc::new(Mutex::new(None)),
+            broadcast_tx: Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
 }
@@ -61,7 +64,7 @@ struct PtyOutputPayload {
     data: Vec<u8>,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PtyPromptPayload {
     pub prompt_type: String, // "confirm" | "path" | "login"
     pub message: String,
@@ -286,8 +289,15 @@ enum PtyMessage {
     Error,
 }
 
-fn emit_output<R: tauri::Runtime>(app: &tauri::AppHandle<R>, data: &[u8]) {
+fn emit_output<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    broadcast_tx: &Option<tokio::sync::broadcast::Sender<crate::web_server::WsServerEvent>>,
+    data: &[u8],
+) {
     let _ = app.emit("pty-output", PtyOutputPayload { data: data.to_vec() });
+    if let Some(ref tx) = broadcast_tx {
+        let _ = tx.send(crate::web_server::WsServerEvent::Output(data.to_vec()));
+    }
 
     // Lossy-decoding here is fine even if it mangles a
     // boundary-spanning character: this text is only used
@@ -306,7 +316,10 @@ fn emit_output<R: tauri::Runtime>(app: &tauri::AppHandle<R>, data: &[u8]) {
             }
         }
         
-        let _ = app.emit("pty-prompt", prompt);
+        let _ = app.emit("pty-prompt", prompt.clone());
+        if let Some(ref tx) = broadcast_tx {
+            let _ = tx.send(crate::web_server::WsServerEvent::Prompt(prompt));
+        }
     }
 }
 
@@ -414,6 +427,7 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
     debug_log_marker(&format!("start_pty rows={rows} cols={cols}"));
 
     let app_clone = app.clone();
+    let broadcast_tx = state.broadcast_tx.read().await.clone();
     let (tx, mut rx) = tokio::sync::mpsc::channel::<PtyMessage>(1024);
 
     // Spawn PTY reader thread that pushes read chunks to the channel
@@ -459,23 +473,29 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
                     // Flush immediately if buffer size is large (>= 16 KB)
                     // or if the flush interval has elapsed.
                     if accumulated.len() >= 16384 || last_flush.elapsed() >= flush_interval {
-                        emit_output(&app_clone, &accumulated);
+                        emit_output(&app_clone, &broadcast_tx, &accumulated);
                         accumulated.clear();
                         last_flush = std::time::Instant::now();
                     }
                 }
                 Ok(Some(PtyMessage::Terminated)) => {
                     if !accumulated.is_empty() {
-                        emit_output(&app_clone, &accumulated);
+                        emit_output(&app_clone, &broadcast_tx, &accumulated);
                     }
                     let _ = app_clone.emit("pty-status", "terminated");
+                    if let Some(ref tx) = broadcast_tx {
+                        let _ = tx.send(crate::web_server::WsServerEvent::Status("terminated".to_string()));
+                    }
                     break;
                 }
                 Ok(Some(PtyMessage::Error)) => {
                     if !accumulated.is_empty() {
-                        emit_output(&app_clone, &accumulated);
+                        emit_output(&app_clone, &broadcast_tx, &accumulated);
                     }
                     let _ = app_clone.emit("pty-status", "error");
+                    if let Some(ref tx) = broadcast_tx {
+                        let _ = tx.send(crate::web_server::WsServerEvent::Status("error".to_string()));
+                    }
                     break;
                 }
                 Ok(None) => {
@@ -484,7 +504,7 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
                 Err(_) => {
                     // Timeout (5ms idle). Flush immediately to keep interactive inputs responsive.
                     if !accumulated.is_empty() {
-                        emit_output(&app_clone, &accumulated);
+                        emit_output(&app_clone, &broadcast_tx, &accumulated);
                         accumulated.clear();
                         last_flush = std::time::Instant::now();
                     }

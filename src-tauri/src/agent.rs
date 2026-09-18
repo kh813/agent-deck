@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::pty::{get_default_cwd, resolve_app_bundle_dir, resolve_project_root};
+use crate::pty::{get_default_cwd, resolve_app_bundle_dir, resolve_project_root, PtyState};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -598,15 +598,17 @@ pub async fn start_pre_launch_command<R: tauri::Runtime>(
     cwd: String,
     command: String,
     args: Vec<String>,
+    state: tauri::State<'_, PtyState>,
 ) -> Result<(), String> {
-    start_pre_launch_command_internal(app, cwd, command, args)
+    start_pre_launch_command_internal(app, cwd, command, args, Some(&state))
 }
 
-fn start_pre_launch_command_internal<R: tauri::Runtime>(
+pub fn start_pre_launch_command_internal<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     cwd: String,
     command: String,
     args: Vec<String>,
+    pty_state: Option<&PtyState>,
 ) -> Result<(), String> {
     if command.is_empty() {
         return Err("pre_launch_command is empty".to_string());
@@ -678,6 +680,7 @@ fn start_pre_launch_command_internal<R: tauri::Runtime>(
     .flatten()
     {
         let app_clone = app.clone();
+        let broadcast_tx = pty_state.as_ref().and_then(|s| s.broadcast_tx.try_read().ok().and_then(|g| g.clone()));
         thread::spawn(move || {
             let mut reader = pipe;
             let mut buf = [0u8; 1024];
@@ -689,17 +692,24 @@ fn start_pre_launch_command_internal<R: tauri::Runtime>(
                         let data = normalize_lf_to_crlf(&buf[..n], &mut last_was_cr);
                         let _ = app_clone.emit(
                             "pre-launch-output",
-                            PreLaunchOutputPayload { data },
+                            PreLaunchOutputPayload { data: data.clone() },
                         );
+                        if let Some(ref tx) = broadcast_tx {
+                            let _ = tx.send(crate::web_server::WsServerEvent::PreLaunchOutput(data));
+                        }
                     }
                 }
             }
         });
     }
 
+    let broadcast_tx = pty_state.as_ref().and_then(|s| s.broadcast_tx.try_read().ok().and_then(|g| g.clone()));
     thread::spawn(move || {
         let success = child.wait().map(|s| s.success()).unwrap_or(false);
         let _ = app.emit("pre-launch-status", PreLaunchStatusPayload { success });
+        if let Some(ref tx) = broadcast_tx {
+            let _ = tx.send(crate::web_server::WsServerEvent::PreLaunchStatus(success));
+        }
     });
 
     Ok(())
@@ -878,7 +888,7 @@ mod tests {
             }
         });
 
-        start_pre_launch_command_internal(app.clone(), cwd, command, args).unwrap();
+        start_pre_launch_command_internal(app.clone(), cwd, command, args, None).unwrap();
 
         let mut success = None;
         let mut output = String::new();
@@ -947,7 +957,7 @@ mod tests {
     fn test_start_pre_launch_command_empty_command_is_error() {
         use tauri::test::mock_app;
         let app = mock_app();
-        let result = start_pre_launch_command_internal(app.handle().clone(), String::new(), String::new(), vec![]);
+        let result = start_pre_launch_command_internal(app.handle().clone(), String::new(), String::new(), vec![], None);
         assert!(result.is_err());
     }
 

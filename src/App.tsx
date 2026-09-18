@@ -8,6 +8,7 @@ import { TerminalView } from "./components/TerminalView";
 import { subscribeToTauriEvent } from "./lib/tauriListener";
 import { themes } from "./utils/themes";
 import { Lang, translations } from "./utils/i18n";
+import { isTauri, webClient } from "./lib/webClient";
 import "./App.css";
 
 interface AgentStatus {
@@ -171,6 +172,46 @@ function App() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [isSelfUpdating, setIsSelfUpdating] = useState(false);
   const [isInstallTerminalOpen, setIsInstallTerminalOpen] = useState(false);
+
+  // Web UI Server State (Desktop & Browser)
+  const [webServerStatus, setWebServerStatus] = useState<{
+    running: boolean;
+    port: number;
+    local_ip?: string | null;
+    url?: string | null;
+    qr_code_base64?: string | null;
+    password_set: boolean;
+  }>({
+    running: false,
+    port: 8443,
+    local_ip: null,
+    url: null,
+    qr_code_base64: null,
+    password_set: false,
+  });
+  const [isWebUiModalOpen, setIsWebUiModalOpen] = useState(false);
+  const [webUiPasswordInput, setWebUiPasswordInput] = useState(() => {
+    return localStorage.getItem("agent_deck_web_password") || "";
+  });
+  const [webUiPortInput, setWebUiPortInput] = useState<number>(8443);
+  const [isWebLoginRequired, setIsWebLoginRequired] = useState(false);
+  const [browserLoginPassword, setBrowserLoginPassword] = useState("");
+  const [browserLoginError, setBrowserLoginError] = useState(false);
+
+  // Custom SSL Configuration State
+  const [sslConfig, setSslConfig] = useState<{
+    use_custom_ssl: boolean;
+    custom_cert_filename?: string | null;
+    custom_key_filename?: string | null;
+  }>({
+    use_custom_ssl: false,
+    custom_cert_filename: null,
+    custom_key_filename: null,
+  });
+  const [selectedCertPath, setSelectedCertPath] = useState("");
+  const [selectedKeyPath, setSelectedKeyPath] = useState("");
+  const [sslImportError, setSslImportError] = useState<string | null>(null);
+  const [sslImportSuccessMsg, setSslImportSuccessMsg] = useState<string | null>(null);
 
   const terminalRef = useRef<Terminal | null>(null);
   const terminalSizeRef = useRef<{ rows: number; cols: number } | null>(null);
@@ -576,10 +617,6 @@ function App() {
     }
   };
 
-  // Trigger agent-deck's own self-update via PTY, same reused-terminal
-  // pattern as handleUpdateAgy above. self_update.py resolves its own
-  // project root from its file path, so no explicit cwd is needed here --
-  // start_pty falls back to the project root on its own.
   const handleUpdateSelf = async () => {
     try {
       setIsSelfUpdating(true);
@@ -601,8 +638,165 @@ function App() {
     }
   };
 
+  // Check Web UI server status on desktop
+  const refreshWebServerStatus = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const status = await invoke<any>("get_web_server_status");
+      setWebServerStatus(status);
+    } catch (e) {
+      console.error("Failed to get web server status:", e);
+    }
+  }, []);
+
+  const loadSslConfig = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const cfg = await invoke<any>("get_ssl_configuration");
+      setSslConfig(cfg);
+    } catch (e) {
+      console.error("Failed to load SSL config:", e);
+    }
+  }, []);
+
+  const handleSelectCertFile = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        title: t("sslSelectCert"),
+        filters: [{ name: "Certificate", extensions: ["pem", "crt", "cer"] }],
+      });
+      if (selected && typeof selected === "string") {
+        setSelectedCertPath(selected);
+      }
+    } catch (e) {
+      console.error("Failed to select cert file:", e);
+    }
+  };
+
+  const handleSelectKeyFile = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        title: t("sslSelectKey"),
+        filters: [{ name: "Private Key", extensions: ["key", "pem"] }],
+      });
+      if (selected && typeof selected === "string") {
+        setSelectedKeyPath(selected);
+      }
+    } catch (e) {
+      console.error("Failed to select key file:", e);
+    }
+  };
+
+  const handleImportSsl = async () => {
+    setSslImportError(null);
+    setSslImportSuccessMsg(null);
+    if (!selectedCertPath || !selectedKeyPath) {
+      setSslImportError("Please select both certificate and private key files.");
+      return;
+    }
+    try {
+      const updated = await invoke<any>("import_ssl_certificate", {
+        certPath: selectedCertPath,
+        keyPath: selectedKeyPath,
+      });
+      setSslConfig(updated);
+      setSslImportSuccessMsg(t("sslImportSuccess"));
+      setSelectedCertPath("");
+      setSelectedKeyPath("");
+    } catch (e: any) {
+      setSslImportError(`${t("sslImportFailed")}: ${e.toString()}`);
+    }
+  };
+
+  const handleResetSsl = async () => {
+    try {
+      const updated = await invoke<any>("reset_ssl_to_self_signed");
+      setSslConfig(updated);
+      setSslImportSuccessMsg(null);
+      setSslImportError(null);
+    } catch (e: any) {
+      console.error("Failed to reset SSL config:", e);
+    }
+  };
+
+  useEffect(() => {
+    if (isTauri()) {
+      refreshWebServerStatus();
+      loadSslConfig();
+    } else {
+      // Connect WebSocket in browser mode
+      webClient.connect(() => {
+        setIsWebLoginRequired(true);
+      });
+      const unsubAuthOk = webClient.on("auth_ok", () => {
+        setIsWebLoginRequired(false);
+        setBrowserLoginError(false);
+      });
+      return () => {
+        unsubAuthOk();
+      };
+    }
+  }, [refreshWebServerStatus]);
+
+  const handleStartWebServer = async () => {
+    if (!webUiPasswordInput.trim()) {
+      alert(t("webUiPasswordRequiredAlert"));
+      return;
+    }
+    try {
+      localStorage.setItem("agent_deck_web_password", webUiPasswordInput);
+      const res = await invoke<any>("start_web_server", {
+        port: Number(webUiPortInput) || 8443,
+        password: webUiPasswordInput,
+      });
+      setWebServerStatus(res);
+    } catch (e: any) {
+      alert(`Failed to start Web UI server: ${e.toString()}`);
+    }
+  };
+
+  const handleStopWebServer = async () => {
+    try {
+      await invoke("stop_web_server");
+      await refreshWebServerStatus();
+    } catch (e: any) {
+      console.error("Failed to stop web server:", e);
+    }
+  };
+
+  const handleBrowserLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: browserLoginPassword }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        webClient.setToken(data.token);
+        webClient.connect();
+        setIsWebLoginRequired(false);
+        setBrowserLoginError(false);
+      } else {
+        setBrowserLoginError(true);
+      }
+    } catch (e) {
+      setBrowserLoginError(true);
+    }
+  };
+
   // Open directory selection dialog using Tauri Dialog API
   const handleSelectDirectory = async () => {
+    if (!isTauri()) {
+      const newPath = prompt("Enter working directory path:", cwd || "");
+      if (newPath) {
+        changeCwd(newPath);
+      }
+      return;
+    }
     try {
       const selected = await open({
         directory: true,
@@ -770,6 +964,28 @@ function App() {
                     {t("editSkill")}
                   </button>
                 </div>
+              )}
+
+              {/* Web UI Button */}
+              {isTauri() && (
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    refreshWebServerStatus();
+                    setIsWebUiModalOpen(true);
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    background: webServerStatus.running ? "rgba(16, 185, 129, 0.15)" : undefined,
+                    borderColor: webServerStatus.running ? "#10b981" : undefined,
+                    color: webServerStatus.running ? "#10b981" : undefined,
+                  }}
+                  title="Web UI Remote Access"
+                >
+                  🌐 Web UI {webServerStatus.running ? "● ON" : ""}
+                </button>
               )}
 
               <div className={`status-badge ${status}`}>
@@ -1142,6 +1358,294 @@ function App() {
                 {skillContent}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Web UI Management Modal (Desktop) */}
+        {isWebUiModalOpen && isTauri() && (
+          <div style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            background: "rgba(0,0,0,0.6)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 2000,
+            backdropFilter: "blur(4px)"
+          }}>
+            <div style={{
+              background: "var(--input-bg)",
+              border: "1px solid var(--input-border)",
+              borderRadius: "12px",
+              width: "90%",
+              maxWidth: "520px",
+              display: "flex",
+              flexDirection: "column",
+              boxShadow: "0 10px 25px rgba(0,0,0,0.4)",
+              padding: "24px"
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                <h3 style={{ margin: 0, color: "var(--text-color)", display: "flex", alignItems: "center", gap: "8px" }}>
+                  🌐 {t("webUiTitle")}
+                </h3>
+                <button
+                  className="secondary"
+                  onClick={() => setIsWebUiModalOpen(false)}
+                  style={{ padding: "4px 10px" }}
+                >
+                  {t("close")}
+                </button>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                <div style={{
+                  padding: "12px 16px",
+                  borderRadius: "8px",
+                  background: webServerStatus.running ? "rgba(16, 185, 129, 0.1)" : "rgba(239, 68, 68, 0.1)",
+                  border: `1px solid ${webServerStatus.running ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.3)"}`,
+                  color: webServerStatus.running ? "#10b981" : "#ef4444",
+                  fontWeight: "600",
+                  fontSize: "0.9rem",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center"
+                }}>
+                  <span>状態: {webServerStatus.running ? t("webUiStatusRunning") : t("webUiStatusStopped")}</span>
+                  {webServerStatus.running ? (
+                    <button className="danger" onClick={handleStopWebServer} style={{ padding: "6px 14px", fontSize: "0.85rem" }}>
+                      {t("webUiStop")}
+                    </button>
+                  ) : (
+                    <button className="primary" onClick={handleStartWebServer} style={{ padding: "6px 14px", fontSize: "0.85rem" }}>
+                      {t("webUiStart")}
+                    </button>
+                  )}
+                </div>
+
+                {!webServerStatus.running && (
+                  <>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <label style={{ fontSize: "0.85rem", color: "var(--text-color)", fontWeight: "500" }}>
+                        {t("webUiPassword")}
+                      </label>
+                      <input
+                        type="password"
+                        value={webUiPasswordInput}
+                        onChange={(e) => setWebUiPasswordInput(e.target.value)}
+                        placeholder={t("webUiPasswordPlaceholder")}
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: "6px",
+                          border: "1px solid var(--input-border)",
+                          background: "var(--main-bg)",
+                          color: "var(--text-color)",
+                          outline: "none"
+                        }}
+                      />
+                    </div>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <label style={{ fontSize: "0.85rem", color: "var(--text-color)", fontWeight: "500" }}>
+                        {t("webUiPort")}
+                      </label>
+                      <input
+                        type="number"
+                        value={webUiPortInput}
+                        onChange={(e) => setWebUiPortInput(Number(e.target.value))}
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: "6px",
+                          border: "1px solid var(--input-border)",
+                          background: "var(--main-bg)",
+                          color: "var(--text-color)",
+                          outline: "none"
+                        }}
+                      />
+                    </div>
+
+                    {/* Custom SSL Certificate Settings */}
+                    <div style={{
+                      marginTop: "8px",
+                      padding: "14px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--input-border)",
+                      background: "rgba(0,0,0,0.15)",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "10px"
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: "0.85rem", fontWeight: "600", color: "var(--text-color)" }}>
+                          🔒 SSL証明書: {sslConfig.use_custom_ssl ? t("sslModeCustom") : t("sslModeSelfSigned")}
+                        </span>
+                        {sslConfig.use_custom_ssl && (
+                          <button
+                            className="secondary"
+                            onClick={handleResetSsl}
+                            style={{ padding: "4px 8px", fontSize: "0.75rem" }}
+                          >
+                            {t("sslResetToSelfSigned")}
+                          </button>
+                        )}
+                      </div>
+
+                      {sslImportSuccessMsg && (
+                        <div style={{ padding: "8px 10px", borderRadius: "6px", background: "rgba(16, 185, 129, 0.15)", color: "#10b981", fontSize: "0.8rem" }}>
+                          ✓ {sslImportSuccessMsg}
+                        </div>
+                      )}
+
+                      {sslImportError && (
+                        <div style={{ padding: "8px 10px", borderRadius: "6px", background: "rgba(239, 68, 68, 0.15)", color: "#ef4444", fontSize: "0.8rem" }}>
+                          ⚠️ {sslImportError}
+                        </div>
+                      )}
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                          <button className="secondary" onClick={handleSelectCertFile} style={{ padding: "6px 10px", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
+                            {t("sslSelectCert")}
+                          </button>
+                          <span style={{ fontSize: "0.75rem", color: "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {selectedCertPath || (sslConfig.custom_cert_filename ? `config/${sslConfig.custom_cert_filename}` : "(未選択)")}
+                          </span>
+                        </div>
+
+                        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                          <button className="secondary" onClick={handleSelectKeyFile} style={{ padding: "6px 10px", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
+                            {t("sslSelectKey")}
+                          </button>
+                          <span style={{ fontSize: "0.75rem", color: "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {selectedKeyPath || (sslConfig.custom_key_filename ? `config/${sslConfig.custom_key_filename}` : "(未選択)")}
+                          </span>
+                        </div>
+
+                        {selectedCertPath && selectedKeyPath && (
+                          <button
+                            className="primary"
+                            onClick={handleImportSsl}
+                            style={{ marginTop: "4px", padding: "6px 12px", fontSize: "0.8rem" }}
+                          >
+                            {t("sslImportButton")}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {webServerStatus.running && webServerStatus.url && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "4px" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                      <span style={{ fontSize: "0.8rem", color: "#94a3b8" }}>{t("webUiUrl")}</span>
+                      <a
+                        href={webServerStatus.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          color: "#38bdf8",
+                          wordBreak: "break-all",
+                          fontSize: "0.95rem",
+                          fontWeight: "600",
+                          textDecoration: "underline"
+                        }}
+                      >
+                        {webServerStatus.url}
+                      </a>
+                    </div>
+
+                    {webServerStatus.qr_code_base64 && (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "8px", marginTop: "8px" }}>
+                        <span style={{ fontSize: "0.8rem", color: "#94a3b8" }}>{t("webUiQrCode")}</span>
+                        <div style={{
+                          padding: "12px",
+                          background: "#ffffff",
+                          borderRadius: "8px",
+                          boxShadow: "0 4px 12px rgba(0,0,0,0.1)"
+                        }}>
+                          <img
+                            src={webServerStatus.qr_code_base64}
+                            alt="Web UI QR Code"
+                            style={{ width: "160px", height: "160px", display: "block" }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Browser Remote Login Modal (Non-Tauri environment) */}
+        {isWebLoginRequired && !isTauri() && (
+          <div style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            background: "rgba(0,0,0,0.8)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 3000,
+            backdropFilter: "blur(6px)"
+          }}>
+            <form onSubmit={handleBrowserLogin} style={{
+              background: "var(--input-bg)",
+              border: "1px solid var(--input-border)",
+              borderRadius: "12px",
+              width: "90%",
+              maxWidth: "400px",
+              padding: "24px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "16px",
+              boxShadow: "0 10px 25px rgba(0,0,0,0.5)"
+            }}>
+              <h3 style={{ margin: 0, color: "var(--text-color)" }}>{t("webUiLoginTitle")}</h3>
+              <p style={{ margin: 0, fontSize: "0.85rem", color: "#94a3b8" }}>
+                {t("webUiLoginDesc")}
+              </p>
+
+              {browserLoginError && (
+                <div style={{
+                  padding: "8px 12px",
+                  borderRadius: "6px",
+                  background: "rgba(239, 68, 68, 0.15)",
+                  color: "#ef4444",
+                  fontSize: "0.85rem"
+                }}>
+                  {t("webUiLoginFailed")}
+                </div>
+              )}
+
+              <input
+                type="password"
+                value={browserLoginPassword}
+                onChange={(e) => setBrowserLoginPassword(e.target.value)}
+                placeholder={t("webUiPasswordPlaceholder")}
+                autoFocus
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--input-border)",
+                  background: "var(--main-bg)",
+                  color: "var(--text-color)",
+                  outline: "none",
+                  fontSize: "1rem"
+                }}
+              />
+
+              <button type="submit" className="primary" style={{ padding: "10px", fontSize: "0.95rem" }}>
+                {t("webUiLoginButton")}
+              </button>
+            </form>
           </div>
         )}
       </div>

@@ -3,8 +3,11 @@ mod agent;
 mod config;
 mod menu;
 mod self_update;
+mod cert;
+pub mod web_server;
 
 use pty::PtyState;
+use web_server::WebServerHub;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -14,8 +17,25 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let pty_state = PtyState::default();
+
+    // Resolve dist directory (static assets for Web UI)
+    let dist_dir = if let Ok(exe_path) = std::env::current_exe() {
+        let root = pty::resolve_project_root(exe_path);
+        root.join("dist")
+    } else {
+        std::path::PathBuf::from("dist")
+    };
+
+    let web_hub = WebServerHub::new(pty_state.clone(), dist_dir);
+    // Wire WebServerHub broadcast into pty_state
+    if let Ok(mut guard) = pty_state.broadcast_tx.try_write() {
+        *guard = Some(web_hub.broadcast_tx.clone());
+    }
+
     tauri::Builder::default()
-        .manage(PtyState::default())
+        .manage(pty_state)
+        .manage(web_hub)
         // Tauri only builds this default Edit/Window/Help menu automatically on macOS;
         // set it explicitly so Windows and Linux also get a menu bar with Copy/Paste/etc.,
         // plus Theme and Settings submenus mirroring in-app preferences.
@@ -46,7 +66,13 @@ pub fn run() {
             config::get_app_config,
             menu::set_theme,
             menu::set_auto_check_update,
-            pty::force_kill_pty
+            pty::force_kill_pty,
+            web_server::start_web_server,
+            web_server::stop_web_server,
+            web_server::get_web_server_status,
+            cert::import_ssl_certificate,
+            cert::get_ssl_configuration,
+            cert::reset_ssl_to_self_signed
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
