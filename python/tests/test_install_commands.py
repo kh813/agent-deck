@@ -176,3 +176,26 @@ class TestDetectPathsMatchWhereTheInstallerActuallyPutsIt:
             "that install.ps1 ignores $env:BINDIR entirely (it only reads a "
             "-d/--dir flag), so this is dead, misleading configuration."
         )
+
+
+class TestClaudeInstallCommands:
+    def test_claude_macos_install_args(self):
+        data = json.loads(INSTALL_COMMANDS_PATH.read_text())
+        args = " ".join(data["claude"]["install"]["macos"]["args"])
+        assert "https://claude.ai/install.sh" in args
+        assert "bash" in data["claude"]["install"]["macos"]["command"]
+
+    def test_claude_windows_install_args(self):
+        data = json.loads(INSTALL_COMMANDS_PATH.read_text())
+        args = " ".join(data["claude"]["install"]["windows"]["args"])
+        assert "https://claude.ai/install.ps1" in args
+        assert "powershell.exe" in data["claude"]["install"]["windows"]["command"]
+        assert "Set-ExecutionPolicy" in args and "-Scope Process" in args
+        assert "Invoke-WebRequest" in args and "-OutFile" in args
+        assert "Remove-Item $tmp" in args
+
+    def test_claude_detect_paths_include_user_local_bin(self):
+        data = json.loads(INSTALL_COMMANDS_PATH.read_text())
+        assert "$HOME/.local/bin/claude" in data["claude"]["detect_paths"]["macos"]
+        assert "$USERPROFILE\\.local\\bin\\claude.exe" in data["claude"]["detect_paths"]["windows"]
+

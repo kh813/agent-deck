@@ -858,6 +858,38 @@ mod tests {
         println!("Mock update result for agy: {:?}", s);
     }
 
+    #[tokio::test]
+    async fn test_claude_install_command_mock() {
+        use tauri::test::mock_app;
+        let app = mock_app();
+
+        let cmd = get_install_command_internal("claude".to_string(), app.handle().clone()).await;
+        assert!(cmd.is_ok(), "Expected claude install command to resolve: {:?}", cmd);
+        let c = cmd.unwrap();
+        if cfg!(target_os = "windows") {
+            assert_eq!(c.command, "powershell.exe");
+        } else {
+            assert_eq!(c.command, "bash");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_claude_update_command_mock() {
+        use tauri::test::mock_app;
+        let app = mock_app();
+
+        let cmd = get_update_command_internal("claude".to_string(), app.handle().clone()).await;
+        assert!(cmd.is_ok(), "Expected claude update command to resolve: {:?}", cmd);
+        let c = cmd.unwrap();
+        if cfg!(target_os = "windows") {
+            assert_eq!(c.command, "claude.exe");
+            assert_eq!(c.args, vec!["update"]);
+        } else {
+            assert_eq!(c.command, "claude");
+            assert_eq!(c.args, vec!["update"]);
+        }
+    }
+
     // Drains a "pre-launch-status" success flag and the concatenated text of
     // all "pre-launch-output" events received within a short timeout, using
     // the same mock_app + Listener pattern as pty.rs's test_start_pty_and_emission.

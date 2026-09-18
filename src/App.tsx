@@ -565,13 +565,13 @@ function App() {
   }, [isUpdating, updateStatus]);
 
   // Trigger installation via PTY
-  const handleInstallAgy = async () => {
+  const handleInstallAgent = async () => {
     try {
       setIsInstalling(true);
       setIsInstallTerminalOpen(true); // Open console automatically to show progress logs
 
       const installCmd = await invoke<{ command: string; args: string[] }>("get_install_command", {
-        agentId: "agy",
+        agentId: selectedAgentId,
       });
 
       const appBundleDir = await invoke<string>("get_app_bundle_dir");
@@ -593,12 +593,12 @@ function App() {
   // Trigger update via PTY. This reuses the same always-visible main
   // terminal (the backend only ever runs one PTY session at a time), so no
   // separate terminal instance is needed here.
-  const handleUpdateAgy = async () => {
+  const handleUpdateAgent = async () => {
     try {
       setIsUpdating(true);
 
       const updateCmd = await invoke<{ command: string; args: string[] }>("get_update_command", {
-        agentId: "agy",
+        agentId: selectedAgentId,
       });
 
       const appBundleDir = await invoke<string>("get_app_bundle_dir");
@@ -1020,14 +1020,17 @@ function App() {
           backdropFilter: "blur(8px)"
         }}>
           <div>
-            {t("updateAvailableMsg").replace("{latest}", updateStatus.latest_version || "").replace("{current}", updateStatus.current_version || "")}
+            {t("updateAvailableMsg")
+              .replace("{name}", selectedEngine?.name || selectedAgentId)
+              .replace("{latest}", updateStatus.latest_version || "")
+              .replace("{current}", updateStatus.current_version || "")}
             <span style={{ fontSize: "0.75rem", color: "#94a3b8", marginLeft: "12px" }}>
               {t("updateNote")}
             </span>
           </div>
           <button
             className="primary"
-            onClick={handleUpdateAgy}
+            onClick={handleUpdateAgent}
             disabled={isUpdating}
             style={{
               background: "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)",
@@ -1105,7 +1108,7 @@ function App() {
         whiteSpace: "pre-wrap",
         minHeight: "1.2em",
       }}>
-        {statusMessage || " "}
+        {statusMessage || " "}
       </div>
 
       {/* Main Body Layout (sidebar removed - agent info lives in the header now,
@@ -1117,10 +1120,14 @@ function App() {
           /* Onboarding Panel */
           <div className="onboarding-panel" style={{ display: "flex", flexDirection: isInstallTerminalOpen ? "row" : "column", gap: "24px", width: "100%" }}>
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-              <div className="onboarding-icon">🌌</div>
-              <h2 className="onboarding-title">{t("installAgyRequired")}</h2>
+              <div className="onboarding-icon">
+                {selectedAgentId === "claude" ? "🤖" : "🌌"}
+              </div>
+              <h2 className="onboarding-title">
+                {t("installAgentRequired").replace("{name}", selectedEngine?.name || selectedAgentId)}
+              </h2>
               <p className="onboarding-desc">
-                {t("installAgyDesc")}
+                {t("installAgentDesc").replace("{name}", selectedEngine?.name || selectedAgentId)}
               </p>
 
               {isInstalling ? (
@@ -1128,8 +1135,8 @@ function App() {
                   {t("installingAgent")}
                 </button>
               ) : (
-                <button className="primary" onClick={handleInstallAgy} style={{ background: "linear-gradient(135deg, #10b981 0%, #059669 100%)", fontSize: "1.1rem", padding: "12px 24px" }}>
-                  {t("installButton")}
+                <button className="primary" onClick={handleInstallAgent} style={{ background: "linear-gradient(135deg, #10b981 0%, #059669 100%)", fontSize: "1.1rem", padding: "12px 24px" }}>
+                  {t("installButton").replace("{name}", selectedEngine?.name || selectedAgentId)}
                 </button>
               )}
             </div>

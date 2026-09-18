@@ -42,15 +42,38 @@
     "binary": "claude",
     "detect_paths": {
       "macos": [
+        "$HOME/.local/bin/claude",
         "/opt/homebrew/bin/claude",
         "/usr/local/bin/claude",
         "$HOME/.npm-global/bin/claude"
       ],
       "windows": [
+        "$USERPROFILE\\.local\\bin\\claude.exe",
+        "$USERPROFILE\\AppData\\Local\\claude\\bin\\claude.exe",
         "$USERPROFILE\\AppData\\Roaming\\npm\\claude.cmd"
       ]
     },
-    "version_args": ["--version"]
+    "version_args": ["--version"],
+    "install": {
+      "macos": {
+        "command": "bash",
+        "args": ["-c", "curl -fsSL https://claude.ai/install.sh | bash"]
+      },
+      "windows": {
+        "command": "powershell.exe",
+        "args": ["-Command", "Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force; $tmp = Join-Path $env:TEMP ('claude-install-' + [guid]::NewGuid().ToString() + '.ps1'); Invoke-WebRequest -UseBasicParsing -Uri https://claude.ai/install.ps1 -OutFile $tmp; try { & $tmp } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }"]
+      }
+    },
+    "update": {
+      "macos": {
+        "command": "claude",
+        "args": ["update"]
+      },
+      "windows": {
+        "command": "claude.exe",
+        "args": ["update"]
+      }
+    }
   },
   "codex": {
     "name": "Codex",
