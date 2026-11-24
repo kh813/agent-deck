@@ -88,7 +88,14 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# This file lives at <root>/python/scripts/setup/self_update.py, so the
+# project root is parents[3]. It used to be parents[2] (= <root>/python),
+# which made every real update fail: the Drive channel looked for
+# <root>/python/venv ("venv not found") and imported config from
+# <root>/python/python, and the GitHub channel would have swapped the app
+# into <root>/python/. Unit tests never caught it because they monkeypatch
+# PROJECT_ROOT -- see test_project_root_is_the_install_root.
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _REPO = "kh813/agent-deck"  # renamed from kh813/agent-ui 2026-07-16 (old URL 301-redirects)
 _API_LATEST = f"https://api.github.com/repos/{_REPO}/releases/latest"
 _API_RELEASES = f"https://api.github.com/repos/{_REPO}/releases"

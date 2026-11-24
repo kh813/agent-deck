@@ -542,3 +542,43 @@ def _make_fake_zip_for_drive(zip_path: Path) -> None:
             zf.writestr(f"{name}/Contents/MacOS/agent-deck", b"#!/bin/sh\necho hi\n")
         zf.writestr("python/skills/translator/SKILL.md", b"---\nname: translator\n---\n")
         zf.writestr("config.toml", b'[oauth]\nclient_id = "org-real-id"\n')
+
+
+# ── Regression (2026-11-24): PROJECT_ROOT pointed at <root>/python ─────────
+#
+# Every other test monkeypatches PROJECT_ROOT, so for months nothing noticed
+# that the real value was parents[2] (= <root>/python): the org Drive update
+# failed with "venv not found" (looked for <root>/python/venv) and could not
+# import config, and the GitHub path would have swapped the app into
+# <root>/python/. Confirmed for real updating a v0.1.2-rc6 install.
+
+def test_project_root_is_the_install_root():
+    assert su.PROJECT_ROOT == ROOT
+    assert (su.PROJECT_ROOT / "python" / "scripts" / "setup" / "self_update.py").exists()
+    assert (su.PROJECT_ROOT / "agent_config.json").exists()
+
+
+def test_drive_mode_reexec_uses_root_venv(monkeypatch, tmp_path):
+    """Without google libs, --drive-file-id must re-exec under <root>/venv."""
+    monkeypatch.setattr(su, "PROJECT_ROOT", tmp_path)
+    venv_python = tmp_path / "venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python3")
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_text("")
+    monkeypatch.setattr(su.sys, "argv", ["self_update.py", "check", "--drive-file-id", "x"])
+    import builtins
+    real_import = builtins.__import__
+
+    def no_google(name, *a, **k):
+        if name.startswith("googleapiclient"):
+            raise ImportError(name)
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", no_google)
+    calls = []
+    monkeypatch.setattr(su.os, "execv", lambda exe, argv: calls.append(exe))
+    monkeypatch.setattr(su.subprocess, "run", lambda argv, *a, **k: calls.append(argv[0]) or subprocess.CompletedProcess(argv, 0))
+    try:
+        su._reexec_with_venv_for_drive_mode()
+    except SystemExit:
+        pass
+    assert calls and str(calls[0]) == str(venv_python)
