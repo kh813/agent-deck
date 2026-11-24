@@ -3,6 +3,7 @@ mod agent;
 mod config;
 mod menu;
 mod self_update;
+mod root_files;
 mod cert;
 pub mod web_server;
 
@@ -17,6 +18,16 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Bring the install's top-level files (preflight, agent_config.json,
+    // AGENTS.md, ...) up to this build's versions before anything reads
+    // them -- self-update never replaces them (see root_files.rs). Skipped
+    // when running from a dev build (target/).
+    if let Ok(exe_path) = std::env::current_exe() {
+        if !pty::is_development_mode(&exe_path) {
+            root_files::sync_root_files(&pty::resolve_project_root(exe_path));
+        }
+    }
+
     let pty_state = PtyState::default();
 
     // Resolve dist directory (static assets for Web UI)

@@ -254,7 +254,7 @@ pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
 
 // --- Internal Logic (Generic Runtime support for testing) ---
 
-fn is_development_mode(path: &Path) -> bool {
+pub(crate) fn is_development_mode(path: &Path) -> bool {
     path.components().any(|c| c.as_os_str() == "target")
 }
 

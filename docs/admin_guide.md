@@ -334,6 +334,9 @@ Node.js and Python are self-contained inside the project folder, so agent-deck i
 
 ## 4. 自己更新の流れ / Self-Update Flow
 
+> **直下ファイルの同期（v0.2.2-rc5〜）/ Top-level file sync (v0.2.2-rc5+):** 自己更新が入れ替えるのはアプリ本体・`python/`・`config.toml` だけで、インストール先直下の `preflight.sh`/`.bat`・`agent_config.json`・`AGENTS.md`・`CLAUDE.md`・`messages/` は最初にインストールした版のまま残っていました（実機で確認。Claude Code 用の `--settings` 引数やエンジン共通の `AGENTS.md` が既存インストールに届かなかった原因）。v0.2.2-rc5 以降のアプリ本体はこれらの正しい中身を内蔵し（`src-tauri/src/root_files.rs`）、起動直後・preflight 実行前に、内容が違えば書き戻します（開発ビルドでは何もしません）。直下の `agent_config.json` を置き換えるときは元を `agent_config.json.prev` に残します。**組織独自の設定は `config/agent_config.json` に置いてください**（直下より優先して読み込まれ、書き戻しの影響を受けません）。
+> Self-update only replaces the app, `python/` and `config.toml`; the install root's `preflight.sh`/`.bat`, `agent_config.json`, `AGENTS.md`, `CLAUDE.md` and `messages/` used to stay at the first-installed version (confirmed for real — why Claude Code's `--settings` args and the engine-neutral `AGENTS.md` never reached existing installs). From v0.2.2-rc5 the app embeds the canonical copies (`src-tauri/src/root_files.rs`) and writes back any that differ right at startup, before preflight runs (no-op in dev builds). A replaced root `agent_config.json` is kept as `agent_config.json.prev`. **Put org-specific settings in `config/agent_config.json`** — it's read before the root one and is never rewritten.
+
 メニューバーの「**Update**」サブメニューには、`config.toml` の設定に応じて**どちらか一方**しか表示されません：
 
 | `config.toml` の状態 | 表示される項目 | 取得元 |

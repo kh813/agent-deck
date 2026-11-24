@@ -112,8 +112,11 @@ pub fn get_app_config(cwd: Option<String>) -> AppConfig {
     // app/ wrapper folder; get_exe_dir() alone only reaches Contents/MacOS).
     if let Ok(exe_path) = std::env::current_exe() {
         let project_root = resolve_project_root(exe_path);
-        search_paths.push(project_root.join("agent_config.json"));
+        // config/ first: the root agent_config.json is rewritten to this
+        // build's shipped version at startup (root_files.rs), so an org's
+        // own customisation must live in config/agent_config.json.
         search_paths.push(project_root.join("config").join("agent_config.json"));
+        search_paths.push(project_root.join("agent_config.json"));
     }
 
     // 3. Search in the directory containing the executable

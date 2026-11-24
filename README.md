@@ -77,7 +77,7 @@ agent-deck は fork せずに「自組織版」を配布できるよう設計さ
 
 `agent-deck` は、組み込まれる親アプリケーションやプロジェクト環境に応じてUIの表示内容を柔軟にカスタマイズできます。
 
-アプリの起動時、**作業ディレクトリ（CWD）** や **実行バイナリと同階層** の直下、またはそれぞれの場所に作成した **`config/` フォルダの内部**（例：`config/agent_config.json`）に設定ファイルを配置しておくことで、UIが自動的にその設定を読み込んで上書きします。
+アプリの起動時、**作業ディレクトリ（CWD）** や **実行バイナリと同階層** の直下、またはそれぞれの場所に作成した **`config/` フォルダの内部**（例：`config/agent_config.json`）に設定ファイルを配置しておくことで、UIが自動的にその設定を読み込んで上書きします。インストール先では `config/agent_config.json` が直下の `agent_config.json` より優先されます。直下の `agent_config.json` はアプリ起動時に同梱版へ自動で戻される（元は `agent_config.json.prev` に保存）ため、独自の設定は `config/agent_config.json` に置いてください。
 
 ### 設定ファイルの構成例 (`agent_config.json`)
 
