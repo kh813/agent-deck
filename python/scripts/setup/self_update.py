@@ -37,7 +37,8 @@ Contents/MacOS/agent-deck, baked in at build time). This script therefore:
 python/ payload (2026-07-16): also extracted from the same zip on every
 update — previously only the binary was swapped, silently leaving skills
 and setup scripts at the old version forever. python/skills-personal/ (user
--created and catalog-synced skills) is preserved across the refresh. Every
+-created skills) and python/skills-catalog/ (catalog-installed skills) are
+preserved across the refresh. Every
 *.sh in the new payload is normalized to LF: the Windows zip's python/ tree
 has shipped CRLF before (Windows CI runners), which breaks bash on Mac
 ("$'\\r': command not found").
@@ -179,17 +180,25 @@ def _normalize_sh_to_lf(target: Path) -> None:
             sh.write_bytes(data.replace(b"\r\n", b"\n"))
 
 
+_PRESERVED_PYTHON_DIRS = ("skills-personal", "skills-catalog")
+
+
 def _install_python_payload(staging: Path) -> None:
-    """Refresh <root>/python/ from the zip, preserving skills-personal/."""
+    """Refresh <root>/python/ from the zip, preserving the per-install skill
+    roots (skills-personal/: the user's own; skills-catalog/: installed from
+    the Drive catalog, incl. manual downloads that sync can't restore)."""
     new_python = staging / "python"
     if not new_python.exists():
         return
 
     dest_python = PROJECT_ROOT / "python"
-    existing_personal = dest_python / "skills-personal"
-    personal_backup = staging / "_skills_personal_backup"
-    if existing_personal.exists():
-        shutil.move(str(existing_personal), str(personal_backup))
+    backups = []
+    for keep in _PRESERVED_PYTHON_DIRS:
+        existing = dest_python / keep
+        backup = staging / f"_preserve_{keep}"
+        if existing.exists():
+            shutil.move(str(existing), str(backup))
+            backups.append((keep, backup))
 
     if dest_python.is_symlink():
         dest_python.unlink()
@@ -198,9 +207,9 @@ def _install_python_payload(staging: Path) -> None:
     shutil.copytree(new_python, dest_python)
     _normalize_sh_to_lf(dest_python)
 
-    if personal_backup.exists():
-        shutil.rmtree(dest_python / "skills-personal", ignore_errors=True)
-        shutil.move(str(personal_backup), str(dest_python / "skills-personal"))
+    for keep, backup in backups:
+        shutil.rmtree(dest_python / keep, ignore_errors=True)
+        shutil.move(str(backup), str(dest_python / keep))
 
 
 def _verify_mac_signature(new_dest: Path, label: str) -> None:

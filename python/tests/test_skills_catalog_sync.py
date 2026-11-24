@@ -52,13 +52,18 @@ import skills_catalog as sc  # noqa: E402
 
 @pytest.fixture
 def skills_dir(tmp_path, monkeypatch):
-    """Redirect skills-personal and the sync manifest into tmp_path."""
+    """Redirect skills-catalog (sync target), skills-personal and both
+    manifests into tmp_path. Returns the catalog dir."""
     personal = tmp_path / "skills-personal"
+    catalog = tmp_path / "skills-catalog"
     personal.mkdir()
+    catalog.mkdir()
     monkeypatch.setattr(sc, "SKILLS_SRC", personal)
-    monkeypatch.setattr(sc, "SYNC_MANIFEST_PATH", personal / ".catalog-sync-manifest")
+    monkeypatch.setattr(sc, "CATALOG_SKILLS_DIR", catalog)
+    monkeypatch.setattr(sc, "SYNC_MANIFEST_PATH", catalog / ".catalog-sync-manifest")
+    monkeypatch.setattr(sc, "LEGACY_SYNC_MANIFEST_PATH", personal / ".catalog-sync-manifest")
     monkeypatch.setattr(sc, "CATALOG_FOLDER_ID", "test_catalog_folder")
-    return personal
+    return catalog
 
 
 def _write_skill(root: Path, name: str, extra_files: dict = None):
@@ -264,12 +269,14 @@ class TestSync:
     def test_user_created_skill_is_never_removed(self, skills_dir, monkeypatch):
         """A skill the user made via `my-skills create` (not in the
         manifest) must survive sync even though it's not in _default/."""
-        _write_skill(skills_dir, "my-own-skill")
+        _write_skill(sc.SKILLS_SRC, "my-own-skill")
+        _write_skill(skills_dir, "downloaded-skill")  # manual `download`, not in manifest
         _fake_drive(monkeypatch, [], {})
 
         sc.cmd_sync()
 
-        assert (skills_dir / "my-own-skill" / "SKILL.md").exists()
+        assert (sc.SKILLS_SRC / "my-own-skill" / "SKILL.md").exists()
+        assert (skills_dir / "downloaded-skill" / "SKILL.md").exists()
 
     def test_offline_failure_is_graceful(self, skills_dir, monkeypatch):
         """sync runs inside every launch's preflight — a network failure
@@ -329,3 +336,41 @@ class TestSetupPyIntegration:
         monkeypatch.setattr(setup_mod.subprocess, "run", boom)
 
         setup_mod.sync_catalog_skills()  # must not raise
+
+
+class TestLegacyLayoutMigration:
+    """Before skills-catalog/ existed, sync installed into skills-personal/
+    with the manifest there."""
+
+    def test_moves_manifest_listed_skills_only(self, skills_dir):
+        personal = sc.SKILLS_SRC
+        _write_skill(personal, "org-skill", {"scripts/run.py": "x\n"})
+        _write_skill(personal, "my-own-skill")
+        sc.LEGACY_SYNC_MANIFEST_PATH.write_text(
+            json.dumps({"org-skill": "2026-07-16T00:00:00.000Z"}))
+
+        sc.migrate_legacy_catalog_layout()
+
+        assert (skills_dir / "org-skill" / "scripts" / "run.py").exists()
+        assert not (personal / "org-skill").exists()
+        assert (personal / "my-own-skill" / "SKILL.md").exists()
+        assert not sc.LEGACY_SYNC_MANIFEST_PATH.exists()
+        assert json.loads(sc.SYNC_MANIFEST_PATH.read_text()) == {
+            "org-skill": "2026-07-16T00:00:00.000Z"}
+
+    def test_noop_without_legacy_manifest(self, skills_dir):
+        _write_skill(sc.SKILLS_SRC, "my-own-skill")
+        sc.migrate_legacy_catalog_layout()
+        assert (sc.SKILLS_SRC / "my-own-skill").exists()
+        assert not sc.SYNC_MANIFEST_PATH.exists()
+
+    def test_runs_even_without_catalog_config(self, skills_dir, monkeypatch):
+        """Migration must not depend on the catalog being configured —
+        a later config change shouldn't leave skills stranded."""
+        monkeypatch.setattr(sc, "CATALOG_FOLDER_ID", "")
+        _write_skill(sc.SKILLS_SRC, "org-skill")
+        sc.LEGACY_SYNC_MANIFEST_PATH.write_text(json.dumps({"org-skill": "t"}))
+
+        sc.cmd_sync()
+
+        assert (skills_dir / "org-skill").exists()

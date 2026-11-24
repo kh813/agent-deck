@@ -32,10 +32,14 @@ AUTOMATION_DIRS = [
 ]
 
 # Catalog-distributed skills bundle their scripts inside their own skill
-# directory (python/skills-personal/<name>/scripts/ — see skills_catalog.py's
-# module docstring), so an org's skills can dispatch through this launcher
-# (and get its venv/playwright bootstrap) without the org forking this repo.
-SKILL_SCRIPTS_GLOB = PROJECT_ROOT / "python" / "skills-personal"
+# directory (python/skills-catalog/<name>/scripts/, or skills-personal/ for
+# the user's own / pre-migration installs — see skills_catalog.py's module
+# docstring), so an org's skills can dispatch through this launcher (and get
+# its venv/playwright bootstrap) without the org forking this repo.
+SKILL_SCRIPT_ROOTS = [
+    PROJECT_ROOT / "python" / "skills-catalog",
+    PROJECT_ROOT / "python" / "skills-personal",
+]
 
 ACTIONS = {
     "clockin":          "routine.py",
@@ -55,12 +59,13 @@ def _find_script(filename: str) -> Path:
         candidate = automation_dir / filename
         if candidate.exists():
             return candidate
-    if SKILL_SCRIPTS_GLOB.is_dir():
-        for candidate in sorted(SKILL_SCRIPTS_GLOB.glob(f"*/scripts/{filename}")):
-            return candidate
+    for root in SKILL_SCRIPT_ROOTS:
+        if root.is_dir():
+            for candidate in sorted(root.glob(f"*/scripts/{filename}")):
+                return candidate
     raise FileNotFoundError(
         f"{filename} not found in any of: {[str(d) for d in AUTOMATION_DIRS]} "
-        f"or {SKILL_SCRIPTS_GLOB}/*/scripts/"
+        f"or {[str(r) + '/*/scripts/' for r in SKILL_SCRIPT_ROOTS]}"
     )
 
 

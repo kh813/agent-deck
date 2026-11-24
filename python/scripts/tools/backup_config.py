@@ -60,6 +60,8 @@ _BACKUP_GLOBS = [
     "client_secret_*.json",
     "docs/**/*",
     "python/skills-personal/**/*",
+    # Manual catalog `download`s live here and aren't restored by `sync`.
+    "python/skills-catalog/**/*",
 ]
 
 

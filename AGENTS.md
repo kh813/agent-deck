@@ -18,7 +18,8 @@ Skills and scripts for the company productivity toolkit, built on top of agent-d
 
 - `python/scripts/` — setup, self-update, catalog, and automation scripts
 - `python/skills/` — bundled public skill sources (SKILL.md)
-- `python/skills-personal/` — org-specific and personal skill sources (SKILL.md)
+- `python/skills-catalog/` — skills installed from the organization's skill catalog (SKILL.md)
+- `python/skills-personal/` — personal skill sources (SKILL.md)
 - `files/` — user-facing working folder; also where the corporate PPTX template lives
 - `.gemini/skills/` — installed skills (read by Antigravity CLI)
 - `.claude/skills/` — the same installed skills (read by Claude Code)
@@ -64,7 +65,7 @@ Never modify, create, or delete any file in this project **except the locations 
 - `files/` — Files managed by the file-organizer skill
 - `python/skills-personal/` — via the `/my-skills` skill only
 
-**Everything else is read-only** (`python/skills/`, `.gemini/`, `.claude/`, `docs/`, `config.toml`, `AGENTS.md`, `CLAUDE.md`, etc.)
+**Everything else is read-only** (`python/skills/`, `python/skills-catalog/`, `.gemini/`, `.claude/`, `docs/`, `config.toml`, `AGENTS.md`, `CLAUDE.md`, etc.)
 
 If a script returns an error, do not attempt to fix the code — report the error to the user as-is.
 

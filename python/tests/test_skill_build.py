@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 ROOT          = Path(__file__).resolve().parents[2]
-SKILLS_ROOTS  = [ROOT / "python" / "skills", ROOT / "python" / "skills-personal"]
+SKILLS_ROOTS  = [ROOT / "python" / "skills", ROOT / "python" / "skills-catalog", ROOT / "python" / "skills-personal"]
 SKILLS_DIST   = ROOT / "skills"
 
 sys.path.insert(0, str(ROOT / "python" / "scripts" / "setup"))
@@ -239,3 +239,38 @@ class TestSkillBuildOutput:
                     f"{skill_file.name} does not contain SKILL.md. "
                     f"Contents: {zf.namelist()}"
                 )
+
+
+# ── 3-root precedence: common > catalog > personal ────────────────────────
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs build-skills.sh with bash")
+def test_build_skills_sh_precedence_common_catalog_personal(tmp_path):
+    import shutil as _sh
+    import subprocess as _sp
+    import zipfile as _zf
+    if not _sh.which("zip"):
+        pytest.skip("zip not installed")
+    setup_dir = tmp_path / "python" / "scripts" / "setup"
+    setup_dir.mkdir(parents=True)
+    _sh.copy(ROOT / "python" / "scripts" / "setup" / "build-skills.sh", setup_dir)
+
+    def mk(root, name, body):
+        d = tmp_path / "python" / root / name
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(f"---\nname: {name}\n---\n{body}\n")
+
+    mk("skills", "dup-a", "from-common")
+    mk("skills-catalog", "dup-a", "from-catalog")
+    mk("skills-catalog", "dup-b", "from-catalog")
+    mk("skills-personal", "dup-b", "from-personal")
+    mk("skills-personal", "only-mine", "from-personal")
+
+    _sp.run(["bash", str(setup_dir / "build-skills.sh")], check=True, capture_output=True)
+
+    def body(name):
+        with _zf.ZipFile(tmp_path / "skills" / f"{name}.skill") as z:
+            return z.read("SKILL.md").decode()
+
+    assert "from-common" in body("dup-a")
+    assert "from-catalog" in body("dup-b")
+    assert "from-personal" in body("only-mine")

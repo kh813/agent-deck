@@ -406,6 +406,28 @@ class TestPythonPayloadRefresh:
             "user-created and catalog-synced skills must survive the refresh."
         )
 
+    def test_apply_preserves_skills_catalog(self, project_root, monkeypatch):
+        """Catalog-installed skills (incl. manual downloads, which `sync`
+        can't restore) live in skills-catalog/ and must survive too."""
+        monkeypatch.setattr(su.sys, "platform", "darwin")
+        catalog = project_root / "python" / "skills-catalog" / "org-skill"
+        (catalog / "scripts").mkdir(parents=True)
+        (catalog / "SKILL.md").write_text("---\nname: org-skill\n---\n")
+        (catalog / "scripts" / "run.py").write_text("x\n")
+        monkeypatch.setattr(su, "_fetch_latest_release", lambda: _fake_release("v0.2.0"))
+
+        def fake_run(cmd, *a, **kw):
+            if cmd[0] == "curl":
+                _make_org_rebranded_zip(Path(cmd[-1]))
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(su.subprocess, "run", fake_run)
+
+        su.apply()
+
+        assert (catalog / "SKILL.md").exists()
+        assert (catalog / "scripts" / "run.py").exists()
+
     def test_apply_normalizes_sh_files_to_lf(self, project_root, monkeypatch):
         """The Windows release zip's python/ tree has shipped CRLF before,
         which breaks bash on Mac."""

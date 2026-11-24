@@ -17,11 +17,14 @@ Storage format on Drive (two kinds, per skill):
   <owner>/<skill-name>.md   — SKILL.md-only skill (previewable on Drive)
   <owner>/<skill-name>.zip  — whole skill directory, for skills that bundle
                               scripts/assets beyond SKILL.md. On download the
-                              archive is extracted to skills-personal/<name>/;
-                              SKILL.md then references its bundled scripts
-                              PROJECT-ROOT-RELATIVE (e.g. "python3
-                              python/skills-personal/<name>/scripts/foo.py"),
-                              since the agy session cwd is the project root.
+                              archive is extracted to skills-catalog/<name>/;
+                              SKILL.md references its bundled scripts as
+                              `python3 "{{SKILL_DIR}}/scripts/foo.py"` (or,
+                              in older skills, project-root-relative
+                              `python3 python/skills-personal/<name>/...`);
+                              setup.py install_skills() expands/rewrites
+                              these to the skill's actual absolute location
+                              when deploying (see render_skill_md()).
                               The .skill package built from it still contains
                               only SKILL.md — nothing about build/install
                               changes.
@@ -120,9 +123,14 @@ CLIENT_CONFIG = {
     }
 }
 
-# Personal skill layer: catalog import/share reads and writes here, since
-# imported/shared skills are per-installation, not the bundled skill set.
+# Three skill roots (build order = precedence on a name clash, first wins):
+#   python/skills/          common   — bundled with the app, git-tracked
+#   python/skills-catalog/  catalog  — installed FROM the Drive catalog
+#                                      (`sync` of _default/ + `download`)
+#   python/skills-personal/ personal — the user's own (`my-skills create`);
+#                                      `upload`/`publish` share from here
 SKILLS_SRC        = PROJECT_ROOT / "python" / "skills-personal"
+CATALOG_SKILLS_DIR = PROJECT_ROOT / "python" / "skills-catalog"
 # `list-local` additionally shows the bundled layer.
 COMMON_SKILL_ROOTS = [PROJECT_ROOT / "python" / "skills"]
 INDEX_PATH        = PROJECT_ROOT / "python" / "skills" / "skill-catalog" / "catalog-index.md"
@@ -136,7 +144,10 @@ AUTO_SYNC_OWNER = "_default"
 # Records which skills `sync` itself installed (name -> Drive modifiedTime),
 # so a skill removed from _default/ is cleaned up locally without ever
 # touching skills the user created or downloaded manually.
-SYNC_MANIFEST_PATH = SKILLS_SRC / ".catalog-sync-manifest"
+SYNC_MANIFEST_PATH = CATALOG_SKILLS_DIR / ".catalog-sync-manifest"
+# Before skills-catalog/ existed, sync installed into skills-personal/ and
+# kept its manifest there; migrate_legacy_catalog_layout() moves those.
+LEGACY_SYNC_MANIFEST_PATH = SKILLS_SRC / ".catalog-sync-manifest"
 # First-launch interactive auth cap: if the user closes the browser without
 # authorizing, sync must not hang the (non-interactive) preflight forever.
 SYNC_AUTH_TIMEOUT_SECONDS = 180
@@ -636,7 +647,7 @@ def cmd_list_local():
 
     commons, mine, catalog = [], [], []
 
-    all_roots = COMMON_SKILL_ROOTS + [SKILLS_SRC]
+    all_roots = COMMON_SKILL_ROOTS + [CATALOG_SKILLS_DIR, SKILLS_SRC]
     skill_mds = [
         md for root in all_roots if root.exists()
         for md in sorted(root.rglob("SKILL.md"))
@@ -789,8 +800,8 @@ def cmd_info(name_or_path: str):
 
 
 def _install_skill_entry(service, m: dict) -> None:
-    """Fetch a catalog entry into skills-personal/<name>/ (both formats)."""
-    skill_dir = SKILLS_SRC / m["name"]
+    """Fetch a catalog entry into skills-catalog/<name>/ (both formats)."""
+    skill_dir = CATALOG_SKILLS_DIR / m["name"]
     if m["format"] == "zip":
         _extract_skill_zip(_get_file_bytes(service, m["file_id"]), skill_dir)
     else:
@@ -803,13 +814,16 @@ def cmd_download(name_or_path: str):
     service = _get_service()
     m = _require_single_match(_find_skill(service, name_or_path), name_or_path)
 
-    if (SKILLS_SRC / m["name"]).exists():
+    if (CATALOG_SKILLS_DIR / m["name"]).exists():
         print(f"[INFO] 既存のスキルを上書きします / Overwriting existing skill: {m['name']}")
+    if (SKILLS_SRC / m["name"]).exists():
+        print(f"[WARN] 同名の自作スキルがあります。カタログ版が優先されます / "
+              f"A personal skill with the same name exists; the catalog copy takes precedence: {m['name']}")
 
     _install_skill_entry(service, m)
 
     print(f"[OK] ダウンロード完了 / Downloaded: {m['owner']}/{m['name']}")
-    print(f"     保存先 / Saved to: python/skills-personal/{m['name']}/")
+    print(f"     保存先 / Saved to: python/skills-catalog/{m['name']}/")
     print()
     print("スキルを有効化するには / To activate the skill:")
     print("  python3 python/scripts/setup/setup.py skills rebuild")
@@ -920,6 +934,35 @@ def _read_sync_manifest() -> dict:
     return {}
 
 
+def migrate_legacy_catalog_layout() -> None:
+    """One-time move of sync-installed skills out of skills-personal/.
+
+    Older versions installed the catalog's _default/ skills into
+    skills-personal/ next to the user's own, telling them apart only via
+    skills-personal/.catalog-sync-manifest. Move every manifest-listed skill
+    (and the manifest itself) into skills-catalog/. Skills NOT in that
+    manifest (the user's own, or older manual `download`s) stay where they
+    are -- they keep working from skills-personal/, and nothing here can
+    tell a manual download apart from the user's own skill reliably.
+    Safe to call on every launch; a no-op once migrated."""
+    if not LEGACY_SYNC_MANIFEST_PATH.exists():
+        return
+    try:
+        legacy = json.loads(LEGACY_SYNC_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        legacy = {}
+    CATALOG_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    manifest = _read_sync_manifest()
+    for name, modified in legacy.items():
+        src, dest = SKILLS_SRC / name, CATALOG_SKILLS_DIR / name
+        if src.exists() and not dest.exists():
+            shutil.move(str(src), str(dest))
+            print(f"  Moved catalog skill to python/skills-catalog/: {name}")
+        manifest.setdefault(name, modified)
+    SYNC_MANIFEST_PATH.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    LEGACY_SYNC_MANIFEST_PATH.unlink()
+
+
 def cmd_sync() -> None:
     """Install/update every skill in the catalog's _default/ folder, and
     remove locally whatever left it — but ONLY skills this sync itself
@@ -930,6 +973,10 @@ def cmd_sync() -> None:
     malformed archive) prints a warning and leaves existing skills as
     they are — they'll be retried next launch. No-op without a real
     catalog_folder_id in config.toml (see catalog_configured())."""
+    try:
+        migrate_legacy_catalog_layout()
+    except Exception as e:
+        print(f"  [WARN] Catalog layout migration skipped ({type(e).__name__}: {e}).")
     if not catalog_configured():
         return
 
@@ -954,7 +1001,7 @@ def cmd_sync() -> None:
         # Remove skills that left _default/ (manifest-tracked only).
         removed = 0
         for stale_name in set(manifest) - set(remote):
-            stale_dir = SKILLS_SRC / stale_name
+            stale_dir = CATALOG_SKILLS_DIR / stale_name
             if stale_dir.exists():
                 shutil.rmtree(stale_dir)
                 removed += 1
@@ -965,7 +1012,7 @@ def cmd_sync() -> None:
         for name, entry in sorted(remote.items()):
             prev = manifest.get(name)
             if (prev == entry["modified_full"]
-                    and (SKILLS_SRC / name / "SKILL.md").exists()):
+                    and (CATALOG_SKILLS_DIR / name / "SKILL.md").exists()):
                 continue
             _install_skill_entry(service, entry)
             manifest[name] = entry["modified_full"]

@@ -2,7 +2,7 @@
 Tests for automate.py's script dispatch (2026-07-16).
 
 Catalog-distributed skills bundle their scripts inside their own skill
-directory (python/skills-personal/<name>/scripts/), and dispatch through
+directory (python/skills-catalog/<name>/scripts/, or skills-personal/), and dispatch through
 this launcher to get its venv/playwright bootstrap — _find_script must
 resolve scripts from those bundles, after the explicit AUTOMATION_DIRS.
 
@@ -30,19 +30,40 @@ def roots(tmp_path, monkeypatch):
         tmp_path / "src-internal" / "scripts" / "automation",
         tmp_path / "src-personal" / "scripts" / "automation",
     ])
-    monkeypatch.setattr(automate, "SKILL_SCRIPTS_GLOB",
-                        tmp_path / "python" / "skills-personal")
+    monkeypatch.setattr(automate, "SKILL_SCRIPT_ROOTS", [
+        tmp_path / "python" / "skills-catalog",
+        tmp_path / "python" / "skills-personal",
+    ])
     return tmp_path, script_dir
 
 
 class TestFindScript:
     def test_finds_script_in_skill_bundle(self, roots):
         tmp_path, _ = roots
-        bundled = tmp_path / "python" / "skills-personal" / "org-skill" / "scripts" / "download.py"
+        bundled = tmp_path / "python" / "skills-catalog" / "org-skill" / "scripts" / "download.py"
         bundled.parent.mkdir(parents=True)
         bundled.write_text("# bundled\n")
 
         assert automate._find_script("download.py") == bundled
+
+    def test_falls_back_to_personal_skill_bundle(self, roots):
+        """Pre-migration installs (and the user's own skills) keep their
+        bundled scripts under skills-personal/."""
+        tmp_path, _ = roots
+        bundled = tmp_path / "python" / "skills-personal" / "my-skill" / "scripts" / "run.py"
+        bundled.parent.mkdir(parents=True)
+        bundled.write_text("# mine\n")
+
+        assert automate._find_script("run.py") == bundled
+
+    def test_catalog_bundle_wins_over_personal(self, roots):
+        tmp_path, _ = roots
+        for root in ("skills-personal", "skills-catalog"):
+            p = tmp_path / "python" / root / "org-skill" / "scripts" / "download.py"
+            p.parent.mkdir(parents=True)
+            p.write_text(f"# {root}\n")
+
+        assert automate._find_script("download.py").parts[-4] == "skills-catalog"
 
     def test_explicit_dirs_win_over_skill_bundles(self, roots):
         """src-internal/ (and the public automation dir) take precedence —

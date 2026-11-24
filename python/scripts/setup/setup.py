@@ -91,6 +91,93 @@ def setup_venv():
 
 _HOME_SKILLS_MANIFEST = ".installed-skills-manifest"
 
+def _project_root_posix(project_root=None):
+    """Absolute project root with forward slashes on every OS
+    (C:/Users/x/agent-deck on Windows) -- safe to embed in Markdown,
+    JSON and TOML strings, and accepted by python/cmd/PowerShell alike."""
+    root = Path(project_root) if project_root else Path(SCRIPT_DIR).parents[2]
+    return root.resolve().as_posix()
+
+# `python3 python/...` at a command position (not part of a longer path).
+_SKILL_CMD_PATH_RE = None
+
+_SKILL_ROOT_PREFIXES = ("python/skills-catalog/", "python/skills-personal/", "python/skills/")
+
+def _resolve_skill_root_path(rel, project_root):
+    """A path under one skill root (e.g. python/skills-personal/x/scripts/a.py)
+    that doesn't exist there but does under another root: return that one.
+
+    Org skills are authored in skills-personal/ (so their SKILL.md says
+    `python/skills-personal/<name>/scripts/...`) but land in skills-catalog/
+    on every other machine via sync -- and older installs synced them into
+    skills-personal/. Resolving by what actually exists keeps both working."""
+    root = Path(project_root)
+    if (root / rel).exists():
+        return rel
+    for prefix in _SKILL_ROOT_PREFIXES:
+        if rel.startswith(prefix):
+            remainder = rel[len(prefix):]
+            for other in _SKILL_ROOT_PREFIXES:
+                if other != prefix and (root / other / remainder).exists():
+                    return other + remainder
+    return rel
+
+def render_skill_md(text, project_root=None, skill_dir=None):
+    """Make a SKILL.md work from any session working folder.
+
+    Skill sources reference scripts project-root-relative
+    (`python3 python/scripts/automation/automate.py ...`), which only works
+    while the agent's cwd is the project root -- not after the user picks
+    another working folder, and not for the per-user copies in
+    ~/.gemini/skills / ~/.claude/skills. At deploy time:
+      - `{{PROJECT_ROOT}}` -> the absolute project root;
+      - `{{SKILL_DIR}}` -> the absolute dir the skill's source lives in
+        (whichever of skills/ / skills-catalog/ / skills-personal/);
+      - `python3 python/<path>` / `python python/<path>` ->
+        `python3 "<root>/python/<path>"`, with a path under a skill root
+        redirected to the root where it actually exists.
+    A leading backslash keeps text literal (minus the backslash), for skills
+    that document these conventions: `\\{{SKILL_DIR}}`, `\\python3 python/x.py`.
+    Sources stay unchanged (they're also what the catalog distributes)."""
+    import re
+    global _SKILL_CMD_PATH_RE
+    if _SKILL_CMD_PATH_RE is None:
+        # Group 1 is an escaping backslash; it only counts as one when not
+        # itself part of a path (venv\Scripts\python is preceded by a word char).
+        _SKILL_CMD_PATH_RE = re.compile(
+            r'(?<![\w/.\\-])(\\?)(?<![\w/.-]\\)(python3?)([ \t]+)(python/[^\s`"\'()|;&<>]+)')
+    root_path = Path(project_root) if project_root else Path(SCRIPT_DIR).parents[2]
+    root = _project_root_posix(project_root)
+    values = {"PROJECT_ROOT": root}
+    if skill_dir is not None:
+        values["SKILL_DIR"] = Path(skill_dir).resolve().as_posix()
+
+    def placeholder(m):
+        if m.group(1):  # escaped: \{{X}} -> literal {{X}}
+            return "{{" + m.group(2) + "}}"
+        return values.get(m.group(2), m.group(0))
+
+    text = re.sub(r"(\\?)\{\{(PROJECT_ROOT|SKILL_DIR)\}\}", placeholder, text)
+
+    def command(m):
+        if m.group(1):  # escaped: \python3 python/x -> literal python3 python/x
+            return m.group(0)[1:]
+        return f'{m.group(2)}{m.group(3)}"{root}/{_resolve_skill_root_path(m.group(4), root_path)}"'
+
+    return _SKILL_CMD_PATH_RE.sub(command, text)
+
+def _find_source_skill_dir(skill_name, project_root=None):
+    """Where build-skills took <skill_name> from: first enabled match across
+    the roots in build order (same precedence as build-skills.sh)."""
+    root = Path(project_root) if project_root else Path(SCRIPT_DIR).parents[2]
+    for skill_root in _skill_roots(root):
+        if not skill_root.exists():
+            continue
+        for skill_md in sorted(skill_root.rglob("SKILL.md")):
+            if skill_md.parent.name == skill_name and "disabled" not in skill_md.relative_to(skill_root).parts:
+                return skill_md.parent
+    return None
+
 def _sync_home_skills(local_skills_dir, home_skills_dir, installed, overwrite_unmanaged=True):
     """Mirror the freshly-installed local skills into a per-user skills dir.
 
@@ -149,6 +236,12 @@ def install_skills():
         os.makedirs(dest, exist_ok=True)
         with zipfile.ZipFile(os.path.join(skills_dir, skill_file)) as zf:
             zf.extractall(dest)
+        skill_md = Path(dest) / "SKILL.md"
+        if skill_md.exists():
+            skill_md.write_text(
+                render_skill_md(skill_md.read_text(encoding="utf-8"),
+                                skill_dir=_find_source_skill_dir(skill_name)),
+                encoding="utf-8")
         print(f"  Installed: {skill_name}")
         installed.append(skill_name)
 
@@ -191,12 +284,16 @@ def setup_files_folder():
 
 def install_gemini_policies():
     print("==> Installing Gemini CLI policies to ~/.gemini/policies/...")
-    import shutil
     src_policies = Path(SCRIPT_DIR).parents[1] / "config" / "gemini" / "policies"
     dst_policies = Path.home() / ".gemini" / "policies"
     dst_policies.mkdir(parents=True, exist_ok=True)
+    # {{PROJECT_ROOT}} lets the auto-allow rules match the absolute script
+    # paths render_skill_md() writes into installed skills. Escaped for a
+    # TOML basic string (the posix path has no backslashes; quotes are rare).
+    root = _project_root_posix().replace('"', '\\"')
     for toml_file in src_policies.glob("*.toml"):
-        shutil.copy2(toml_file, dst_policies / toml_file.name)
+        text = toml_file.read_text(encoding="utf-8").replace("{{PROJECT_ROOT}}", root)
+        (dst_policies / toml_file.name).write_text(text, encoding="utf-8")
         print(f"  Installed: {toml_file.name}")
 
 CLAUDE_SETTINGS_NAME = "agent-deck-settings.json"
@@ -220,6 +317,7 @@ def install_claude_settings(project_root=None):
     rule_root = _claude_abs_rule_path(project_root)
     # Insert via json.dumps so a path with quotes/backslashes stays valid JSON.
     text = text.replace("${PROJECT_ROOT_RULE}", json.dumps(rule_root)[1:-1])
+    text = text.replace("${PROJECT_ROOT_POSIX}", json.dumps(_project_root_posix(project_root))[1:-1])
     data = json.loads(text)
     data.pop("$comment", None)
     dest = project_root / ".claude" / CLAUDE_SETTINGS_NAME
@@ -230,12 +328,15 @@ def install_claude_settings(project_root=None):
 
 # ── setup skills ──────────────────────────────────────────────
 #
-# Two skill roots:
-#   python/skills/           bundled   — ships with every agent-deck install
-#   python/skills-personal/  personal — per-installation, gitignored, created by `my-skills create`
+# Three skill roots, built in this order -- on a name clash the FIRST one
+# wins (build-skills.sh/.ps1 warn and skip the later copy):
+#   python/skills/           common   — bundled with every agent-deck install (git-tracked)
+#   python/skills-catalog/   catalog  — installed from the org's Drive skill-catalog
+#                                       (`skills_catalog.py sync` / `download`), gitignored
+#   python/skills-personal/  personal — the user's own, created by `my-skills create`, gitignored
 # Each root may have its own `disabled/` subfolder for temporarily-disabled skills.
 
-_SKILL_ROOT_NAMES = ["skills", "skills-personal"]
+_SKILL_ROOT_NAMES = ["skills", "skills-catalog", "skills-personal"]
 
 def _skill_roots(project_root):
     return [project_root / "python" / name for name in _SKILL_ROOT_NAMES]
@@ -269,7 +370,7 @@ def skills_list():
 
 def sync_catalog_skills():
     """Best-effort: pull auto-distributed skills (the catalog's _default/
-    folder) into skills-personal/ before building, so they're part of the
+    folder) into skills-catalog/ before building, so they're part of the
     same rebuild. skills_catalog.py itself no-ops instantly unless
     config.toml points at a real catalog_folder_id, and handles its own
     venv re-exec for the google-api deps.

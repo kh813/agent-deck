@@ -1,15 +1,16 @@
 #!/bin/bash
-# Build all .skill packages from python/skills/ (bundled) and
-# python/skills-personal/ (per-installation, gitignored, created by
-# `my-skills create` / skill-catalog import).
-# A `disabled/` subfolder under either root is excluded from the build.
+# Build all .skill packages from python/skills/ (bundled),
+# python/skills-catalog/ (installed from the Drive skill-catalog) and
+# python/skills-personal/ (the user's own, created by `my-skills create`).
+# Roots are processed in that order; on a duplicate name the first wins.
+# A `disabled/` subfolder under any root is excluded from the build.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 SKILLS_OUT="$PROJECT_ROOT/skills"
-SKILL_ROOTS=("$PROJECT_ROOT/python/skills" "$PROJECT_ROOT/python/skills-personal")
+SKILL_ROOTS=("$PROJECT_ROOT/python/skills" "$PROJECT_ROOT/python/skills-catalog" "$PROJECT_ROOT/python/skills-personal")
 
 mkdir -p "$SKILLS_OUT"
 rm -f "$SKILLS_OUT"/*.skill

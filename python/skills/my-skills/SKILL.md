@@ -45,13 +45,15 @@ If the user types `/my-skills` or "my-skills" without specifying a subcommand, d
 
 ## 共通ルール / Common Rules
 
-**スキルの検索順序**（update / test / disable / delete で `<name>` を探す際）：以下の2ルートを順に検索し、各ルート内では有効状態→`disabled/`の順に探します。
+**スキルの検索順序**（update / test / disable / delete で `<name>` を探す際）：以下の3ルートを順に検索し、各ルート内では有効状態→`disabled/`の順に探します。同名スキルがある場合はこの順で先のものが使われます。
 1. `python/skills/`（同梱）
-2. `python/skills-personal/`（自分専用）
+2. `python/skills-catalog/`（カタログからインストール。次回起動時の同期で上書きされるため、update で編集しないこと）
+3. `python/skills-personal/`（自分専用）
 
-**Search order for `<name>`** (used by update / test / disable / delete): search the two roots in this order, checking each root's top level before its `disabled/` subfolder.
+**Search order for `<name>`** (used by update / test / disable / delete): search the three roots in this order, checking each root's top level before its `disabled/` subfolder. On a name clash the earlier root's skill is the one used.
 1. `python/skills/` (bundled)
-2. `python/skills-personal/` (personal)
+2. `python/skills-catalog/` (installed from the catalog — overwritten by the next launch's sync, so don't edit it with update)
+3. `python/skills-personal/` (personal)
 
 **リビルドを伴うサブコマンド完了後**（disable / enable / create / update / delete / rebuild）：ユーザーに `/skills reload`（Gemini CLI）の実行を案内してください。list / test は対象外です。
 **After any subcommand that rebuilds skills** (disable / enable / create / update / delete / rebuild): prompt the user to run `/skills reload` in Gemini CLI. Not needed for list / test.
@@ -147,7 +149,7 @@ Avoid technical questions. Start with just this one open-ended question:
 ユーザーの回答をもとに、以下を AI が整理・提案します（ユーザーへの質問は最小限に）：
 Based on the reply, the AI proposes the following without burdening the user with technical questions:
 
-- **スキル名** — 英小文字・ハイフン区切り（例: `daily-summary`）。`python/skills/`・`python/skills-personal/` のいずれにも同名フォルダがないか確認する（ビルド時にマージされるため、どのルートでも重複は不可）。
+- **スキル名** — 英小文字・ハイフン区切り（例: `daily-summary`）。`python/skills/`・`python/skills-catalog/`・`python/skills-personal/` のいずれにも同名フォルダがないか確認する（ビルド時にマージされるため、どのルートでも重複は不可）。
 - **説明・起動キーワード** — どんな言葉で動くか（例: 「スケジュールまとめて」「daily summary」）
 - **手順** — 実行する流れ
 - **使用例** — 具体的な発話と対応する動作
@@ -196,6 +198,11 @@ If changes are needed, revise and confirm again. Only proceed to Step 4 upon exp
 
 Write ツールを使って `python/skills-personal/<name>/SKILL.md` に保存します。
 Use the Write tool to save to `python/skills-personal/<name>/SKILL.md`.
+
+**書き方のルール（agy / Claude Code 共通）/ Authoring rules (shared by agy and Claude Code):**
+- スキルに同梱するスクリプトは `python3 "\{{SKILL_DIR}}/scripts/foo.py"` と書く（インストール時にそのスキルの実際の場所の絶対パスに展開されるため、カタログで配布しても動きます）。共通スクリプトは `\python3 python/scripts/...` のようにプロジェクトルートからの相対で書く（絶対パスへ自動変換されます）。その他で絶対パスが必要なら `\{{PROJECT_ROOT}}`。 / Reference scripts bundled with the skill as `python3 "\{{SKILL_DIR}}/scripts/foo.py"` (expanded at install time to wherever the skill actually lives, so it still works when distributed via the catalog). Reference shared scripts project-root-relative, e.g. `\python3 python/scripts/...` (made absolute automatically). Use `\{{PROJECT_ROOT}}` for any other absolute path.
+  （このスキル内の例は、インストール時に展開されないよう先頭に `\` を付けて書いています。新しいスキルには `\` を付けずに書いてください。 / The examples in this skill carry a leading `\` so they aren't expanded at install time — write them without it in new skills.）
+- ユーザーへの質問は特定のツール名ではなく「質問ツールで聞く」と書く（agy は `ask_user`、Claude Code は `AskUserQuestion` に `AGENTS.md` が読み替えます）。`agy` など特定エンジン名を前提にした手順は書かない。 / Say "ask with your question tool" rather than naming a tool (`AGENTS.md` maps it to `ask_user` for agy / `AskUserQuestion` for Claude Code), and don't write steps that assume a particular engine such as `agy`.
 
 ### Step 5 — リビルド
 

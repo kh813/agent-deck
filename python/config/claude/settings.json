@@ -7,6 +7,8 @@
       "Bash(python3 -m *)",
       "Bash(python python/*)",
       "Bash(python -m *)",
+      "Bash(python3 \"${PROJECT_ROOT_POSIX}/python/*)",
+      "Bash(python \"${PROJECT_ROOT_POSIX}/python/*)",
       "Bash(venv/bin/python3 *)",
       "Bash(venv/bin/python *)",
       "Bash(venv\\Scripts\\python *)",

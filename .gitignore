@@ -55,6 +55,7 @@ python/scripts/automation/scheduled/
 # Personal skill layer — per-installation, never committed
 python/skills-personal/*
 !python/skills-personal/.gitkeep
+python/skills-catalog/
 
 # Generated cache (rebuilt by skills_catalog.py)
 python/skills/skill-catalog/catalog-index.md

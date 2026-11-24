@@ -83,8 +83,9 @@ agent-deck/
 │   │   └── skills_catalog.py      # スキルカタログ（Drive）管理
 │   ├── scripts/automation/        # 共通ユーティリティ（chrome_utils.py 等）
 │   ├── scripts/tools/             # upload_release.py・drive_upload.py 等の管理者用ユーティリティ
-│   ├── skills/                    # 公開スキルのソース
-│   └── skills-personal/           # ★組織固有スキル + カタログ同期スキルの著作場所（git 管理外、§2）
+│   ├── skills/                    # 標準スキルのソース（アプリに同梱・git 管理）
+│   ├── skills-catalog/            # ★カタログからインストールしたスキル（sync / download、git 管理外、§2）
+│   └── skills-personal/           # ★自作スキル・組織固有スキルの著作場所（git 管理外、§2）
 │
 ├── venv/                        # Python 仮想環境（自動生成）
 ├── .gemini/skills/               # インストール済みスキル（agy が読み込む）
@@ -113,32 +114,58 @@ Claude Code reads the same SKILL.md format (`name`/`description` frontmatter) fr
 
 ```
 python/skills/**/<name>/SKILL.md          (公開 / public, 公開リポジトリ自身が同梱)
-python/skills-personal/**/<name>/SKILL.md (個人 + カタログ同期分 / personal + catalog-synced)
-        ↓  build-skills.sh (setup.py 経由)   — 両ルートをマージ
+python/skills-catalog/**/<name>/SKILL.md  (カタログから / from the catalog: sync + download)
+python/skills-personal/**/<name>/SKILL.md (自作 / the user's own)
+        ↓  build-skills.sh (setup.py 経由)   — 3 ルートをこの順でマージ（同名は先勝ち）/ merges the 3 roots in this order (first wins on a name clash)
 skills/<name>.skill   (ZIPアーカイブ / ZIP archive)
-        ↓  setup.py install_skills()
+        ↓  setup.py install_skills()  — render_skill_md(): `python3 python/…` → 絶対パス、`{{PROJECT_ROOT}}` 展開
 .gemini/skills/<name>/SKILL.md   ← agy はここから読み込む / agy reads from here
 .claude/skills/<name>/SKILL.md   ← Claude Code はここから読み込む / Claude Code reads from here
   (+ ~/.gemini/skills/, ~/.claude/skills/ — 作業フォルダがプロジェクト外でも見つかるように / so they're found from any working folder)
 ```
 
-`python/skills-personal/` には2種類のものが混在します：ユーザーが `my-skills create` で作った個人スキルと、**skill-catalog の `_default/` フォルダから自動同期された会社スキル**（`skills_catalog.py sync` が書き込む、`.catalog-sync-manifest` で管理）。
+スキルの置き場所は 3 つです。/ Skills live in three roots:
 
-`python/skills-personal/` holds two kinds of content: skills a user created via `my-skills create`, and **company skills auto-synced from the skill-catalog's `_default/` folder** (written by `skills_catalog.py sync`, tracked via `.catalog-sync-manifest`).
+| ルート / Root | 中身 / Contents | 管理 / Managed by |
+|---|---|---|
+| `python/skills/` | 標準スキル（common）。アプリと同じ版で配布され、`python/scripts/` と常に整合する / Standard skills, shipped and versioned with the app | git・リリース |
+| `python/skills-catalog/` | **skill-catalog の `_default/` から自動同期**したスキル（`.catalog-sync-manifest` で管理し、`_default/` から消えたら削除）と、`skill-catalog download` で手動取得したスキル（同期では消えない）/ Auto-synced from the catalog's `_default/` (manifest-tracked, removed when gone from `_default/`) plus manual `download`s (never removed by sync) | `skills_catalog.py` |
+| `python/skills-personal/` | ユーザーが `my-skills create` で作ったスキル。`upload`/`publish` はここから共有する / The user's own, created via `my-skills create`; `upload`/`publish` share from here | ユーザー |
+
+`skills-catalog/` と `skills-personal/` は git 管理外で、自己更新でも保持されます（`self_update.py` の `_PRESERVED_PYTHON_DIRS`）。旧バージョンは同期分も `skills-personal/` に入れていたため、`skills_catalog.py sync` は起動のたびに `skills-personal/.catalog-sync-manifest` を確認し、そこに載っているスキルだけを `skills-catalog/` へ移します（手動 `download` 分は自作スキルと区別できないため `skills-personal/` に残り、そのまま動作します）。
+
+`skills-catalog/` and `skills-personal/` are gitignored and preserved across self-updates (`self_update.py`'s `_PRESERVED_PYTHON_DIRS`). Older versions also put synced skills in `skills-personal/`, so `skills_catalog.py sync` checks for `skills-personal/.catalog-sync-manifest` on every launch and moves exactly the skills listed there into `skills-catalog/` (older manual `download`s can't be told apart from the user's own skills, so they stay in `skills-personal/` and keep working).
+
+標準スキルをカタログに一元化しない理由 / Why the standard skills aren't moved into the catalog: (1) 標準スキルは同梱の `python/scripts/` を呼ぶため、アプリと同じ版で配る必要がある / they call the bundled `python/scripts/`, so they must ship with the matching app version; (2) カタログ未設定・未認証・オフラインの環境でもスキルが使える / they work without a configured catalog, Google auth or network; (3) リリースのテスト→本番昇格の流れに乗る（`publish` は即時に全端末へ配信される）/ they go through the release test-then-promote flow, whereas `publish` reaches every machine immediately.
+
+#### スキルの書き方（agy / Claude Code 共通）/ Authoring Skills for Both Engines
+
+SKILL.md の原本は 1 つで、エンジンごとの別版は作りません。インストール時の変換（`setup.py render_skill_md()`）と `AGENTS.md` の読み替えで、両エンジンに同じスキルを配ります。
+
+There is one SKILL.md source per skill — no per-engine variants. Deploy-time rendering (`setup.py render_skill_md()`) plus `AGENTS.md`'s tool mapping make the same skill work on both engines.
+
+- **スキル同梱のスクリプト / Scripts bundled with the skill:** `python3 "{{SKILL_DIR}}/scripts/foo.py"` と書く（推奨）。`{{SKILL_DIR}}` はそのスキルの実際の置き場所（標準・カタログ・個人のいずれか）の絶対パスに展開されます。既存スキルの `python3 python/skills-personal/<name>/scripts/…` という書き方も、書かれた場所に無ければ他のルートで同じパスを探して置き換えるため、そのまま動きます（同期先が `skills-catalog/` に変わっても壊れません）。 / Write `python3 "{{SKILL_DIR}}/scripts/foo.py"` (recommended); `{{SKILL_DIR}}` expands to the absolute dir the skill actually lives in. Existing skills' `python3 python/skills-personal/<name>/scripts/…` still work: a path missing from its stated root is redirected to the root where it exists (so the move of synced skills to `skills-catalog/` doesn't break them).
+- **スクリプトのパス / Script paths:** `python3 python/<path>`（プロジェクトルートからの相対）で書く。インストール時に `python3 "<プロジェクトの絶対パス>/python/<path>"` へ変換されるため、作業フォルダをプロジェクト外に変えても、`~/.gemini/skills/`・`~/.claude/skills/` のコピーからでも動きます。その他の箇所で絶対パスが必要なら `{{PROJECT_ROOT}}` と書く（同じく展開されます）。ソースと `.skill` パッケージは変換しません（カタログに配るのも未変換の原本です）。agy ポリシー・Claude 許可設定の自動許可ルールには、変換後の絶対パス形式も入れてあります。 / Write `python3 python/<path>` (project-root-relative); install rewrites it to `python3 "<absolute project root>/python/<path>"`, so it works from any working folder and from the `~/.gemini/skills/` / `~/.claude/skills/` copies. Use `{{PROJECT_ROOT}}` anywhere else an absolute path is needed. Sources and `.skill` packages are left unconverted (the catalog distributes the original). Both the agy policy and the Claude settings auto-allow the converted absolute form too.
+- **ユーザーへの質問 / Asking the user:** 特定のツール名ではなく「質問ツールで聞く」と書く。`AGENTS.md` が agy では `ask_user`、Claude Code では `AskUserQuestion` に読み替えます（`ask_user` のパラメータ例を書く場合は agy 向けの補足として）。 / Say "ask with your question tool"; `AGENTS.md` maps it to `ask_user` (agy) / `AskUserQuestion` (Claude Code).
+- **エンジン名 / Engine names:** `agy` 等の特定エンジンを前提にした手順を書かない。 / Don't write steps that assume a specific engine such as `agy`.
+- **変換させたくない例示 / Examples that must stay literal:** 規約そのものを説明するスキル（`my-skills` 等）では、`\{{SKILL_DIR}}`・`\python3 python/…` のように先頭に `\` を付けると、配置時に `\` だけ取り除かれて文字どおり残ります。 / In skills that document these conventions (e.g. `my-skills`), prefix with `\` — `\{{SKILL_DIR}}`, `\python3 python/…` — and deployment just drops the backslash.
+- **`files/` などのデータパス / Data paths like `files/`:** 変換対象外で、セッションの作業フォルダからの相対として解釈されます。 / Not rewritten; resolved relative to the session's working folder.
 
 ### 組織固有スキルの著作フロー / Org-Specific Skill Authoring Flow
 
 ```
 python/skills-personal/<name>/SKILL.md（+ scripts/ 同梱、自己完結）で直接著作
 Author directly in python/skills-personal/<name>/SKILL.md (+ bundled scripts/, self-contained)
+  (同梱スクリプトは `python3 "{{SKILL_DIR}}/scripts/…"` と書く — 著作者の端末では skills-personal/、配布先では skills-catalog/ に展開される /
+   reference bundled scripts as `python3 "{{SKILL_DIR}}/scripts/…"` — expands to skills-personal/ on the author's machine, skills-catalog/ elsewhere)
         ↓  このディレクトリの agent-deck.app/.exe で動作確認
            Test locally against this directory's own agent-deck.app/.exe
         ↓  問題なければ Drive カタログへ公開 / once verified, publish to the Drive catalog
 python3 python/scripts/setup/skills_catalog.py publish <skill_name>
         ↓
 Drive の <owner>/_default/ フォルダに配置される
-        ↓  全社員が起動のたびに自動同期（skills_catalog.py sync）
-Auto-synced to every employee's install on every launch
+        ↓  全社員が起動のたびに自動同期（skills_catalog.py sync → python/skills-catalog/）
+Auto-synced to every employee's install on every launch (into python/skills-catalog/)
 ```
 
 組織固有スキルは、依存スクリプト（共通ユーティリティ等）を**スキルディレクトリ自身に同梱**する自己完結型で著作してください。`python/scripts/automation/common.py`・`automate.py` は、新しいスキルを著作する際の参考実装として使えますが、公開後のスキル自体は実行時にこれらをインポートしない（自分のディレクトリ内のコピーを使う）のが望ましい設計です。
@@ -151,8 +178,8 @@ Author org-specific skills as self-contained, bundling their dependency scripts 
 
 If multiple SKILL.md files under `.gemini/skills/` share the same `name`, agy warns of a conflict on startup. `setup.py skills rebuild` automatically removes any matching skill from `~/.gemini/skills/` after installing to the project's `.gemini/skills/`, eliminating home-vs-project duplicate conflicts.
 
-名前衝突ポリシー / Name-conflict policy: `python/skills/`（公開・同梱）が `python/skills-personal/`（カタログ同期分含む）より優先されます。会社スキルは同梱スキルと同名を付けない運用としています。
-Public, bundled skills (`python/skills/`) win over `python/skills-personal/` (including catalog-synced ones). Operationally, company skills avoid reusing a bundled skill's name.
+名前衝突ポリシー / Name-conflict policy: **標準（`python/skills/`）> カタログ（`python/skills-catalog/`）> 個人（`python/skills-personal/`）** の順で先のものが使われ、後のものは `build-skills` が警告してスキップします。標準スキルはアプリの版と整合している必要があるため上書きできず、組織が配るスキルは個人の同名スキルより優先されます。会社スキルは標準スキルと同名を付けない運用としています。なお、自分で著作して `publish` した管理者の端末では、同期で同じスキルが `skills-catalog/` にも入るため毎回警告が出ますが、内容は同一なので無害です。
+**Common (`python/skills/`) > catalog (`python/skills-catalog/`) > personal (`python/skills-personal/`)** — the first one wins and `build-skills` warns about and skips later copies. Standard skills can't be shadowed (they must match the app version), and org-distributed skills win over a user's same-named personal skill. Company skills avoid reusing a standard skill's name. On the machine of an admin who authored and `publish`ed a skill, sync also installs it into `skills-catalog/`, so the duplicate warning shows on every launch — harmless, the content is identical.
 
 ---
 
@@ -350,8 +377,8 @@ python3 python/scripts/setup/self_update.py apply
      Windows: unlinking the running exe directly fails (locked); rename
      it aside to <name>.exe.old first, then move the new exe into the
      now-free path
-6. python/ 一式を同じ zip から再展開（skills-personal/ は保持）
-   Refresh python/ from the same zip (skills-personal/ preserved)
+6. python/ 一式を同じ zip から再展開（skills-personal/・skills-catalog/ は保持）
+   Refresh python/ from the same zip (skills-personal/ and skills-catalog/ preserved)
 7. .sh ファイルを LF に正規化
    Normalize .sh files to LF
 8. マーカーファイル（<root>/<name>.version）に新タグを記録
@@ -655,6 +682,7 @@ cd src-tauri && cargo test --lib
 | `test_markitdown_convert.py` / `test_rename_files.py` | 各スキルのロジック |
 | `test_agy_scheduler.py` / `test_agy_scheduled_prompt.py` / `test_automate_dispatch.py` / `test_gcalendar.py` / `test_notify_chat.py` | 自動化・通知系（定期実行の `--engine agy\|claude` を含む） |
 | `test_install_skills_claude.py` / `test_claude_settings.py` / `test_agents_md_engines.py` | Claude Code 対応（`.claude/skills/` へのインストール、許可設定の生成、`AGENTS.md` のエンジン共通化） |
+| `test_skill_path_render.py` | インストール時のスクリプトパス絶対化（`render_skill_md()`）と、それに合わせた agy ポリシー・Claude 許可ルール |
 
 Rust 側（`src-tauri/`）のテストは PTY・pre-launch コマンドなど、ランチャー本体の挙動をカバーします（Claude Code の実出力を使ったプロンプト検出、PATH への `~/.local/bin` 追加、`${PROJECT_ROOT}` 展開、エンジン別の更新チェック等を含む）。フロントエンドは `npx vitest run`（`src/lib/*.test.ts`、エンジン自動選択を含む）。
 
