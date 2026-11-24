@@ -43,6 +43,9 @@ yarn-error.log*
 
 # Python (bundled skills + automation code)
 /app/venv/
+# Broken venvs moved aside by preflight.sh/.bat and migration/ scripts
+/venv.broken/
+/venv.broken-*/
 __pycache__/
 *.pyc
 *.pyo

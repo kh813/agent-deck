@@ -43,6 +43,19 @@ rem is a self-contained batch/PowerShell script that needs no pre-existing
 rem Python -- it downloads an embedded Python + virtualenv itself if the
 rem system has none -- which is exactly what solves the chicken-and-egg
 rem problem of needing Python to run setup.py below in the first place.
+rem A venv whose python.exe exists but no longer runs is broken (e.g. its
+rem base Python was uninstalled or upgraded away) -- move it aside so the
+rem setup below rebuilds it. An empty venv\ (setup.bat's own "creation
+rem failed" marker, no python.exe) is deliberately left alone so a machine
+rem that can't build a venv doesn't retry the full setup on every launch.
+if not exist "venv\Scripts\python.exe" goto :venv_health_done
+"venv\Scripts\python.exe" -c "import sys" >nul 2>&1
+if not errorlevel 1 goto :venv_health_done
+echo Python environment is broken; rebuilding it...
+if exist "venv.broken\" rmdir /s /q "venv.broken"
+move "venv" "venv.broken" >nul
+:venv_health_done
+
 if exist "venv\" goto :venv_exists
 call "%~dp0python\scripts\setup\setup.bat"
 if errorlevel 1 goto :setup_failed

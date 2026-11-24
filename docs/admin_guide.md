@@ -203,8 +203,10 @@ preflight.sh / preflight.bat
         ↓
 1. python3 setup.py config          — メール・OAuth 設定確認（非対話。未設定なら次回に持ち越し）
                                        Config check (non-interactive; unset fields are just deferred)
-2. venv/ が無ければ python3 setup.py init   — 初回のみ。venv 作成・スキルビルド・ポリシー導入
-                                       First run only: venv, skill build, policy install
+2. venv/ の Python が存在するのに起動できなければ venv.broken/ へ退避（v0.2.2-rc4〜）
+                                       A venv whose interpreter exists but won't run is moved to venv.broken/ (v0.2.2-rc4+)
+   venv/ が無ければ python3 setup.py init   — 初回（または退避後）のみ。venv 作成・スキルビルド・ポリシー導入
+                                       First run (or after the move above) only: venv, skill build, policy install
 3. python3 setup.py skills rebuild   — 常に実行。カタログ同期 → ビルド → 再インストール
                                        Always runs: catalog sync → build → reinstall
 4. 認証チェック（sentinel ファイル）  / Auth check (sentinel file)
@@ -215,6 +217,12 @@ preflight.sh / preflight.bat
 **`init`** は以下を順に実行します（`setup_config()` → `setup_gws()` → `setup_venv()` → `build_skills()` → `install_skills()` → `install_gemini_policies()` → `install_claude_settings()` → `trust_project_folder()` → `setup_files_folder()`）。`skills rebuild`（毎回の起動時）も `install_skills()` の後に `install_claude_settings()` を実行します。venv の有無で初回セットアップ済みかを判定するため、`venv/` は配布 ZIP に含まれません。
 
 **`init`** runs, in order: `setup_config()` → `setup_gws()` → `setup_venv()` → `build_skills()` → `install_skills()` → `install_gemini_policies()` → `install_claude_settings()` → `trust_project_folder()` → `setup_files_folder()`. `skills rebuild` (every launch) also runs `install_claude_settings()` after `install_skills()`. The presence of `venv/` is how the launcher decides whether first-run setup is already done, so it's excluded from the distribution ZIP.
+
+#### 壊れた venv の自動再作成 / Auto-rebuilding a broken venv
+
+venv は作成時の Python（Mac では多くの場合 Homebrew の `python@3.x`）を参照しているため、その Python が `brew upgrade` などで消えると、`venv/bin/python3` が存在するのに起動できない状態になります。以前の preflight はこれに気づかず、venv を使う機能（カタログ同期、Drive・カレンダー系スクリプト）が「venv not found」で黙って失敗し続けていました（実機で確認）。v0.2.2-rc4 から、preflight.sh/.bat は起動のたびにこれを検出して `venv.broken/` に退避し（前回の退避分は削除）、初回と同じセットアップで作り直します（数分かかります）。Windows で setup.bat が作成失敗時に残す「中身が空の venv/（目印）」は、毎回の再試行を避けるため対象外です。
+
+The venv points at the Python it was built from (on Mac usually Homebrew's `python@3.x`); once a `brew upgrade` removes that Python, `venv/bin/python3` exists but won't run. Older preflights didn't notice, so every venv-backed feature (catalog sync, Drive/Calendar scripts) silently failed with "venv not found" (confirmed for real). From v0.2.2-rc4, preflight.sh/.bat detect this on every launch, move it to `venv.broken/` (replacing any previous one) and rebuild it via the first-run setup (takes a few minutes). On Windows, setup.bat's empty `venv/` "creation failed" marker (no python.exe) is deliberately left alone to avoid retrying setup on every launch.
 
 #### agy (Antigravity CLI) のインストール先 / Where agy actually installs
 
