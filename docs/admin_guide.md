@@ -419,6 +419,12 @@ This doesn't hot-swap the running process, so **a restart is required** to use t
 
 `self_update.py` detects and preserves whatever name the installed bundle/exe actually has (works even under a rebranded name like `acme-console.app`). It never writes to a rebrander's own marker (`app/<name>.version`) — doing so would make that rebrander's pinned installer think a new tag arrived and reinstall (downgrade) to its pin.
 
+### v0.2.2-rc1 以前からの移行 / Migrating Installs at v0.2.2-rc1 or Earlier
+
+v0.2.2-rc1 以前の `self_update.py` は `PROJECT_ROOT` を `<root>/python` と取り違えていたため（v0.2.2-rc2 で修正）、それらのインストールでは Update メニューからの更新が必ず失敗します（組織チャネル: `venv not found`）。更新を実行するのはインストール済みの古いスクリプトなので、新しい版を出すだけでは直りません。リポジトリの `migration/` フォルダ（`Update_agent-deck_for_Mac.command` / `Update_agent-deck_for_Windows.bat` / `migrate_to_latest.py` / `README.md`）を ZIP で配り、一度だけ実行してもらってください。インストール済みの更新処理に正しいインストール先を渡して実行するだけで、以降は通常の Update メニューで更新できます。手動で ZIP を上書き展開する方法（次節）でも同じ結果になります。`migration/` はリリース ZIP には含まれません。
+
+Before v0.2.2-rc2, `self_update.py` resolved `PROJECT_ROOT` to `<root>/python`, so the Update menu always fails on installs at v0.2.2-rc1 or earlier (org channel: `venv not found`). The installed (old) script runs the update, so a new build alone can't fix it. Distribute the repo's `migration/` folder (`Update_agent-deck_for_Mac.command` / `Update_agent-deck_for_Windows.bat` / `migrate_to_latest.py` / `README.md`) as a ZIP and have users run it once: it runs the installed updater with the correct install root, after which the normal Update menu works. Manually extracting the ZIP over the install (next section) gives the same result. `migration/` is not part of the release ZIP.
+
 ### 修復 / Repair
 
 **毎回の起動そのものが自己修復的**です：
