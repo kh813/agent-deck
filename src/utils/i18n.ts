@@ -2,10 +2,10 @@ export type Lang = "ja" | "en";
 
 export const translations = {
   ja: {
-    appTitle: "agent-deck チャットコンソール",
-    appLocationDefault: "アプリの場所 (デフォルト)",
+    appLocationDefault: "アプリの場所",
+    workingFolder: "作業フォルダ",
+    clickToChangeFolder: "クリックして作業フォルダを変更",
     agentLabel: "エージェント",
-    changeDir: "ディレクトリ変更",
     stop: "停止",
     startSession: "セッション開始",
     notSupported: "非サポート",
@@ -74,10 +74,10 @@ export const translations = {
     sslKeyPath: "秘密鍵:",
   },
   en: {
-    appTitle: "agent-deck Chat Console",
-    appLocationDefault: "App Location (Default)",
+    appLocationDefault: "App location",
+    workingFolder: "Working folder",
+    clickToChangeFolder: "Click to change the working folder",
     agentLabel: "Agent",
-    changeDir: "Change Dir",
     stop: "Stop",
     startSession: "Start Session",
     notSupported: "Not supported",

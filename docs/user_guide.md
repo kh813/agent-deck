@@ -115,9 +115,12 @@ The engine you picked last is used again on the next launch. If it's no longer i
 > [!IMPORTANT]
 > 誤作動やセッションの不整合を防ぐため、セッション実行中（`RUNNING` 状態）は、ドロップダウンおよびメニューバーからのエンジン切り替えはロック（Disabled）されます。エンジンを切り替える場合は、一度「停止 / Stop」をクリックしてセッションを終了してください。
 
-### 📂 CWD（作業ディレクトリ）の履歴機能 / CWD History Dropdown
-一度選択した作業ディレクトリ（CWD）のパスは、最大5件まで「最近使ったフォルダ」として自動保存されます。
-「ディレクトリ変更 / Change Dir」ボタンの右隣にある `▼` ボタンをクリックすることで、過去のディレクトリへワンクリックで素早く移動できます。
+### 📂 作業フォルダの変更と履歴 / Working Folder & History
+ヘッダーの「作業フォルダ / Working folder」欄をクリックすると、フォルダを選んで作業フォルダを変更できます（セッション実行中は変更できません）。
+Click the "Working folder" field in the header to pick a different folder (not while a session is running).
+
+一度選択した作業フォルダは、最大5件まで「最近使ったフォルダ」として自動保存されます。作業フォルダ欄の右隣にある `▼` ボタンから、過去のフォルダへワンクリックで移動できます。
+Up to 5 recently used folders are remembered; the `▼` button next to the field switches back to one in a click.
 
 ### 📄 SKILL.md のプレビューと編集 / Previewing & Editing SKILL.md
 選択した作業ディレクトリ内に `SKILL.md`（または `skill/SKILL.md`）が存在する場合、ヘッダーに以下のボタンが自動的に表示されます。

@@ -212,19 +212,12 @@ body {
   transition: background-color 0.2s, border-color 0.2s, box-shadow 0.2s;
 }
 
-.app-title {
-  margin: 0;
-  font-size: 1.4rem;
-  font-weight: 700;
-  background: linear-gradient(to right, #3b82f6, #6366f1);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
 .controls-group {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+  flex: 1;
 }
 
 /* Directory selector */
@@ -261,6 +254,68 @@ body {
 .agent-type-display {
   font-family: inherit;
   max-width: none;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.agent-select-dropdown {
+  min-width: max-content;
+}
+
+/* Working-folder chip + recent-folders ▼. This is the element that shrinks
+   (path ellipsized) when the header runs out of room. */
+.cwd-display-container {
+  position: relative;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 140px;
+  flex-shrink: 1;
+}
+
+/* Everything else in the header keeps its natural width and never wraps
+   its label onto two lines; only the working-folder chip above shrinks. */
+.controls-group > *:not(.cwd-display-container) {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* The working-folder chip is a button (click = pick folder) but keeps the
+   chip look instead of the global button styling. */
+.cwd-button {
+  justify-content: flex-start;
+  min-width: 0;
+  font-weight: normal;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.cwd-button:hover:not(:disabled) {
+  border-color: #6366f1;
+  transform: none;
+}
+
+.cwd-button:active:not(:disabled) {
+  transform: none;
+}
+
+.cwd-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.cwd-button .cwd-label {
+  flex-shrink: 0;
+  /* Same UI font as the "Agent:" label; only the path itself stays mono. */
+  font-family: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+.cwd-button .cwd-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 /* Buttons */

@@ -863,12 +863,13 @@ function App() {
     <div className="app-container">
       {/* Header and Connection Panel */}
       <header className="app-header">
-        <h1 className="app-title">{appConfig ? appConfig.app_name : t("appTitle")}</h1>
-
         <div className="controls-group">
           {currentAgentStatus.installed && (
             <>
               {/* Agent Select Dropdown */}
+              {/* Never shrinks: the engine name ("Claude Code") must stay
+                  fully visible -- the working-folder chip is the one that
+                  gives up width (ellipsized) when the header is tight. */}
               <div className="cwd-display agent-type-display" title={selectedEngine?.name}>
                 <span className="cwd-label">{t("agentLabel")}:</span>
                 <select
@@ -885,7 +886,7 @@ function App() {
                     fontWeight: "600",
                     cursor: status === "running" ? "not-allowed" : "pointer",
                     outline: "none",
-                    paddingRight: "8px"
+                    paddingRight: "4px"
                   }}
                 >
                   {Object.entries(agentStatuses)
@@ -898,12 +899,19 @@ function App() {
                 </select>
               </div>
 
-              {/* CWD Display & History Menu */}
-              <div className="cwd-display-container" style={{ position: "relative", display: "flex", gap: "6px", alignItems: "center" }}>
-                <div className="cwd-display" title={cwd || "Default working directory"}>
-                  <span className="cwd-label">CWD:</span>
+              {/* Working folder: the chip itself opens the folder picker
+                  (no separate "Change Dir" button); ▼ keeps the recent list. */}
+              <div className="cwd-display-container">
+                <button
+                  type="button"
+                  className="cwd-display cwd-button"
+                  onClick={handleSelectDirectory}
+                  disabled={status === "running"}
+                  title={`${cwd || t("appLocationDefault")}\n${t("clickToChangeFolder")}`}
+                >
+                  <span className="cwd-label">{t("workingFolder")}:</span>
                   <span className="cwd-path">{cwd || t("appLocationDefault")}</span>
-                </div>
+                </button>
                 
                 {recentCwds.length > 0 && (
                   <div style={{ position: "relative" }}>
@@ -963,14 +971,6 @@ function App() {
                   </div>
                 )}
               </div>
-
-              <button
-                className="secondary"
-                onClick={handleSelectDirectory}
-                disabled={status === "running"}
-              >
-                {t("changeDir")}
-              </button>
 
               {/* SKILL.md Actions */}
               {skillContent && (
