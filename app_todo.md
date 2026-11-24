@@ -230,3 +230,11 @@
 - [x] **タスク 12-8**: 定期実行（`agy_scheduler.py` / `agy_scheduled_prompt.py`）に `--engine agy|claude` を追加する（既存タスクは agy のまま）。
 - [x] **タスク 12-9**: README・ユーザーガイド・管理者ガイド・本仕様書を更新する。
 - [ ] **タスク 12-10**: Windows 実機で、`%USERPROFILE%\.local\bin\claude.exe` の検出、`//c/...` 形式の deny ルール、`claude -p` による定期実行を確認する（macOS のみ実機確認済み）。
+
+---
+
+### 将来のアイディア（未着手）/ Future Ideas (backlog)
+*詳細・実現性の調査メモは README.md の「将来のアイディア」を参照。*
+
+- [ ] **artifacts-catalog**: 組織内で公開できる Artifact（プレゼン資料のテンプレートなど）を、スキルカタログと同じ仕組みで Google Drive 経由で共有する Claude Code 専用スキル。
+- [ ] **Artifact の Google Drive バックアップ**: Claude で仕上げた資料を Google Drive の任意の場所にコピーし、後から任意のフォルダ・共有ドライブへ移せるようにする Claude Code 専用スキル。

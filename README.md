@@ -73,6 +73,45 @@ agent-deck は fork せずに「自組織版」を配布できるよう設計さ
 
 ---
 
+## 💡 将来のアイディア（未実装）/ Future Ideas (not implemented)
+
+Claude Code 対応（v0.2.x）を前提にした、まだ実装していない構想です。どちらも **Claude Code 専用**のスキルになる見込みです（Artifact の取得に claude.ai アカウントの Artifact ツール・Claude Docs 連携を使うため、agy では動きません）。
+
+Ideas that build on the Claude Code support added in v0.2.x — not implemented yet. Both would be **Claude Code–only** skills (fetching an Artifact relies on the claude.ai account's Artifact tool and Claude Docs connector, which agy doesn't have).
+
+### 1. artifacts-catalog — Artifact の組織内共有 / Sharing Artifacts across the org
+
+スキルカタログ（`skill-catalog`）と同じ仕組みで、組織内に公開してよい Artifact（プレゼン資料のテンプレートなど）を Google Drive 経由で共有します。
+
+Shares Artifacts that are fine to publish inside the organization (e.g. presentation templates) through Google Drive, the same way the skill catalog works.
+
+- 共有: 自分の Artifact 一覧から選ぶ → ローカルに書き出す → 公開してよいか確認 → Drive のカタログ用フォルダ（オーナー別）にアップロード → 一覧（インデックス）を更新 / Share: pick from your Artifacts → export locally → confirm it's OK to publish → upload to the catalog's per-owner Drive folder → update the index
+- 一覧・取り込み: カタログの一覧から選んで `files/` にダウンロード。必要なら自分の claude.ai に Artifact として公開し直す / Browse & import: download into `files/`, optionally re-publish it as your own Artifact on claude.ai
+- 既存のカタログの仕組み（`skills_catalog.py` の Drive 操作、オーナー別フォルダ、インデックス、`config.toml` の設定）を流用する想定 / Expected to reuse the skill catalog's Drive plumbing, per-owner folders, index and `config.toml` settings
+
+### 2. Artifact の Google Drive バックアップ / Backing up Artifacts to Google Drive
+
+Claude で仕上げた資料を Google Drive の任意の場所へコピーするスキルです。いったん Drive に置いておき、後から任意のフォルダや共有ドライブへ移すための、個人向けの機能です。
+
+A personal skill that copies a finished Artifact to any location on Google Drive, so it can be parked there and moved to its final folder or Shared Drive later.
+
+- 保存先は実行のたびに指定（`upload-to-drive` スキルと同様）/ Destination chosen each run (like the `upload-to-drive` skill)
+- 形式は用途に応じて選ぶ（Markdown・HTML・Word・PDF）/ Format chosen per use (Markdown, HTML, Word, PDF)
+
+### 実現性の調査メモ（2026-11-25）/ Feasibility notes
+
+- **Docs 型の Artifact（文書）**: 本文は Claude Docs のサービス側にあり、Artifact として読んでも中身は取れない。Claude Docs の export で Markdown / HTML / Word / PDF として書き出せることを確認済み / Doc-type Artifacts keep their content in the Claude Docs service; exporting via Claude Docs (Markdown/HTML/Word/PDF) was confirmed to work.
+- **HTML ページの Artifact**: Artifact ツールの読み出しで HTML 本体と付属ファイルをローカルに保存できる仕様（未検証）/ Plain HTML Artifacts: the Artifact tool's read can save the page and its files locally (not yet verified).
+- **Slides・Whiteboard など他のテンプレート型**: 型ごとに保存先が異なり、取り出し方は未検証 / Other template types (Slides, Whiteboard, …): storage differs per type; not yet verified.
+- **制約 / Constraints**
+  - コピーできるのは自分が所有、または編集権限を持つ Artifact のみ（他人の Artifact は要約しか取れない）/ Only Artifacts you own or can edit can be copied (others' come back as a summary only).
+  - スクリプトから直接呼べる API・CLI は無く、取得は Claude Code の会話の中で Claude が行い、Drive へのアップロードは既存の Python スクリプトで行う形になる / There's no API/CLI for scripts: Claude fetches the Artifact within a Claude Code session, and existing Python scripts handle the Drive upload.
+  - Drive 上のコピーはその時点のスナップショットで、元の Artifact の後からの編集・コメント・共同編集は反映されない / A Drive copy is a snapshot: later edits, comments and co-editing on the original aren't reflected.
+  - 共有データ・`window.claude` 呼び出しなど動的な機能を使うページは、静的なコピーでは動かない / Pages using runtime features (shared data, `window.claude` calls, …) won't work as static copies.
+  - 利用できるかどうかは claude.ai のアカウント・プランに依存する / Availability depends on the claude.ai account and plan.
+  - 組織内共有（1）では、機密情報が広がらないよう公開前の確認手順を必須にする / For org sharing (idea 1), a confirmation step before publishing is mandatory so confidential material doesn't spread.
+- 組織内の特定の人とだけ共有するなら、claude.ai 標準のリンク共有で足りる場合もある。Drive を使う利点は、一覧からの発見性・長期保管・Claude を使わない人（agy 利用者など）も Markdown / PDF / HTML で読めること / For sharing with specific people, claude.ai's built-in link sharing may be enough; Drive adds discoverability, long-term archiving, and access for people who don't use Claude (e.g. agy users).
+
 ## ⚙️ UIカスタマイズ設定 (`agent_config.json`)
 
 `agent-deck` は、組み込まれる親アプリケーションやプロジェクト環境に応じてUIの表示内容を柔軟にカスタマイズできます。
