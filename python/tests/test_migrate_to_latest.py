@@ -148,3 +148,21 @@ def test_is_fixed_matches_the_real_fixed_file(migrate):
     """Must recognise the repo's actual fixed self_update.py (and its
     explanatory comment mentioning parents[2] must not confuse it)."""
     assert migrate.is_fixed(ROOT)
+
+
+
+def test_drops_legacy_catalog_duplicates_only(migrate, tmp_path):
+    import json
+    root = tmp_path
+    personal = root / "python" / "skills-personal"
+    catalog = root / "python" / "skills-catalog"
+    for d in (personal / "org-a", personal / "my-own", personal / "org-gone", catalog / "org-a"):
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text("x")
+    (personal / ".catalog-sync-manifest").write_text(json.dumps({"org-a": "t", "org-gone": "t"}))
+
+    assert migrate.drop_legacy_catalog_duplicates(root) == ["org-a"]
+    assert not (personal / "org-a").exists()
+    assert (personal / "my-own").exists()      # user's own: never in the manifest
+    assert (personal / "org-gone").exists()    # not bundled: left for the app's own migration
+    assert (personal / ".catalog-sync-manifest").exists()

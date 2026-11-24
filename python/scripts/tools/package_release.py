@@ -26,11 +26,21 @@ own config.toml ([drive].org_release_test_file_id / _prod_file_id),
 overwriting the previous upload in place (same update-existing-file
 pattern as backup_config.py).
 
+The org's common skills (the Drive skill-catalog's _default/ folder) are
+bundled too, as of 2026-11-25: whatever is in _default/ at packaging time is
+written to python/skills-catalog/<name>/ together with a matching
+.catalog-sync-manifest, so a fresh install has them immediately (offline,
+before any Google sign-in), and the runtime `skills_catalog.py sync` treats
+them exactly like skills it installed itself -- later updates/removals in
+_default/ still propagate. Skip with --no-catalog-skills.
+
 Usage:
   python3 python/scripts/tools/package_release.py --test
   python3 python/scripts/tools/package_release.py --prod
+  python3 python/scripts/tools/package_release.py --prod --no-catalog-skills
 """
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -113,7 +123,45 @@ def _download(url: str, dest: Path) -> None:
     )
 
 
-def build_package(channel: str, staging: Path, config_toml: Path = None) -> Path:
+def bundle_catalog_skills(merged: Path, service=None) -> list:
+    """Write the catalog's current _default/ skills into
+    <merged>/python/skills-catalog/ plus the sync manifest. Returns the
+    bundled skill names (empty when no catalog/_default is configured)."""
+    sys.path.insert(0, str(PROJECT_ROOT / "python" / "scripts" / "setup"))
+    import skills_catalog as sc  # noqa: E402 -- needs the google deps (venv)
+
+    if not sc.catalog_configured():
+        print("  Catalog not configured -- no common skills bundled.")
+        return []
+    service = service or _get_service()
+    folder_id = sc._list_owner_folders(service).get(sc.AUTO_SYNC_OWNER)
+    if not folder_id:
+        print(f"  Catalog has no {sc.AUTO_SYNC_OWNER}/ folder -- no common skills bundled.")
+        return []
+    entries = sc._dedupe_prefer_zip([
+        sc._entry_from_file(sc.AUTO_SYNC_OWNER, f)
+        for f in sc._list_skill_files_in_folder(service, folder_id)
+    ])
+    dest_root = merged / "python" / "skills-catalog"
+    dest_root.mkdir(parents=True, exist_ok=True)
+    manifest = {}
+    for e in sorted(entries, key=lambda x: x["name"]):
+        skill_dir = dest_root / e["name"]
+        if e["format"] == "zip":
+            sc._extract_skill_zip(sc._get_file_bytes(service, e["file_id"]), skill_dir)
+        else:
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text(
+                sc._get_file_content(service, e["file_id"]), encoding="utf-8")
+        manifest[e["name"]] = e["modified_full"]
+        print(f"  Bundled common skill: {e['name']} ({e['modified']})")
+    (dest_root / ".catalog-sync-manifest").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    return sorted(manifest)
+
+
+def build_package(channel: str, staging: Path, config_toml: Path = None,
+                  bundle_skills=None) -> Path:
     """Download both platform release ZIPs for `channel`, merge them into a
     single flat tree, drop in `config_toml` (defaults to this project's own
     config.toml), and zip it up. Returns the path to the built ZIP.
@@ -184,6 +232,9 @@ def build_package(channel: str, staging: Path, config_toml: Path = None) -> Path
                 f"Details: {verify.stderr.decode(errors='replace').strip()}"
             )
 
+    if bundle_skills is not None:
+        bundle_skills(merged)
+
     config_toml = config_toml or (PROJECT_ROOT / "config.toml")
     if not config_toml.exists():
         raise RuntimeError(f"config.toml not found at {config_toml} -- nothing to merge in")
@@ -236,6 +287,8 @@ def main():
                         help="Bundle the newest GitHub pre-release; upload to org_release_test_file_id")
     group.add_argument("--prod", action="store_true",
                         help="Bundle the latest stable release; upload to org_release_prod_file_id")
+    parser.add_argument("--no-catalog-skills", action="store_true",
+                        help="Don't bundle the catalog's _default/ common skills")
     args = parser.parse_args()
 
     channel = "test" if args.test else "prod"
@@ -246,7 +299,9 @@ def main():
         sys.exit(1)
 
     with tempfile.TemporaryDirectory() as tmp:
-        out_zip = build_package(channel, Path(tmp))
+        out_zip = build_package(
+            channel, Path(tmp),
+            bundle_skills=None if args.no_catalog_skills else bundle_catalog_skills)
         upload(out_zip, file_id)
 
     print("✓ アップロード完了 / Upload complete")

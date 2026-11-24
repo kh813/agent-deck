@@ -186,3 +186,82 @@ class TestBuildPackage:
         with zipfile.ZipFile(out_zip) as zf:
             names = zf.namelist()
         assert all(not n.startswith("agent-deck/") for n in names)
+
+
+# ── Common (catalog _default/) skills bundled into the org ZIP (2026-11-25) ──
+
+def _fake_catalog(monkeypatch, files: dict, folder_present=True):
+    """Patch skills_catalog's Drive helpers: files = {name: (bytes, modifiedTime)}."""
+    sys.path.insert(0, str(ROOT / "python" / "scripts" / "setup"))
+    import skills_catalog as sc
+    monkeypatch.setattr(sc, "catalog_configured", lambda: True)
+    monkeypatch.setattr(sc, "_list_owner_folders",
+                        lambda svc: {"_default": "F"} if folder_present else {})
+    monkeypatch.setattr(sc, "_list_skill_files_in_folder",
+                        lambda svc, fid: [{"id": n, "name": n, "modifiedTime": m}
+                                          for n, (_, m) in files.items()])
+    monkeypatch.setattr(sc, "_get_file_bytes", lambda svc, fid: files[fid][0])
+    monkeypatch.setattr(sc, "_get_file_content", lambda svc, fid: files[fid][0].decode())
+    return sc
+
+
+def _skill_zip(name: str, extra: dict = None) -> bytes:
+    import io
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("SKILL.md", f"---\nname: {name}\ndescription: d\n---\n")
+        for path, body in (extra or {}).items():
+            zf.writestr(path, body)
+    return buf.getvalue()
+
+
+class TestBundleCatalogSkills:
+    def test_bundles_default_skills_with_sync_manifest(self, tmp_path, monkeypatch):
+        import json
+        _fake_catalog(monkeypatch, {
+            "org-a.zip": (_skill_zip("org-a", {"scripts/run.py": "x"}), "2026-07-16T01:02:03.000Z"),
+            "note-b.md": (b"---\nname: note-b\n---\nbody\n", "2026-07-17T00:00:00.000Z"),
+        })
+        names = pr.bundle_catalog_skills(tmp_path, service=object())
+        root = tmp_path / "python" / "skills-catalog"
+        assert names == ["note-b", "org-a"]
+        assert (root / "org-a" / "scripts" / "run.py").read_text() == "x"
+        assert (root / "note-b" / "SKILL.md").read_text().startswith("---")
+        manifest = json.loads((root / ".catalog-sync-manifest").read_text())
+        # Same keys/values the runtime sync writes, so it won't re-download.
+        assert manifest == {"org-a": "2026-07-16T01:02:03.000Z", "note-b": "2026-07-17T00:00:00.000Z"}
+
+    def test_no_default_folder_bundles_nothing(self, tmp_path, monkeypatch):
+        _fake_catalog(monkeypatch, {}, folder_present=False)
+        assert pr.bundle_catalog_skills(tmp_path, service=object()) == []
+        assert not (tmp_path / "python" / "skills-catalog").exists()
+
+    def test_runtime_sync_treats_bundled_skills_as_up_to_date(self, tmp_path, monkeypatch):
+        """End-to-end with the real cmd_sync: nothing is re-downloaded for a
+        bundled skill whose Drive modifiedTime hasn't changed."""
+        files = {"org-a.zip": (_skill_zip("org-a"), "2026-07-16T01:02:03.000Z")}
+        sc = _fake_catalog(monkeypatch, files)
+        pr.bundle_catalog_skills(tmp_path, service=object())
+        cat = tmp_path / "python" / "skills-catalog"
+        monkeypatch.setattr(sc, "CATALOG_SKILLS_DIR", cat)
+        monkeypatch.setattr(sc, "SYNC_MANIFEST_PATH", cat / ".catalog-sync-manifest")
+        monkeypatch.setattr(sc, "LEGACY_SYNC_MANIFEST_PATH", tmp_path / "none" / ".catalog-sync-manifest")
+        monkeypatch.setattr(sc, "_get_service", lambda timeout_seconds=None: object())
+        downloads = []
+        monkeypatch.setattr(sc, "_get_file_bytes", lambda svc, fid: downloads.append(fid) or files[fid][0])
+        sc.cmd_sync()
+        assert downloads == []
+
+    def test_build_package_calls_bundle_hook_and_zips_it(self, tmp_path, fake_org_config, monkeypatch, no_op_signing):
+        monkeypatch.setattr(su, "_fetch_release", lambda channel: _fake_release("v0.2.2"))
+        monkeypatch.setattr(pr, "_download",
+                            lambda url, dest: _make_mac_zip(dest) if "mac.zip" in url else _make_win_zip(dest))
+
+        def hook(merged):
+            d = merged / "python" / "skills-catalog" / "org-a"
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text("x")
+
+        out_zip = pr.build_package("prod", tmp_path, config_toml=fake_org_config, bundle_skills=hook)
+        with zipfile.ZipFile(out_zip) as zf:
+            assert "python/skills-catalog/org-a/SKILL.md" in zf.namelist()

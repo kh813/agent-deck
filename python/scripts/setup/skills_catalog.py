@@ -958,6 +958,13 @@ def migrate_legacy_catalog_layout() -> None:
         if src.exists() and not dest.exists():
             shutil.move(str(src), str(dest))
             print(f"  Moved catalog skill to python/skills-catalog/: {name}")
+        elif src.exists():
+            # Already present in skills-catalog/ (e.g. bundled in the org
+            # release ZIP): the legacy copy is just a stale duplicate of a
+            # sync-installed skill -- drop it instead of shadow-warning on
+            # every build.
+            shutil.rmtree(src)
+            print(f"  Removed duplicate legacy copy of catalog skill: {name}")
         manifest.setdefault(name, modified)
     SYNC_MANIFEST_PATH.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     LEGACY_SYNC_MANIFEST_PATH.unlink()

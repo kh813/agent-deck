@@ -115,6 +115,33 @@ def ask_channel(ask=input) -> str:
     return "test" if answer == "2" else "prod"
 
 
+def drop_legacy_catalog_duplicates(root: Path) -> list:
+    """Installs from before python/skills-catalog/ existed kept catalog-synced
+    skills in python/skills-personal/ (listed in its .catalog-sync-manifest).
+    The org ZIP now bundles those same skills in python/skills-catalog/, so
+    remove the legacy copies that are now duplicated there. The legacy
+    manifest itself is left for the app's own migration step (it merges and
+    deletes it on the next launch). The user's own skills are never in that
+    manifest, so they're never touched."""
+    import json
+    import shutil
+    personal = root / "python" / "skills-personal"
+    catalog = root / "python" / "skills-catalog"
+    legacy_manifest = personal / ".catalog-sync-manifest"
+    if not legacy_manifest.is_file():
+        return []
+    try:
+        names = list(json.loads(legacy_manifest.read_text(encoding="utf-8")))
+    except (ValueError, OSError):
+        return []
+    removed = []
+    for name in names:
+        if (personal / name).is_dir() and (catalog / name / "SKILL.md").is_file():
+            shutil.rmtree(personal / name)
+            removed.append(name)
+    return removed
+
+
 def main(argv) -> int:
     if len(argv) < 2:
         print(__doc__)
@@ -145,6 +172,9 @@ def main(argv) -> int:
         su.apply_drive(value)
     else:
         su.apply(value)
+
+    for name in drop_legacy_catalog_duplicates(root):
+        print(f"==> 旧配置の重複スキルを整理しました / Removed duplicate legacy copy: {name}")
 
     if is_fixed(root):
         print("==> 完了。次回からはアプリの Update メニューで更新できます。")

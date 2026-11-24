@@ -374,3 +374,19 @@ class TestLegacyLayoutMigration:
         sc.cmd_sync()
 
         assert (skills_dir / "org-skill").exists()
+
+
+    def test_legacy_copy_is_dropped_when_already_in_catalog(self, skills_dir):
+        """The org ZIP bundles common skills in skills-catalog/; a 0.1.x
+        install's legacy synced copy of the same skill must not linger."""
+        personal = sc.SKILLS_SRC
+        _write_skill(personal, "org-skill")
+        _write_skill(skills_dir, "org-skill")
+        _write_skill(personal, "my-own-skill")
+        sc.LEGACY_SYNC_MANIFEST_PATH.write_text(json.dumps({"org-skill": "t"}))
+
+        sc.migrate_legacy_catalog_layout()
+
+        assert not (personal / "org-skill").exists()
+        assert (skills_dir / "org-skill" / "SKILL.md").exists()
+        assert (personal / "my-own-skill").exists()

@@ -597,6 +597,10 @@ python3 python/scripts/tools/restore_config.py --zip ~/Downloads/agent-deck-conf
 
 `AGENTS.md`/`CLAUDE.md` are not merged at this stage at all — as public, secret-free, git-tracked files, `release.yml` already bakes both directly into the public GitHub ZIP, so they simply ride along through the download-and-merge `package_release.py` does for `config.toml` (confirmed working for real — agy both auto-discovers a bare `AGENTS.md` and resolves `@`-imports; opening the extracted folder with Claude Code picks up the same instructions via that `CLAUDE.md` stub).
 
+**共通スキルの同梱（2026-11-25〜）/ Bundled common skills:** 実行時点で Drive カタログの `_default/` にある共通スキルを `python/skills-catalog/<name>/` に、同期の管理表 `.catalog-sync-manifest`（Drive の更新日時つき）と一緒に同梱します。新規インストールはオフライン・Google 未ログインでも最初から共通スキルを使え、起動時の `skills_catalog.py sync` はこれを「同期で入れたもの」として扱うため再ダウンロードせず、`_default/` 側の更新・削除も従来どおり各端末に反映されます。`_default/` からスキルを外したら、次の配布 ZIP からも自動で消えます（ZIP を作り直すだけでよい）。同梱しない場合は `--no-catalog-skills`。0.1.x の旧配置（同期済みスキルが `skills-personal/` にある）から乗り換える端末では、強制アップデートスクリプトとアプリの移行処理が、同梱分と重複する旧コピーを削除します。
+
+At packaging time, the catalog's current `_default/` skills are written to `python/skills-catalog/<name>/` along with the sync manifest (`.catalog-sync-manifest`, with Drive modifiedTimes). Fresh installs get them immediately — offline, before any Google sign-in — and the runtime `skills_catalog.py sync` treats them as its own installs (no re-download; later updates/removals in `_default/` still propagate). Removing a skill from `_default/` drops it from the next ZIP automatically. Skip with `--no-catalog-skills`. For installs migrating from the 0.1.x layout (synced skills under `skills-personal/`), the migration script and the app's own migration step delete the legacy copies duplicated by the bundle.
+
 ```bash
 python3 python/scripts/tools/package_release.py --test   # 最新のGitHub pre-release + config.toml を org_release_test_file_id へ
 python3 python/scripts/tools/package_release.py --prod   # 最新のGitHub安定版      + config.toml を org_release_prod_file_id へ
