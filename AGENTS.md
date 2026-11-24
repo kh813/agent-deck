@@ -1,6 +1,6 @@
 ## Startup
 
-Setup is handled automatically by `preflight.sh`/`preflight.bat` **before** Antigravity CLI (agy) starts. By the time this session begins, setup is already complete. Do not run any startup check commands — proceed directly with the user's request.
+Setup is handled automatically by `preflight.sh`/`preflight.bat` **before** the agent session starts (Antigravity CLI `agy` or Claude Code `claude`, whichever engine is selected in agent-deck). By the time this session begins, setup is already complete. Do not run any startup check commands — proceed directly with the user's request.
 
 ---
 
@@ -8,7 +8,7 @@ Setup is handled automatically by `preflight.sh`/`preflight.bat` **before** Anti
 
 Use this project only with your **company Google Workspace account**.
 
-Sign-in is handled automatically on first use. If re-authentication is needed, exit agy and relaunch `agent-deck.app`/`agent-deck.exe` — browser-based Google sign-in will be prompted automatically.
+Sign-in is handled automatically on first use. If re-authentication is needed, exit the agent session and relaunch `agent-deck.app`/`agent-deck.exe` — browser-based Google sign-in will be prompted automatically.
 
 ---
 
@@ -20,15 +20,19 @@ Skills and scripts for the company productivity toolkit, built on top of agent-d
 - `python/skills/` — bundled public skill sources (SKILL.md)
 - `python/skills-personal/` — org-specific and personal skill sources (SKILL.md)
 - `files/` — user-facing working folder; also where the corporate PPTX template lives
-- `.gemini/skills/` — installed skills
+- `.gemini/skills/` — installed skills (read by Antigravity CLI)
+- `.claude/skills/` — the same installed skills (read by Claude Code)
 
-**Running a skill:** A skill's `name:` frontmatter field is an identifier for routing only — it is **not** a CLI subcommand. `agy` has no built-in command to run a skill by name (`agy <skill-name>` does not exist and will fail or hang). To run a skill, follow the exact command(s) documented in its `## 手順 / Workflow` section (e.g. `python3 python/scripts/automation/automate.py calendar`).
+**Running a skill:** A skill's `name:` frontmatter field is an identifier for routing only — it is **not** a CLI subcommand. Neither `agy` nor `claude` has a shell command to run a skill by name (`agy <skill-name>` / `claude <skill-name>` do not exist and will fail or hang). To run a skill, follow the exact command(s) documented in its `## 手順 / Workflow` section (e.g. `python3 python/scripts/automation/automate.py calendar`).
 
 ---
 
 ## User Input
 
-Always use the **`ask_user` tool** whenever you need input from the user. Never ask by outputting plain text and waiting.
+Always use your **interactive question tool** whenever you need input from the user. Never ask by outputting plain text and waiting.
+
+- Antigravity CLI (agy): the **`ask_user`** tool (usage below)
+- Claude Code: the **`AskUserQuestion`** tool (2–4 options per question; the user can always type a free-form answer instead)
 
 `ask_user` tool usage:
 - `type: "text"` — Free-form text input
@@ -60,7 +64,7 @@ Never modify, create, or delete any file in this project **except the locations 
 - `files/` — Files managed by the file-organizer skill
 - `python/skills-personal/` — via the `/my-skills` skill only
 
-**Everything else is read-only** (`python/skills/`, `.gemini/`, `docs/`, `config.toml`, `ANTIGRAVITY.md`, etc.)
+**Everything else is read-only** (`python/skills/`, `.gemini/`, `.claude/`, `docs/`, `config.toml`, `AGENTS.md`, `CLAUDE.md`, etc.)
 
 If a script returns an error, do not attempt to fix the code — report the error to the user as-is.
 
@@ -77,7 +81,7 @@ File operations are strictly limited to the locations below. Never access files 
 **Prohibited:**
 - Mac/Linux system directories: `/etc/`, `/usr/`, `/bin/`, `/System/`, `/Library/`, `/private/`, `/Applications/`
 - Windows system directories: `C:\Windows`, `C:\Program Files`, `C:\ProgramData`
-- Home directory credentials/configs: `~/.ssh`, `~/.aws`, `~/.env`, `~/.bashrc`, `~/.zshrc`, `~/.gemini`, `~/.gitconfig`
+- Home directory credentials/configs: `~/.ssh`, `~/.aws`, `~/.env`, `~/.bashrc`, `~/.zshrc`, `~/.gemini`, `~/.claude`, `~/.gitconfig`
 - Home directory app config folders: `~/.config/`, `~/Library/` (Mac), `AppData/` (Windows)
 - Renaming or deleting OS-default home folders themselves (Downloads, Documents, etc.)
 - Any path outside the current user's home directory

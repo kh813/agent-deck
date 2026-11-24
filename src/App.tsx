@@ -10,6 +10,7 @@ import { themes } from "./utils/themes";
 import { Lang, translations } from "./utils/i18n";
 import { isTauri, webClient } from "./lib/webClient";
 import "./App.css";
+import { loadSavedEngine, pickEngine, saveEngine } from "./lib/engineSelection";
 
 interface AgentStatus {
   installed: boolean;
@@ -114,7 +115,7 @@ function App() {
   // Config & Selection States
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentStatus>>({});
-  const [selectedAgentId, setSelectedAgentId] = useState("agy");
+  const [selectedAgentId, setSelectedAgentId] = useState(() => loadSavedEngine() ?? "agy");
 
   const currentAgentStatus = agentStatuses[selectedAgentId] || {
     installed: false,
@@ -430,14 +431,29 @@ function App() {
     if (!appConfig) return;
     checkAgentStatus();
 
-    // Default select first engine if selection is missing from config
-    if (appConfig.engines.length > 0) {
-      const exists = appConfig.engines.some(e => e.id === selectedAgentId);
-      if (!exists) {
-        setSelectedAgentId(appConfig.engines[0].id);
-      }
-    }
   }, [appConfig, checkAgentStatus]);
+
+  // Keep the selection on a configured engine, and once detection results are
+  // in, move off an engine that isn't installed onto the first one that is
+  // (so a Claude-Code-only machine doesn't get stuck on the agy installer).
+  useEffect(() => {
+    if (!appConfig) return;
+    const next = pickEngine(appConfig.engines.map(e => e.id), agentStatuses, selectedAgentId);
+    if (next && next !== selectedAgentId) {
+      setSelectedAgentId(next);
+    }
+  }, [appConfig, agentStatuses, selectedAgentId]);
+
+  // Remember the user's engine choice across launches.
+  useEffect(() => {
+    saveEngine(selectedAgentId);
+  }, [selectedAgentId]);
+
+  // An update banner belongs to the engine it was checked for -- drop it when
+  // the selection changes (the check effect below re-runs for the new one).
+  useEffect(() => {
+    setUpdateStatus({ current_version: null, latest_version: null, update_available: false });
+  }, [selectedAgentId]);
 
   // 3. Update PTY command configuration when selection or statuses change
   useEffect(() => {
@@ -459,12 +475,26 @@ function App() {
   }, [currentAgentStatus.installed, autoCheckUpdate, checkUpdateStatus]);
 
   // Auto-start a session as soon as the selected agent is detected as installed and terminal size settled
+  //
+  // Passes the engine's command/args explicitly (same reason as the
+  // engine-change effect below): on first launch the selection can be moved
+  // onto a different installed engine (pickEngine) in the very render this
+  // fires, when shellPath state still holds the previous engine's command.
+  // Also syncs previousAgentIdRef so the engine-change effect doesn't treat
+  // that same automatic switch as a user change and start a second session.
+  const previousAgentIdRef = useRef(selectedAgentId);
   useEffect(() => {
     if (currentAgentStatus.installed && status === "idle" && terminalSizeSettled && !hasAutoStartedRef.current) {
       hasAutoStartedRef.current = true;
-      startSession();
+      previousAgentIdRef.current = selectedAgentId;
+      const engine = appConfig?.engines.find(e => e.id === selectedAgentId);
+      if (engine && currentAgentStatus.path) {
+        startSession(undefined, currentAgentStatus.path, engine.args || []);
+      } else {
+        startSession();
+      }
     }
-  }, [currentAgentStatus.installed, status, terminalSizeSettled, startSession]);
+  }, [currentAgentStatus.installed, currentAgentStatus.path, status, terminalSizeSettled, startSession, appConfig, selectedAgentId]);
 
   // Start a fresh session when the engine selection actually changes while
   // idle (e.g. switching from agy to Claude Code after Stop). Without this,
@@ -481,7 +511,6 @@ function App() {
   // effect until next render -- calling startSession() here with no
   // overrides would still capture the *previous* engine's command (confirmed
   // for real).
-  const previousAgentIdRef = useRef(selectedAgentId);
   useEffect(() => {
     const changed = previousAgentIdRef.current !== selectedAgentId;
     previousAgentIdRef.current = selectedAgentId;
@@ -617,6 +646,10 @@ function App() {
     }
   };
 
+  // Trigger agent-deck's own self-update via PTY, same reused-terminal
+  // pattern as handleUpdateAgent above. self_update.py resolves its own
+  // project root from its file path, so no explicit cwd is needed here --
+  // start_pty falls back to the project root on its own.
   const handleUpdateSelf = async () => {
     try {
       setIsSelfUpdating(true);
@@ -1205,11 +1238,11 @@ function App() {
                   {activePrompt.prompt_type === "confirm" && (
                     <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                       {activePrompt.options ? (
-                        activePrompt.options.map((opt: string) => (
+                        activePrompt.options.map((opt: string, idx: number) => (
                           <button
                             key={opt}
-                            className={opt.toLowerCase().includes("no") || opt.toLowerCase().includes("exit") ? "secondary" : "primary"}
-                            onClick={() => respondToPrompt(opt)}
+                            className={/^(\d+\.\s*)?no\b/i.test(opt) || opt.toLowerCase().includes("exit") ? "secondary" : "primary"}
+                            onClick={() => respondToPrompt(opt, activePrompt.inputs?.[idx])}
                             style={{ padding: "6px 16px" }}
                           >
                             {opt}

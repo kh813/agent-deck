@@ -88,6 +88,8 @@ agent-deck/
 │
 ├── venv/                        # Python 仮想環境（自動生成）
 ├── .gemini/skills/               # インストール済みスキル（agy が読み込む）
+├── .claude/skills/               # 同じスキルの Claude Code 用コピー（自動生成・git 除外）
+├── .claude/agent-deck-settings.json  # Claude Code 用許可ルール（python/config/claude/settings.json から自動生成・git 除外）
 └── src-tauri/                    # Tauri（Rust）ソース
 ```
 
@@ -103,6 +105,10 @@ Antigravity CLI (`agy`) は `.gemini/skills/<name>/SKILL.md` からスキルを�
 
 Antigravity CLI (`agy`) loads skills from `.gemini/skills/<name>/SKILL.md`. Each skill is a Markdown file instructing the agent how to handle a specific command, invocable via `/skill-name`.
 
+Claude Code は同じ SKILL.md 形式（`name`/`description` frontmatter）を `.claude/skills/<name>/SKILL.md` と `~/.claude/skills/<name>/SKILL.md` から読み込むため、`install_skills()` は同じ内容をそこにもコピーします。`~/.claude/skills/` はユーザーが自作したスキルと同居することが多いため、agent-deck が過去にインストールしていない（マニフェスト `.installed-skills-manifest` に無い）同名スキルは上書きしません。
+
+Claude Code reads the same SKILL.md format (`name`/`description` frontmatter) from `.claude/skills/<name>/SKILL.md` and `~/.claude/skills/<name>/SKILL.md`, so `install_skills()` copies the same skills there too. Because `~/.claude/skills/` commonly also holds the user's own hand-made skills, a same-named skill that agent-deck never installed (i.e. not in its `.installed-skills-manifest`) is left untouched there.
+
 ### ビルドとインストールの流れ / Build & Install Flow
 
 ```
@@ -112,6 +118,8 @@ python/skills-personal/**/<name>/SKILL.md (個人 + カタログ同期分 / pers
 skills/<name>.skill   (ZIPアーカイブ / ZIP archive)
         ↓  setup.py install_skills()
 .gemini/skills/<name>/SKILL.md   ← agy はここから読み込む / agy reads from here
+.claude/skills/<name>/SKILL.md   ← Claude Code はここから読み込む / Claude Code reads from here
+  (+ ~/.gemini/skills/, ~/.claude/skills/ — 作業フォルダがプロジェクト外でも見つかるように / so they're found from any working folder)
 ```
 
 `python/skills-personal/` には2種類のものが混在します：ユーザーが `my-skills create` で作った個人スキルと、**skill-catalog の `_default/` フォルダから自動同期された会社スキル**（`skills_catalog.py sync` が書き込む、`.catalog-sync-manifest` で管理）。
@@ -174,12 +182,12 @@ preflight.sh / preflight.bat
                                        Always runs: catalog sync → build → reinstall
 4. 認証チェック（sentinel ファイル）  / Auth check (sentinel file)
         ↓
-agy を起動 / Launch agy
+選択中のエンジン（agy / claude / codex）を起動 / Launch the selected engine (agy / claude / codex)
 ```
 
-**`init`** は以下を順に実行します（`setup_config()` → `setup_gws()` → `setup_venv()` → `build_skills()` → `install_skills()` → `install_gemini_policies()` → `trust_project_folder()` → `setup_files_folder()`）。venv の有無で初回セットアップ済みかを判定するため、`venv/` は配布 ZIP に含まれません。
+**`init`** は以下を順に実行します（`setup_config()` → `setup_gws()` → `setup_venv()` → `build_skills()` → `install_skills()` → `install_gemini_policies()` → `install_claude_settings()` → `trust_project_folder()` → `setup_files_folder()`）。`skills rebuild`（毎回の起動時）も `install_skills()` の後に `install_claude_settings()` を実行します。venv の有無で初回セットアップ済みかを判定するため、`venv/` は配布 ZIP に含まれません。
 
-**`init`** runs, in order: `setup_config()` → `setup_gws()` → `setup_venv()` → `build_skills()` → `install_skills()` → `install_gemini_policies()` → `trust_project_folder()` → `setup_files_folder()`. The presence of `venv/` is how the launcher decides whether first-run setup is already done, so it's excluded from the distribution ZIP.
+**`init`** runs, in order: `setup_config()` → `setup_gws()` → `setup_venv()` → `build_skills()` → `install_skills()` → `install_gemini_policies()` → `install_claude_settings()` → `trust_project_folder()` → `setup_files_folder()`. `skills rebuild` (every launch) also runs `install_claude_settings()` after `install_skills()`. The presence of `venv/` is how the launcher decides whether first-run setup is already done, so it's excluded from the distribution ZIP.
 
 #### agy (Antigravity CLI) のインストール先 / Where agy actually installs
 
@@ -190,6 +198,16 @@ On first launch, if `agy` isn't detected yet, it can be installed manually via a
 **この場所を勝手に変えないこと。** `src-tauri/resources/install_commands.json` はこれら2つの実際のデフォルト設置場所を `detect_paths` に含めておく必要があります。過去に一度（2026-07-21）、`app/bin/` に誘導しようと `$BINDIR`（Mac）/ `$env:BINDIR`（Windows）環境変数を install コマンドに渡していましたが、Antigravity 公式インストーラー（`install.sh`/`install.ps1`）はどちらもこの環境変数を完全に無視し、`--dir`/`-d` フラグのみを読む仕様だったため、実際にはこの誘導は無効でした。結果として agy は上記のホームディレクトリにインストールされていたにもかかわらず、`detect_paths` にその場所が無かった（かつ GUI 起動アプリの `PATH` にも `~/.local/bin` が含まれない）ため、agent-deck 側は「未インストール」と誤検知し続けるというバグになっていました（`python/tests/test_install_commands.py::TestDetectPathsMatchWhereTheInstallerActuallyPutsIt` で再発防止テスト済み）。
 
 **Do not silently move this location.** `src-tauri/resources/install_commands.json`'s `detect_paths` must keep listing both installers' real default locations. Once (2026-07-21), the install commands set a `$BINDIR`/`$env:BINDIR` env var trying to redirect installs into `app/bin/` — but the official Antigravity installers (`install.sh`/`install.ps1`) ignore that env var entirely (they only read a `--dir`/`-d` flag), so the redirect silently did nothing. agy kept landing at the home-directory default above, but since `detect_paths` didn't list it (and a GUI-launched app's inherited `PATH` doesn't include `~/.local/bin` either), agent-deck kept reporting it as not installed even after a successful install. Regression-guarded by `python/tests/test_install_commands.py::TestDetectPathsMatchWhereTheInstallerActuallyPutsIt`.
+
+#### Claude Code (`claude`) の検出 / Detecting Claude Code
+
+Claude Code が未インストールなら、オンボーディング画面から公式ネイティブインストーラ（`install_commands.json` の `install`、管理者権限不要）で導入できます。既定インストール先は **Mac/Windows とも `~/.local/bin`**（Windows: `%USERPROFILE%\.local\bin\claude.exe`）で、`install_commands.json` の `detect_paths` の先頭に入れてあります。GUI から起動したアプリは `~/.local/bin` を含む PATH を継承しないため、Rust 側の `child_path_env()`（`pty.rs`）が PTY セッション・pre-launch コマンド・`which`/`where` による検出のすべてで `~/.local/bin` を PATH に追加します。
+
+If Claude Code isn't installed, it can be installed from the onboarding screen via the official native installer (`install_commands.json`'s `install`; no admin rights needed). Its default location is **`~/.local/bin` on both macOS and Windows** (Windows: `%USERPROFILE%\.local\bin\claude.exe`), listed first in `install_commands.json`'s `detect_paths`. A GUI-launched app doesn't inherit a PATH containing `~/.local/bin`, so the Rust side's `child_path_env()` (`pty.rs`) prepends it for the PTY session, the pre-launch command, and `which`/`where`-based detection alike.
+
+- **エンジンの自動選択 / Engine auto-selection:** 選択中のエンジンが未インストールでも、他にインストール済みのエンジンがあれば `agent_config.json` の並び順で最初のものに切り替えます（`src/lib/engineSelection.ts`）。選択は `localStorage` に保存されます。 / If the selected engine isn't installed but another one is, the first installed engine in `agent_config.json` order is selected (`src/lib/engineSelection.ts`); the choice is remembered in `localStorage`.
+- **更新チェック / Update check:** アプリ内の「更新あり」バナーは `install_commands.json` に `latest_version_url` を持つエンジン（現状 agy のみ）だけが対象です。Claude Code のネイティブインストーラはバックグラウンドで自動更新されるため、アプリ側では更新チェックしません。 / The in-app "update available" banner only applies to engines with a `latest_version_url` in `install_commands.json` (currently agy only). Claude Code's native installer auto-updates itself in the background, so the app doesn't check it.
+- **起動引数 / Launch args:** `agent_config.json` の claude の `args` は `["--settings", "${PROJECT_ROOT}/.claude/agent-deck-settings.json"]`。`${PROJECT_ROOT}` は Rust 側（`resolve_launch_args`）でインストール先の絶対パスに展開され、ファイルがまだ無い場合（setup 失敗時など）は `--settings` ごと外して起動します（claude はファイルが無いとエラー終了するため）。 / The claude engine's `args` in `agent_config.json` are `["--settings", "${PROJECT_ROOT}/.claude/agent-deck-settings.json"]`. `${PROJECT_ROOT}` is expanded by the Rust side (`resolve_launch_args`), and if the file doesn't exist yet (e.g. setup failed) the `--settings` pair is dropped, since claude hard-fails on a missing settings file.
 
 #### Windows の埋め込み Python (`app/python/` / `App\python\`) / Windows's embedded Python bootstrap
 
@@ -272,7 +290,8 @@ Node.js and Python are self-contained inside the project folder, so agent-deck i
 1. agy / agent-deck を終了する
 2. プロジェクトフォルダを削除する
 3. ポリシーファイルを削除する（`~/.gemini/policies/agent-deck.toml` — 旧バージョン由来の別名ファイルが残っていないかも確認）
-4. （任意）`agy` 自体も削除する場合は `~/.local/bin/agy`（Mac）または `%LOCALAPPDATA%\agy\bin\agy.exe`（Windows）を削除する — 他の agent-deck インストールと共有される可能性があるため、通常はそのままで問題ありません
+4. Claude Code を使っていた場合: `~/.claude/skills/` 内の agent-deck が入れたスキル（`~/.claude/skills/.installed-skills-manifest` に列挙）と、そのマニフェストを削除する / If Claude Code was used: delete the skills agent-deck installed under `~/.claude/skills/` (listed in `~/.claude/skills/.installed-skills-manifest`) and that manifest
+5. （任意）`agy` 自体も削除する場合は `~/.local/bin/agy`（Mac）または `%LOCALAPPDATA%\agy\bin\agy.exe`（Windows）を削除する — 他の agent-deck インストールと共有される可能性があるため、通常はそのままで問題ありません
 
 > `files/` フォルダはプロジェクト内にあるため、削除前に必要なデータをバックアップしてください。
 
@@ -634,9 +653,10 @@ cd src-tauri && cargo test --lib
 | `test_config_notifications.py` | 設定・通知系 |
 | `test_drive_download.py` / `test_drive_migrator.py` | Drive 連携 |
 | `test_markitdown_convert.py` / `test_rename_files.py` | 各スキルのロジック |
-| `test_agy_scheduler.py` / `test_agy_scheduled_prompt.py` / `test_automate_dispatch.py` / `test_gcalendar.py` / `test_notify_chat.py` | 自動化・通知系 |
+| `test_agy_scheduler.py` / `test_agy_scheduled_prompt.py` / `test_automate_dispatch.py` / `test_gcalendar.py` / `test_notify_chat.py` | 自動化・通知系（定期実行の `--engine agy\|claude` を含む） |
+| `test_install_skills_claude.py` / `test_claude_settings.py` / `test_agents_md_engines.py` | Claude Code 対応（`.claude/skills/` へのインストール、許可設定の生成、`AGENTS.md` のエンジン共通化） |
 
-Rust 側（`src-tauri/`）のテストは PTY・pre-launch コマンドなど、ランチャー本体の挙動をカバーします。
+Rust 側（`src-tauri/`）のテストは PTY・pre-launch コマンドなど、ランチャー本体の挙動をカバーします（Claude Code の実出力を使ったプロンプト検出、PATH への `~/.local/bin` 追加、`${PROJECT_ROOT}` 展開、エンジン別の更新チェック等を含む）。フロントエンドは `npx vitest run`（`src/lib/*.test.ts`、エンジン自動選択を含む）。
 
 ---
 
@@ -733,10 +753,14 @@ The `ask_user` tool is built into Antigravity CLI. Instead of asking questions v
 
 #### ⚙️ 他エンジン使用時の仕組み / How Non-Agy Engines Work
 * **自動メタプロンプト注入 (Metaprompt Injection)**: `agy` 以外のエンジン（`claude` や `codex`）でセッションを開始した際、フロントエンドは選択された作業ディレクトリ内の `SKILL.md` を読み込み、セッション開始時に**最初のシステムメッセージ（メタプロンプト）として自動的に注入**します。これにより、汎用自律エージェントに対して一連のタスク指示を漏れなく伝えることができます。
-* **プロンプト検出の最適化 (Prompt Detection)**: `pty.rs` 内で各エンジンの標準出力を監視し、例えば Claude Code が「`Allow tool execution? [y/N]`」（ツール実行許可の確認）などの対話型確認プロンプトを出力した際、アプリ上の対話インターフェースを介してユーザーが直接応答できるようにバッファおよび判定処理を拡張しています。
+* **プロンプト検出 (Prompt Detection)**: `pty.rs` の `detect_prompts` が各エンジンの出力を監視し、確認プロンプトをアプリ上のボタンに変換します。Claude Code（2.1 系で実機確認）について:
+  * Claude Code は単語間の空白を空白文字ではなくカーソル列移動（`ESC[<n>G`）で描画するため、`strip_ansi_rust` はこれを空白に置き換えてから照合します。
+  * フォルダ信頼確認は agy では「Yes, I trust this folder」が先頭、Claude Code では「No, exit」が先頭（既定選択）と並びが逆です。そのため選択肢は画面上の出現順に並べ、各ボタンが送るキー（↓ × 位置 + Enter）を `PtyPromptPayload.inputs` として位置ベースで返します（ラベル文字列での推測はしません）。
+  * 実行・編集・作成の許可確認（`Do you want to proceed?` / `Do you want to make this edit to …?` + `1. Yes  2. …  N. No` + `Esc to cancel`）は番号付きメニューとして汎用的に解析します。
+* **Prompt detection:** `pty.rs`'s `detect_prompts` watches each engine's output and turns confirmation prompts into in-app buttons. For Claude Code (verified against 2.1.x): it draws word gaps as cursor-column moves (`ESC[<n>G`), which `strip_ansi_rust` now turns into spaces before matching; its folder-trust dialog lists "No, exit" first (agy lists "Yes" first), so options are ordered by on-screen position and each button's keys (↓ × index + Enter) are sent via `PtyPromptPayload.inputs` rather than guessed from the label; and its numbered permission menus (`Do you want …?` + `1. Yes … N. No` + `Esc to cancel`) are parsed generically.
 
 #### ⚠️ クロスエージェント用スキルの設計（ポータビリティ） / Portable Skill Design
-他エンジンを利用する場合、`agy` 特有の組み込みツール（`ask_user` など）は動作しません。他の自律エージェントでも全く同一にポータブルに動作する `SKILL.md` を作成する際の具体的な注意点や設計原則については、[スキル・ポータビリティ・ガイド](skill_portability_guide.md) を参照してください。
+他エンジンを利用する場合、`agy` 特有の組み込みツール（`ask_user` など）は動作しません（Claude Code では `AskUserQuestion` が相当し、`AGENTS.md` は両方を案内しています。リリース ZIP の `CLAUDE.md` は `@AGENTS.md` だけを含むスタブなので、Claude Code も同じ指示を読みます）。他の自律エージェントでも全く同一にポータブルに動作する `SKILL.md` を作成する際の具体的な注意点や設計原則については、[スキル・ポータビリティ・ガイド](skill_portability_guide.md) を参照してください。
 
 ---
 
@@ -748,6 +772,7 @@ agent-deck は **二層のセキュリティ** でエージェントの動作範
 |---|---|---|
 | 第1層（行動制約） | `AGENTS.md` の記述 | モデルへのルールとして何を操作してよいか・悪いかを定義 |
 | 第2層（技術的強制） | agy ポリシーファイル（TOML） | ツール呼び出し自体をランタイムでブロック。YOLO モードでも有効 |
+| 第2層（Claude Code） | `.claude/agent-deck-settings.json`（`permissions.allow/deny`） | `claude --settings` で常に読み込まれる。deny は許可モードに関係なく優先 |
 
 ### Google Workspace アカウントでの利用 / Using a Google Workspace Account
 
@@ -772,6 +797,22 @@ agent-deck は **二層のセキュリティ** でエージェントの動作範
 | 250 | 外部ファイルシステム保護 | deny（YOLO を上書き） |
 | 200 | `src/` 書き込み禁止 | deny（YOLO を上書き） |
 | 100 | スキルアクティベーション・自動化コマンド | allow（確認省略） |
+
+### Claude Code の許可設定 / Claude Code Permission Settings
+
+**原本:** `python/config/claude/settings.json`（git 管理）。`setup.py` の `install_claude_settings()` が `${PROJECT_ROOT_RULE}` をインストール先の絶対パス（Claude のルール形式 `//Users/…`、Windows は `//c/Users/…`）に置き換えて `<project>/.claude/agent-deck-settings.json` に書き出し、`agent_config.json` が `claude --settings` で渡します。ファイル名を `settings.json` にしていないのは、Claude Code が自動で読む名前にすると、このリポジトリを Claude Code で開発する人にまで「`python/` 編集禁止」が効いてしまうためです。
+
+**Source:** `python/config/claude/settings.json` (git-tracked). `setup.py`'s `install_claude_settings()` replaces `${PROJECT_ROOT_RULE}` with the install's absolute path in Claude's rule form (`//Users/…`, or `//c/Users/…` on Windows), writes `<project>/.claude/agent-deck-settings.json`, and `agent_config.json` passes it via `claude --settings`. It's deliberately not named `settings.json`, which Claude Code auto-loads — that would impose the "no edits to `python/`" rule on anyone developing this repo with Claude Code.
+
+| 種別 / Kind | 内容 / Rules |
+|---|---|
+| deny | `Edit` プロジェクトの `python/**`、システムディレクトリ（`//etc/**`、`//usr/**`、`//private/**`、`//c/Windows/**` 等）、`~/.claude/**` |
+| deny | `Read`/`Edit` 認証情報・設定ドットファイル（`~/.ssh`、`~/.aws`、`~/.gemini`、`~/.config`、`~/.zshrc` 等）、`~/Library/**`、`~/AppData/**` |
+| allow | `Skill`、`Bash(python3 python/*)`、`Bash(python3 -m *)`、`Bash(venv/bin/python3 *)`、`Bash(marp *)` 等（agy ポリシーの自動許可コマンドと同じ） |
+
+実機（Claude Code 2.1 系）で、`python/` への Write が拒否され `files/` への Write は通ることを確認済みです。`Bash` の deny はコマンド前方一致しか書けないため、agy ポリシーにある「シェル経由のシステムディレクトリ操作の禁止」は Claude 側では `AGENTS.md` の行動制約のみに依存します。Claude Code のフォルダ信頼（`~/.claude.json`）は Claude 本体が同時に書き換えるファイルのため setup では変更せず、初回はアプリ上のボタンで信頼します。
+
+Verified against Claude Code 2.1.x: Write to `python/` is denied, Write to `files/` succeeds. `Bash` deny rules can only match by command prefix, so the agy policy's "no shell access to system directories" relies solely on `AGENTS.md` on the Claude side. Claude Code's folder trust (`~/.claude.json`) is not pre-seeded by setup, since Claude itself rewrites that file concurrently; users trust the folder once via the in-app buttons instead.
 
 ### 既知の制限 / Known Limitations
 

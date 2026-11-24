@@ -159,3 +159,46 @@ class TestDelete:
 
         assert not plist_path.exists()
         assert sch._read_sidecar("forex") is None
+
+
+class TestEngine:
+    def test_mac_claude_task_passes_engine_to_runner(self, monkeypatch, _isolated_roots):
+        import plistlib
+        monkeypatch.setattr(sch.sys, "platform", "darwin")
+        task = sch.create("news", "summarize news", "daily", "08:00", engine="claude")
+        assert task["engine"] == "claude"
+        plist = plistlib.loads(sch._mac_plist_path("news").read_bytes())
+        assert plist["ProgramArguments"][-3:] == ["summarize news", "--engine", "claude"]
+
+    def test_mac_agy_task_command_line_unchanged(self, monkeypatch, _isolated_roots):
+        import plistlib
+        monkeypatch.setattr(sch.sys, "platform", "darwin")
+        sch.create("forex", "check", "daily", "09:00")
+        plist = plistlib.loads(sch._mac_plist_path("forex").read_bytes())
+        assert plist["ProgramArguments"][-1] == "check"
+        assert "--engine" not in plist["ProgramArguments"]
+
+    def test_windows_claude_task_appends_engine(self, monkeypatch, _isolated_roots):
+        monkeypatch.setattr(sch.sys, "platform", "win32")
+        sch.create("news", "summarize", "daily", "08:00", engine="claude")
+        cmd = _isolated_roots.call_args_list[0].args[0]
+        tr = cmd[cmd.index("/TR") + 1]
+        assert tr.endswith('"summarize" --engine claude')
+
+    def test_edit_keeps_engine_and_legacy_sidecar_defaults_to_agy(self, monkeypatch, _isolated_roots):
+        import json
+        monkeypatch.setattr(sch.sys, "platform", "darwin")
+        sch.create("news", "p", "daily", "08:00", engine="claude")
+        assert sch.edit("news", time_str="09:00")["engine"] == "claude"
+
+        sch.create("old", "p", "daily", "08:00")
+        side = sch._sidecar_path("old")
+        data = json.loads(side.read_text(encoding="utf-8"))
+        del data["engine"]  # simulate a task created before engines existed
+        side.write_text(json.dumps(data), encoding="utf-8")
+        assert sch.edit("old", time_str="10:00")["engine"] == "agy"
+
+    def test_invalid_engine_rejected(self, monkeypatch):
+        monkeypatch.setattr(sch.sys, "platform", "darwin")
+        with pytest.raises(ValueError, match="engine"):
+            sch.create("x", "p", "daily", "08:00", engine="codex")

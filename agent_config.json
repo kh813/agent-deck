@@ -14,7 +14,7 @@
       "id": "claude",
       "name": "Claude Code",
       "command": "claude",
-      "args": []
+      "args": ["--settings", "${PROJECT_ROOT}/.claude/agent-deck-settings.json"]
     },
     {
       "id": "codex",

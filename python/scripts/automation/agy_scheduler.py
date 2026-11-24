@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Cross-platform scheduler for headless agy prompts (create/list/edit/enable/
-disable/delete).
+Cross-platform scheduler for headless agy / Claude Code prompts
+(create/list/edit/enable/disable/delete). The engine is chosen per task with
+`--engine agy|claude` (default agy; tasks created before this option existed
+have no "engine" in their sidecar and are treated as agy). The "agy" in the
+names below is historical and kept so existing registrations stay valid.
 
 Every task this module creates lives in a dedicated, agent-ui-owned
 namespace, so list/enable/disable/delete only ever see and touch tasks
@@ -81,9 +84,18 @@ def _sidecar_path(name: str) -> Path:
     return _SIDECAR_ROOT / f"{name}.json"
 
 
-def _write_sidecar(name, prompt, frequency, time_str, weekdays, enabled=True) -> dict:
+ENGINES = ("agy", "claude")
+
+
+def _runner_args(prompt: str, engine: str) -> list:
+    # Old tasks (pre-engine) were agy-only and have no --engine; keep their
+    # exact command line for agy so re-registering them is a no-op change.
+    return [prompt] if engine == "agy" else [prompt, "--engine", engine]
+
+
+def _write_sidecar(name, prompt, frequency, time_str, weekdays, enabled=True, engine="agy") -> dict:
     data = {
-        "name": name, "prompt": prompt, "frequency": frequency,
+        "name": name, "prompt": prompt, "frequency": frequency, "engine": engine,
         "time": time_str, "weekdays": weekdays or [], "enabled": enabled,
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
@@ -108,7 +120,7 @@ def _mac_plist_path(name: str) -> Path:
     return _LAUNCH_AGENTS_ROOT / f"{_LABEL_PREFIX}{name}.plist"
 
 
-def _mac_register(name, prompt, frequency, hour, minute, weekdays) -> None:
+def _mac_register(name, prompt, frequency, hour, minute, weekdays, engine="agy") -> None:
     if frequency == "daily":
         intervals = [{"Hour": hour, "Minute": minute}]
     else:
@@ -119,7 +131,7 @@ def _mac_register(name, prompt, frequency, hour, minute, weekdays) -> None:
 
     plist = {
         "Label": f"{_LABEL_PREFIX}{name}",
-        "ProgramArguments": [_python_for_task(), str(_RUNNER_SCRIPT), prompt],
+        "ProgramArguments": [_python_for_task(), str(_RUNNER_SCRIPT), *_runner_args(prompt, engine)],
         "StartCalendarInterval": intervals,
         "RunAtLoad": False,
         "StandardOutPath": str(log_dir / f"{name}.out.log"),
@@ -157,9 +169,11 @@ def _win_task_name(name: str) -> str:
     return f"\\{_TASK_FOLDER}\\{name}"
 
 
-def _win_register(name, prompt, frequency, hour, minute, weekdays) -> None:
+def _win_register(name, prompt, frequency, hour, minute, weekdays, engine="agy") -> None:
     tn = _win_task_name(name)
     tr = f'"{_python_for_task()}" "{_RUNNER_SCRIPT}" "{prompt}"'
+    if engine != "agy":
+        tr += f" --engine {engine}"
     st = f"{hour:02d}:{minute:02d}"
     cmd = ["schtasks", "/Create", "/F", "/TN", tn, "/TR", tr, "/ST", st]
     if frequency == "daily":
@@ -188,8 +202,10 @@ def _win_exists(name: str) -> bool:
 
 # ── Public API ──────────────────────────────────────────────────────────────
 
-def create(name, prompt, frequency, time_str, weekdays=None) -> dict:
+def create(name, prompt, frequency, time_str, weekdays=None, engine="agy") -> dict:
     _validate_name(name)
+    if engine not in ENGINES:
+        raise ValueError(f"engine must be one of {ENGINES}.")
     if _read_sidecar(name) is not None:
         raise ValueError(f"A scheduled task named '{name}' already exists. Use edit or delete first.")
     hour, minute = _validate_time(time_str)
@@ -205,16 +221,16 @@ def create(name, prompt, frequency, time_str, weekdays=None) -> dict:
         raise ValueError("frequency must be 'daily' or 'weekly'.")
 
     if sys.platform == "darwin":
-        _mac_register(name, prompt, frequency, hour, minute, weekdays)
+        _mac_register(name, prompt, frequency, hour, minute, weekdays, engine)
     elif sys.platform == "win32":
-        _win_register(name, prompt, frequency, hour, minute, weekdays)
+        _win_register(name, prompt, frequency, hour, minute, weekdays, engine)
     else:
         raise RuntimeError("agy_scheduler only supports macOS and Windows.")
 
-    return _write_sidecar(name, prompt, frequency, time_str, weekdays, enabled=True)
+    return _write_sidecar(name, prompt, frequency, time_str, weekdays, enabled=True, engine=engine)
 
 
-def edit(name, prompt=None, frequency=None, time_str=None, weekdays=None) -> dict:
+def edit(name, prompt=None, frequency=None, time_str=None, weekdays=None, engine=None) -> dict:
     existing = _read_sidecar(name)
     if existing is None:
         raise ValueError(f"No scheduled task named '{name}'.")
@@ -225,6 +241,7 @@ def edit(name, prompt=None, frequency=None, time_str=None, weekdays=None) -> dic
         frequency if frequency is not None else existing["frequency"],
         time_str if time_str is not None else existing["time"],
         weekdays if weekdays is not None else existing["weekdays"],
+        engine if engine is not None else existing.get("engine", "agy"),
     )
 
 
@@ -272,12 +289,12 @@ def _print_task(t: dict) -> None:
     status = "enabled" if t["enabled"] else "disabled"
     if not t.get("registered", True):
         status += " (⚠ not registered with OS — recreate it)"
-    print(f"- {t['name']} [{t['frequency']}: {schedule}] ({status})")
+    print(f"- {t['name']} [{t['frequency']}: {schedule}] [engine: {t.get('engine', 'agy')}] ({status})")
     print(f"    prompt: {t['prompt']}")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Manage scheduled headless agy prompts.")
+    parser = argparse.ArgumentParser(description="Manage scheduled headless agy / Claude Code prompts.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_create = sub.add_parser("create")
@@ -285,12 +302,14 @@ def main() -> None:
     p_create.add_argument("--prompt", required=True)
     p_create.add_argument("--daily", metavar="HH:MM")
     p_create.add_argument("--weekly", nargs=2, metavar=("DAYS", "HH:MM"))
+    p_create.add_argument("--engine", choices=ENGINES, default="agy")
 
     p_edit = sub.add_parser("edit")
     p_edit.add_argument("name")
     p_edit.add_argument("--prompt")
     p_edit.add_argument("--daily", metavar="HH:MM")
     p_edit.add_argument("--weekly", nargs=2, metavar=("DAYS", "HH:MM"))
+    p_edit.add_argument("--engine", choices=ENGINES)
 
     sub.add_parser("list")
 
@@ -304,10 +323,10 @@ def main() -> None:
         if bool(args.daily) == bool(args.weekly):
             parser.error("create requires exactly one of --daily HH:MM or --weekly DAYS HH:MM")
         if args.daily:
-            task = create(args.name, args.prompt, "daily", args.daily)
+            task = create(args.name, args.prompt, "daily", args.daily, engine=args.engine)
         else:
             days, time_str = args.weekly
-            task = create(args.name, args.prompt, "weekly", time_str, days.split(","))
+            task = create(args.name, args.prompt, "weekly", time_str, days.split(","), engine=args.engine)
         _print_task(task)
 
     elif args.command == "edit":
@@ -317,7 +336,8 @@ def main() -> None:
         elif args.weekly:
             days, time_str = args.weekly
             frequency, weekdays = "weekly", days.split(",")
-        task = edit(args.name, prompt=args.prompt, frequency=frequency, time_str=time_str, weekdays=weekdays)
+        task = edit(args.name, prompt=args.prompt, frequency=frequency, time_str=time_str, weekdays=weekdays,
+                    engine=args.engine)
         _print_task(task)
 
     elif args.command == "list":

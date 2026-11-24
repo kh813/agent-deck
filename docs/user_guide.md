@@ -99,10 +99,18 @@ On first launch, the following steps run automatically. Setup progress is shown 
 ## 2.5 基本的な操作方法とエンジンの切り替え / Basic Operations & Engine Selection
 
 ### 🤖 動作エンジン（Agent）の切り替え / Switching Engines
-デフォルトでは `agy` (Antigravity CLI) が使用されますが、ローカル環境に以下のエージェントがインストールされている場合、ヘッダーの「エージェント / Agent」ドロップダウンまたは画面上部メニューバーの `Engine` から切り替えることができます。
+デフォルトでは `agy` (Antigravity CLI) が使用されますが、ローカル環境に以下のエージェントがインストールされている場合、ヘッダーの「エージェント / Agent」ドロップダウンから切り替えることができます。
+By default `agy` (Antigravity CLI) is used; if any of the agents below are installed, switch between them from the "Agent" dropdown in the header.
 * **`agy`**: 標準の Antigravity CLI エンジン。
-* **`claude`**: Claude Code エンジン。
+* **`claude`**: Claude Code エンジン（スキル・`/スキル名` もそのまま使えます / skills and `/skill-name` work as-is）。
 * **`codex`**: Codex CLI エンジン。
+
+最後に選んだエンジンは次回起動時にも使われます。選んでいたエンジンが見つからない場合は、インストール済みのエンジンに自動で切り替わります。
+The engine you picked last is used again on the next launch. If it's no longer installed, agent-deck switches to one that is.
+
+> [!NOTE]
+> Claude Code の初回起動時に表示される「このフォルダを信頼しますか？」や、コマンド実行・ファイル編集の許可確認（`1. Yes / 2. … / No` の番号付きメニュー）は、画面下部のボタンから選んで応答できます。Claude Code が未インストールの場合は、起動時の画面からインストールできます（管理者権限は不要です）。
+> Claude Code's first-run "trust this folder?" dialog and its command/edit permission menus (`1. Yes / 2. … / No`) can be answered with the buttons at the bottom of the screen. If Claude Code isn't installed yet, it can be installed from the startup screen (no admin rights needed).
 
 > [!IMPORTANT]
 > 誤作動やセッションの不整合を防ぐため、セッション実行中（`RUNNING` 状態）は、ドロップダウンおよびメニューバーからのエンジン切り替えはロック（Disabled）されます。エンジンを切り替える場合は、一度「停止 / Stop」をクリックしてセッションを終了してください。
@@ -146,7 +154,7 @@ Once the tool launches, you can operate it through conversation. Skills can be i
 | `/translator` | 文章の翻訳・言語判定 / Translate text, detect language |
 | `/info-collector` | 指定した情報源から特定項目だけを収集 / Collect specific fields from a given source |
 | `/research-assistant` | トピックを指定した自由な調査 / Open-ended topic research |
-| `/agy-schedule` | 定型プロンプトの定期実行を設定 / Schedule a recurring prompt |
+| `/agy-schedule` | 定型プロンプトの定期実行を設定（agy / Claude Code どちらでも）/ Schedule a recurring prompt (agy or Claude Code) |
 | `/notify-chat` | 定期実行の結果を Google Chat に通知する設定 / Set up Google Chat notifications for scheduled runs |
 | `/setup` | 環境の初期化・スキル管理 / Setup and skill management |
 | `/skill-catalog` | グループ共有のスキルカタログを閲覧・取得 / Browse and import shared skills from the group catalog |

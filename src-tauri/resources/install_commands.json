@@ -16,6 +16,7 @@
       ]
     },
     "version_args": ["--version"],
+    "latest_version_url": "https://antigravity.google.com/version.txt",
     "install": {
       "macos": {
         "command": "bash",

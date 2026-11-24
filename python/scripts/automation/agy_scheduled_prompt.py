@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-Headless runner: send a single prompt to agy non-interactively (`agy --print`),
-log the result, and deliver it to Chat via notify_chat.py.
+Headless runner: send a single prompt non-interactively to agy
+(`agy --print`) or Claude Code (`claude -p`), log the result, and deliver it
+to Chat via notify_chat.py.
 
 Usage:
-  python3 agy_scheduled_prompt.py "<prompt>" [--timeout SECONDS]
+  python3 agy_scheduled_prompt.py "<prompt>" [--timeout SECONDS] [--engine agy|claude]
 
 Not meant to be run interactively — this is the payload invoked by scheduled
 tasks created through the `agy-schedule` skill (see agy_scheduler.py).
 """
 import argparse
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -32,6 +34,34 @@ def _agy_binary() -> str:
     return "agy"  # fall back to PATH
 
 
+def _claude_binary() -> str:
+    # launchd / Task Scheduler start this with a minimal PATH that does not
+    # include ~/.local/bin, where Claude Code's native installer puts it.
+    exe = "claude.exe" if sys.platform == "win32" else "claude"
+    native = Path.home() / ".local" / "bin" / exe
+    if native.exists():
+        return str(native)
+    return shutil.which("claude") or "claude"
+
+
+ENGINES = ("agy", "claude")
+# Unattended runs can't answer permission prompts, so pre-allow the
+# read-only web tools that typical scheduled prompts (info-collector style
+# "check today's ...") need. Everything else stays governed by
+# agent-deck's permission settings (.claude/agent-deck-settings.json).
+_CLAUDE_HEADLESS_ALLOWED_TOOLS = "WebSearch,WebFetch"
+
+
+def _build_command(engine: str, prompt: str, timeout_seconds: int) -> list:
+    if engine == "claude":
+        cmd = [_claude_binary(), "-p", prompt, "--allowedTools", _CLAUDE_HEADLESS_ALLOWED_TOOLS]
+        settings = _PROJECT_ROOT / ".claude" / "agent-deck-settings.json"
+        if settings.exists():
+            cmd += ["--settings", str(settings)]
+        return cmd
+    return [_agy_binary(), "--print", prompt, "--print-timeout", f"{timeout_seconds}s"]
+
+
 def _log(msg: str) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
@@ -45,23 +75,25 @@ def _log(msg: str) -> None:
         _LOG_FILE.write_text("\n".join(lines[-10_000:]) + "\n", encoding="utf-8")
 
 
-def run(prompt: str, timeout_seconds: int = 300) -> int:
+def run(prompt: str, timeout_seconds: int = 300, engine: str = "agy") -> int:
     from notify_chat import send
 
-    _log(f"Running scheduled prompt: {prompt!r}")
+    if engine not in ENGINES:
+        raise ValueError(f"engine must be one of {ENGINES}, got {engine!r}")
+    _log(f"Running scheduled prompt ({engine}): {prompt!r}")
     try:
         result = subprocess.run(
-            [_agy_binary(), "--print", prompt, "--print-timeout", f"{timeout_seconds}s"],
+            _build_command(engine, prompt, timeout_seconds),
             cwd=str(_PROJECT_ROOT),
             capture_output=True, text=True, timeout=timeout_seconds + 30,
         )
     except subprocess.TimeoutExpired:
-        _log("agy --print timed out")
+        _log(f"{engine} headless run timed out")
         send(f"⚠️ 定期実行がタイムアウトしました / Scheduled run timed out.\nPrompt: {prompt}")
         return 1
 
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
-    _log(f"agy exit={result.returncode} output={output[:500]!r}")
+    _log(f"{engine} exit={result.returncode} output={output[:500]!r}")
 
     if result.returncode != 0:
         send(
@@ -76,12 +108,13 @@ def run(prompt: str, timeout_seconds: int = 300) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run a prompt through agy headlessly and notify Chat."
+        description="Run a prompt through agy or Claude Code headlessly and notify Chat."
     )
     parser.add_argument("prompt")
     parser.add_argument("--timeout", type=int, default=300, help="Timeout in seconds (default 300)")
+    parser.add_argument("--engine", choices=ENGINES, default="agy", help="Agent CLI to run (default agy)")
     args = parser.parse_args()
-    sys.exit(run(args.prompt, args.timeout))
+    sys.exit(run(args.prompt, args.timeout, args.engine))
 
 
 if __name__ == "__main__":

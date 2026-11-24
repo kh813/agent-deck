@@ -91,8 +91,48 @@ def setup_venv():
 
 _HOME_SKILLS_MANIFEST = ".installed-skills-manifest"
 
+def _sync_home_skills(local_skills_dir, home_skills_dir, installed, overwrite_unmanaged=True):
+    """Mirror the freshly-installed local skills into a per-user skills dir.
+
+    A manifest of what THIS process installed last time lets a renamed or
+    retired skill be cleaned up here too — without it, a skill that no
+    longer exists in the current build (e.g. "calendar" consolidated into
+    "daily-schedule") is never touched again: the copy loop only overwrites
+    entries matching CURRENT skill names, so the old directory sits there
+    forever, and an agent that stumbles onto it follows stale,
+    no-longer-correct instructions instead of the current skill. Confirmed
+    happening for real. A name never tracked by this manifest (e.g. a skill
+    a user created directly in the home dir some other way) is never
+    removed; with overwrite_unmanaged=False it is not overwritten either.
+    """
+    import shutil
+    home_skills_dir = Path(home_skills_dir)
+    home_skills_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = home_skills_dir / _HOME_SKILLS_MANIFEST
+    previously_installed = set(manifest_path.read_text().splitlines()) if manifest_path.exists() else set()
+
+    for stale_name in previously_installed - set(installed):
+        stale_dir = home_skills_dir / stale_name
+        if stale_dir.exists():
+            shutil.rmtree(stale_dir)
+            print(f"  Removed stale: {stale_name} ({home_skills_dir})")
+
+    managed = []
+    for skill_name in installed:
+        home_skill = home_skills_dir / skill_name
+        if home_skill.exists():
+            if not overwrite_unmanaged and skill_name not in previously_installed:
+                print(f"  Skipped (user-owned skill with the same name): {home_skill}")
+                continue
+            shutil.rmtree(home_skill)
+        shutil.copytree(os.path.join(local_skills_dir, skill_name), str(home_skill))
+        managed.append(skill_name)
+
+    manifest_path.write_text("\n".join(sorted(managed)))
+
+
 def install_skills():
-    print("==> Installing skills to .gemini/skills/...")
+    print("==> Installing skills to .gemini/skills/ and .claude/skills/...")
     import zipfile
     import shutil
     skills_dir = "skills"
@@ -112,38 +152,23 @@ def install_skills():
         print(f"  Installed: {skill_name}")
         installed.append(skill_name)
 
-    # Also install to ~/.gemini/skills/ for Antigravity CLI (agy).
-    #
-    # A manifest of what THIS process installed last time lets a renamed or
-    # retired skill be cleaned up here too — without it, a skill that no
-    # longer exists in the current build (e.g. "calendar" consolidated into
-    # "daily-schedule") is never touched again: the loop below only
-    # overwrites entries matching CURRENT skill names, so the old directory
-    # sits there forever, and an agent that stumbles onto it follows
-    # stale, no-longer-correct instructions instead of the current skill.
-    # Confirmed happening for real. A name never tracked by this manifest
-    # (e.g. a skill a user created directly in ~/.gemini/skills/ some other
-    # way) is left alone, matching sync_internal_skills.py's equivalent
-    # manifest for the LOCAL .gemini/skills/ directory in agent-deck.
-    home_gemini_skills = Path.home() / ".gemini" / "skills"
-    home_gemini_skills.mkdir(parents=True, exist_ok=True)
-    manifest_path = home_gemini_skills / _HOME_SKILLS_MANIFEST
-    previously_installed = set(manifest_path.read_text().splitlines()) if manifest_path.exists() else set()
-    current_names = set(installed)
+    # Claude Code reads the same SKILL.md format (name/description
+    # frontmatter) from <project>/.claude/skills/<name>/SKILL.md, so the
+    # project-local copy is a straight mirror of .gemini/skills/.
+    claude_skills_dir = os.path.join(".claude", "skills")
+    if os.path.exists(claude_skills_dir):
+        shutil.rmtree(claude_skills_dir)
+    shutil.copytree(gemini_skills_dir, claude_skills_dir)
 
-    for stale_name in previously_installed - current_names:
-        stale_dir = home_gemini_skills / stale_name
-        if stale_dir.exists():
-            shutil.rmtree(stale_dir)
-            print(f"  Removed stale: {stale_name}")
-
-    for skill_name in installed:
-        home_skill = home_gemini_skills / skill_name
-        if home_skill.exists():
-            shutil.rmtree(home_skill)
-        shutil.copytree(os.path.join(gemini_skills_dir, skill_name), str(home_skill))
-
-    manifest_path.write_text("\n".join(sorted(current_names)))
+    # Also install to the per-user dirs, so the skills are found when a
+    # session's working folder is not the project root:
+    # ~/.gemini/skills/ for Antigravity CLI (agy), ~/.claude/skills/ for
+    # Claude Code. ~/.claude/skills/ is commonly shared with the user's own
+    # hand-made skills, so a same-named skill this setup never installed is
+    # left untouched there rather than overwritten.
+    _sync_home_skills(gemini_skills_dir, Path.home() / ".gemini" / "skills", installed)
+    _sync_home_skills(claude_skills_dir, Path.home() / ".claude" / "skills", installed,
+                      overwrite_unmanaged=False)
 
 def trust_project_folder():
     import json
@@ -173,6 +198,35 @@ def install_gemini_policies():
     for toml_file in src_policies.glob("*.toml"):
         shutil.copy2(toml_file, dst_policies / toml_file.name)
         print(f"  Installed: {toml_file.name}")
+
+CLAUDE_SETTINGS_NAME = "agent-deck-settings.json"
+
+def _claude_abs_rule_path(path):
+    """Absolute path in Claude Code permission-rule form: `//` + POSIX path.
+    Windows drive paths are normalized the way Claude Code does it
+    (C:\\Users\\x -> /c/Users/x), giving //c/Users/x."""
+    posix = Path(path).as_posix()
+    if len(posix) >= 2 and posix[1] == ":":
+        posix = "/" + posix[0].lower() + posix[2:]
+    return "/" + posix
+
+def install_claude_settings(project_root=None):
+    """Render python/config/claude/settings.json into
+    <project>/.claude/agent-deck-settings.json for `claude --settings`."""
+    import json
+    project_root = Path(project_root) if project_root else Path(SCRIPT_DIR).parents[2].resolve()
+    template = Path(SCRIPT_DIR).parents[1] / "config" / "claude" / "settings.json"
+    text = template.read_text(encoding="utf-8")
+    rule_root = _claude_abs_rule_path(project_root)
+    # Insert via json.dumps so a path with quotes/backslashes stays valid JSON.
+    text = text.replace("${PROJECT_ROOT_RULE}", json.dumps(rule_root)[1:-1])
+    data = json.loads(text)
+    data.pop("$comment", None)
+    dest = project_root / ".claude" / CLAUDE_SETTINGS_NAME
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"==> Installed Claude Code permission settings: {dest}")
+    return dest
 
 # ── setup skills ──────────────────────────────────────────────
 #
@@ -237,6 +291,7 @@ def skills_rebuild():
     sync_catalog_skills()
     build_skills()
     install_skills()
+    install_claude_settings()
     print("==> Skills rebuilt and reinstalled.")
 
 def skills_disable(skill_name):
@@ -569,6 +624,7 @@ if __name__ == "__main__":
         build_skills()
         install_skills()
         install_gemini_policies()
+        install_claude_settings()
         trust_project_folder()
         setup_files_folder()
         print("==> Setup completed successfully.")

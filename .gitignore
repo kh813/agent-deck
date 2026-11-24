@@ -88,6 +88,9 @@ python/skills/skill-catalog/catalog-index.md
 # Runtime artifacts created by setup.py at first launch
 /app/bin/
 /.gemini/
+# Claude Code skills installed by setup.py (generated, like /.gemini/)
+/.claude/skills/
+/.claude/agent-deck-settings.json
 # mermaid.js vendored by diagram-generator's ensure_mermaid_js.py on first use
 /python/skills/diagram-generator/scripts/assets/
 /files/*

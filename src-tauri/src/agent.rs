@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::pty::{get_default_cwd, resolve_app_bundle_dir, resolve_project_root, PtyState};
+use crate::pty::{child_path_env, get_default_cwd, resolve_app_bundle_dir, resolve_project_root, PtyState};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -44,6 +44,14 @@ pub struct AgentConfig {
     pub install: Option<InstallConfig>,
     #[serde(default)]
     pub update: Option<InstallConfig>,
+    // Plain-text endpoint returning this agent's latest released version.
+    // Only agents that define it get an in-app "update available" check:
+    // agy publishes one; Claude Code's native installer auto-updates itself
+    // in the background and Codex has no such endpoint, so for those the
+    // check is skipped (comparing their version against agy's would always
+    // read as "update available").
+    #[serde(default)]
+    pub latest_version_url: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -130,17 +138,23 @@ fn looks_like_version(s: &str) -> bool {
 }
 
 // Best-effort fetch of latest version from web via OS-specific CLI tools
-fn fetch_latest_version_from_web() -> Option<String> {
+fn fetch_latest_version_from_web(url: &str) -> Option<String> {
+    // Only fetch from plain https URLs: the value is interpolated into a
+    // PowerShell command line on Windows.
+    if !url.starts_with("https://") || url.contains(|c: char| c.is_whitespace() || c == '\'' || c == '"' || c == ';') {
+        return None;
+    }
     let is_windows = cfg!(target_os = "windows");
     let output = if is_windows {
         let mut cmd = Command::new("powershell");
-        cmd.args(&["-Command", "try { (Invoke-WebRequest -UseBasicParsing https://antigravity.google.com/version.txt -TimeoutSec 3).Content.Trim() } catch { exit 1 }"]);
+        let script = format!("try {{ (Invoke-WebRequest -UseBasicParsing '{}' -TimeoutSec 3).Content.Trim() }} catch {{ exit 1 }}", url);
+        cmd.args(&["-Command", &script]);
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
         cmd.output()
     } else {
         Command::new("curl")
-            .args(&["-fsSL", "--max-time", "3", "https://antigravity.google.com/version.txt"])
+            .args(&["-fsSL", "--max-time", "3", url])
             .output()
     };
 
@@ -248,6 +262,9 @@ pub async fn detect_agent_internal<R: tauri::Runtime>(
         let check_cmd = if is_windows { "where" } else { "which" };
         let mut cmd = Command::new(check_cmd);
         cmd.arg(&binary_name);
+        // Search the same augmented PATH the PTY session will get (incl.
+        // ~/.local/bin), not the GUI app's minimal inherited one.
+        cmd.env("PATH", child_path_env());
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
         let output = cmd.output();
@@ -373,7 +390,18 @@ pub async fn check_agent_update_internal<R: tauri::Runtime>(
     agent_id: String,
     app: tauri::AppHandle<R>,
 ) -> Result<UpdateStatus, String> {
+    let latest_url = load_config(&app)
+        .ok()
+        .and_then(|c| c.get(&agent_id).and_then(|a| a.latest_version_url.clone()));
     let status = detect_agent_internal(agent_id, app).await?;
+    let Some(latest_url) = latest_url else {
+        // No in-app update check for this agent (see latest_version_url).
+        return Ok(UpdateStatus {
+            current_version: status.version,
+            latest_version: None,
+            update_available: false,
+        });
+    };
     if !status.installed {
         return Ok(UpdateStatus {
             current_version: None,
@@ -383,7 +411,7 @@ pub async fn check_agent_update_internal<R: tauri::Runtime>(
     }
 
     let current = status.version;
-    let latest = fetch_latest_version_from_web().or_else(|| {
+    let latest = fetch_latest_version_from_web(&latest_url).or_else(|| {
         // Best-effort fallback: if query fails, default to current version (no update alert)
         current.clone()
     });
@@ -617,36 +645,7 @@ pub fn start_pre_launch_command_internal<R: tauri::Runtime>(
     let mut cmd = Command::new(&command);
     cmd.args(&args);
 
-    let mut path_env = std::env::var("PATH").unwrap_or_default();
-    let path_sep = if cfg!(target_os = "windows") { ";" } else { ":" };
-
-    #[cfg(target_os = "macos")]
-    {
-        for path in &["/opt/homebrew/bin", "/usr/local/bin"] {
-            if !path_env.contains(path) {
-                path_env = format!("{}{}{}", path, path_sep, path_env);
-            }
-        }
-    }
-
-    if let Ok(exe_path) = std::env::current_exe() {
-        let exe_dir = resolve_app_bundle_dir(exe_path.clone());
-        let proj_dir = resolve_project_root(exe_path);
-        
-        let mut local_paths = Vec::new();
-        local_paths.push(exe_dir.join("bin"));
-        local_paths.push(exe_dir.join("app").join("bin"));
-        local_paths.push(proj_dir.join("bin"));
-        local_paths.push(proj_dir.join("app").join("bin"));
-
-        for local_path in local_paths {
-            let path_str = local_path.to_string_lossy().to_string();
-            if !path_env.contains(&path_str) {
-                path_env = format!("{}{}{}", path_str, path_sep, path_env);
-            }
-        }
-    }
-    cmd.env("PATH", path_env);
+    cmd.env("PATH", child_path_env());
     // Match start_pty's cwd resolution (pty.rs): fall back to the resolved
     // project root rather than leaving the child's cwd unset, which would
     // default to wherever the OS happened to launch this app from (e.g. "/"
@@ -718,6 +717,41 @@ pub fn start_pre_launch_command_internal<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_only_agy_has_latest_version_url() {
+        let cfg: HashMap<String, AgentConfig> = serde_json::from_str(DEFAULT_INSTALL_COMMANDS).unwrap();
+        assert_eq!(
+            cfg["agy"].latest_version_url.as_deref(),
+            Some("https://antigravity.google.com/version.txt")
+        );
+        assert!(cfg["claude"].latest_version_url.is_none());
+        assert!(cfg["codex"].latest_version_url.is_none());
+    }
+
+    #[test]
+    fn test_fetch_latest_version_rejects_non_https_or_injection() {
+        assert!(fetch_latest_version_from_web("http://example.com/v.txt").is_none());
+        assert!(fetch_latest_version_from_web("https://x/'; calc; '").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_check_agent_update_never_flags_claude() {
+        let app = tauri::test::mock_app();
+        let s = check_agent_update_internal("claude".to_string(), app.handle().clone()).await.unwrap();
+        assert!(!s.update_available);
+        assert!(s.latest_version.is_none());
+    }
+
+    #[test]
+    fn test_bundled_claude_detect_paths_include_native_installer_location() {
+        let cfg: HashMap<String, AgentConfig> = serde_json::from_str(DEFAULT_INSTALL_COMMANDS).unwrap();
+        let claude = cfg.get("claude").expect("claude entry");
+        let mac = claude.detect_paths.macos.as_ref().unwrap();
+        assert_eq!(mac[0], "$HOME/.local/bin/claude");
+        let win = claude.detect_paths.windows.as_ref().unwrap();
+        assert_eq!(win[0], "$USERPROFILE\\.local\\bin\\claude.exe");
+    }
 
     #[tokio::test]
     async fn test_build_skill_skips_non_agy() {

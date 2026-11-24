@@ -75,9 +75,16 @@ class TestSetupPySkillsRebuild:
 
     def test_install_copies_to_home_gemini(self):
         """install_skills() must copy skills to ~/.gemini/skills/ for Antigravity CLI."""
-        assert "home_gemini_skills" in self._src(), (
-            "install_skills() is missing the home_gemini_skills step. "
+        assert 'Path.home() / ".gemini" / "skills"' in self._src(), (
+            "install_skills() is missing the ~/.gemini/skills/ step. "
             "agy reads skills from ~/.gemini/skills/, not from .gemini/skills/."
+        )
+
+    def test_install_copies_to_home_claude(self):
+        """install_skills() must also copy skills to ~/.claude/skills/ for Claude Code."""
+        assert 'Path.home() / ".claude" / "skills"' in self._src(), (
+            "install_skills() is missing the ~/.claude/skills/ step. "
+            "Claude Code reads skills from .claude/skills/ and ~/.claude/skills/."
         )
 
     def test_build_invokes_build_skills_sh(self):

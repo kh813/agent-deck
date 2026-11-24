@@ -84,3 +84,44 @@ class TestTimeout:
         assert exit_code == 1
         sent = _notify_chat_mock.send.call_args.args[0]
         assert "タイムアウト" in sent
+
+
+class TestClaudeEngine:
+    def test_claude_engine_runs_claude_print_mode(self, monkeypatch, tmp_path):
+        mock_run = MagicMock(return_value=MagicMock(returncode=0, stdout="ok", stderr=""))
+        monkeypatch.setattr(runner.subprocess, "run", mock_run)
+        monkeypatch.setattr(runner, "_claude_binary", lambda: "/x/claude")
+        monkeypatch.setattr(runner, "_PROJECT_ROOT", tmp_path)
+
+        assert runner.run("hello", engine="claude") == 0
+
+        cmd = mock_run.call_args.args[0]
+        assert cmd[:3] == ["/x/claude", "-p", "hello"]
+        assert "--allowedTools" in cmd
+        assert "--settings" not in cmd  # settings file not generated in tmp_path
+        _notify_chat_mock.send.assert_called_once_with("ok")
+
+    def test_claude_engine_passes_agent_deck_settings_when_present(self, monkeypatch, tmp_path):
+        (tmp_path / ".claude").mkdir()
+        settings = tmp_path / ".claude" / "agent-deck-settings.json"
+        settings.write_text("{}")
+        monkeypatch.setattr(runner, "_PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(runner, "_claude_binary", lambda: "claude")
+        cmd = runner._build_command("claude", "p", 300)
+        assert cmd[cmd.index("--settings") + 1] == str(settings)
+
+    def test_agy_command_unchanged(self, monkeypatch):
+        monkeypatch.setattr(runner, "_agy_binary", lambda: "agy")
+        assert runner._build_command("agy", "p", 60) == ["agy", "--print", "p", "--print-timeout", "60s"]
+
+    def test_unknown_engine_rejected(self):
+        with pytest.raises(ValueError):
+            runner.run("p", engine="codex")
+
+    def test_claude_binary_prefers_native_installer_path(self, monkeypatch, tmp_path):
+        exe = "claude.exe" if sys.platform == "win32" else "claude"
+        native = tmp_path / ".local" / "bin" / exe
+        native.parent.mkdir(parents=True)
+        native.write_text("")
+        monkeypatch.setattr(runner.Path, "home", classmethod(lambda cls: tmp_path))
+        assert runner._claude_binary() == str(native)

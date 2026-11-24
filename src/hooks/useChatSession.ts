@@ -10,6 +10,9 @@ export interface PtyPrompt {
   message: string;
   options?: string[];
   url?: string;
+  // Literal PTY input for each entry of `options` (same index), when the
+  // backend knows the menu's layout (see PtyPromptPayload.inputs in pty.rs).
+  inputs?: string[];
 }
 
 export interface UseChatSessionOptions {
@@ -262,11 +265,11 @@ export function useChatSession({
   }, []);
 
   // Respond to an interactive PTY prompt (button clicks or path selection)
-  const respondToPrompt = useCallback(async (responseText: string) => {
+  const respondToPrompt = useCallback(async (responseText: string, rawInput?: string) => {
     if (statusRef.current !== "running") return;
 
     setActivePrompt(null);
-    const inputToSend = resolvePromptResponseInput(responseText);
+    const inputToSend = rawInput ?? resolvePromptResponseInput(responseText);
 
     if (!isTauri()) {
       webClient.sendAction("respond_prompt", { input: inputToSend });

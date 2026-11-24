@@ -70,23 +70,94 @@ pub struct PtyPromptPayload {
     pub message: String,
     pub options: Option<Vec<String>>,
     pub url: Option<String>,
+    // Literal bytes to write to the PTY for each entry of `options` (same
+    // index). Set for arrow-key menus whose option order differs between
+    // CLIs (e.g. the folder-trust dialog lists "Yes" first in agy but
+    // "No, exit" first in Claude Code), so the response is chosen by
+    // position rather than by matching the label text. When absent, the
+    // frontend falls back to its label-based mapping (promptResponse.ts).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<Vec<String>>,
 }
 
 // Strip ANSI helper on backend to parse clean prompt patterns
 pub fn strip_ansi_rust(text: &str) -> String {
+    // Claude Code (Ink) draws the gap between words as an absolute/relative
+    // cursor column move (ESC[<n>G / ESC[<n>C) rather than a space
+    // character, so plain stripping glues "Yes, I trust" into "Yes,Itrust".
+    // Turn those moves into a space first so phrase matching still works.
+    let col_move = Regex::new(r"\x1b\[[0-9]*[GC]").unwrap();
+    let text = col_move.replace_all(text, " ");
+    let text = text.as_ref();
     let re = Regex::new(r"[\x1b\x9b]\[[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]").unwrap();
     re.replace_all(text, "").to_string()
 }
 
+const ARROW_DOWN: &str = "\x1b[B";
+
+// Keys that pick entry `i` of an arrow-key menu whose cursor starts on the
+// first entry: i down-arrows, then Enter.
+fn menu_inputs(count: usize) -> Vec<String> {
+    (0..count).map(|i| format!("{}\r", ARROW_DOWN.repeat(i))).collect()
+}
+
+fn collapse_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn detect_numbered_menu(text: &str) -> Option<PtyPromptPayload> {
+    let q_re = Regex::new(r"Do you want [^?\n]{0,300}\?").unwrap();
+    let q = q_re.find_iter(text).last()?;
+    let rest = &text[q.end()..];
+    let footer = rest.find("Esc to cancel")?;
+    let body = &rest[..footer];
+
+    let item_re = Regex::new(r"(?:^|\s)(?:❯\s*)?([1-9])\.\s").unwrap();
+    let marks: Vec<(usize, usize, u32)> = item_re
+        .captures_iter(body)
+        .map(|c| {
+            let m = c.get(0).unwrap();
+            let n: u32 = c[1].parse().unwrap_or(0);
+            (m.start(), m.end(), n)
+        })
+        .collect();
+    // Must be a consecutive 1..N list with at least two entries.
+    if marks.len() < 2 || marks.iter().enumerate().any(|(i, m)| m.2 != (i as u32) + 1) {
+        return None;
+    }
+
+    let mut options = Vec::new();
+    for (i, m) in marks.iter().enumerate() {
+        let end = marks.get(i + 1).map(|n| n.0).unwrap_or(body.len());
+        let label = collapse_ws(&body[m.1..end]);
+        let label = label.trim_end_matches(|c: char| c == '·' || c.is_whitespace()).to_string();
+        let label = if label.chars().count() > 90 {
+            format!("{}…", label.chars().take(89).collect::<String>())
+        } else {
+            label
+        };
+        options.push(format!("{}. {}", m.2, label));
+    }
+    let inputs = menu_inputs(options.len());
+    Some(PtyPromptPayload {
+        prompt_type: "confirm".to_string(),
+        message: collapse_ws(q.as_str()),
+        options: Some(options),
+        url: None,
+        inputs: Some(inputs),
+    })
+}
+
 // Detect prompts (y/n, folder path, login oauth url) from text
 pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
-    // 0. Claude Code / Generic Tool Permission Prompt
+    // 0. Generic "[y/N]"-style tool permission prompt
     if text.contains("Allow tool execution?") || text.contains("Allow file edit?") || text.contains("Allow web search?") || text.contains("Allow tool call?") {
         return Some(PtyPromptPayload {
             prompt_type: "confirm".to_string(),
-            message: "Claude Code is requesting tool/file permission.".to_string(),
+            message: "The agent is requesting tool/file permission.".to_string(),
             options: Some(vec!["y".to_string(), "n".to_string()]),
             url: None,
+            inputs: None,
         });
     }
 
@@ -98,17 +169,39 @@ pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
             message: "Authentication login requested. The URL has been opened in your browser.".to_string(),
             options: None,
             url: Some(mat.as_str().to_string()),
+            inputs: None,
         });
     }
 
-    // 2. Folder Trust Check (Do you trust the contents of this project?)
+    // 2. Folder Trust Check. agy: "Do you trust the contents of this
+    // project?" with "Yes, I trust this folder" listed first. Claude Code:
+    // "Quick safety check: Is this a project you created or one you trust?"
+    // with "No, exit" listed first (and pre-selected). Both are arrow-key
+    // menus starting on the first entry, so order the buttons -- and the
+    // keys each one sends -- by where each option actually appears.
     if text.contains("Do you trust the contents of this project?") || text.contains("Yes, I trust this folder") {
+        let yes = "Yes, I trust this folder";
+        let no = "No, exit";
+        let options: Vec<String> = match (text.find(yes), text.find(no)) {
+            (Some(y), Some(n)) if n < y => vec![no.to_string(), yes.to_string()],
+            _ => vec![yes.to_string(), no.to_string()],
+        };
+        let inputs = menu_inputs(options.len());
         return Some(PtyPromptPayload {
             prompt_type: "confirm".to_string(),
-            message: "Do you trust the contents of this project? Antigravity CLI requires permission to read, edit, and execute files here.".to_string(),
-            options: Some(vec!["Yes, I trust this folder".to_string(), "No, exit".to_string()]),
+            message: "Do you trust the contents of this folder? The agent will be able to read, edit, and execute files here.".to_string(),
+            options: Some(options),
             url: None,
+            inputs: Some(inputs),
         });
+    }
+
+    // 2b. Numbered permission menu (Claude Code): "Do you want to proceed?",
+    // "Do you want to make this edit to foo.txt?", "Do you want to create
+    // foo.txt?" ... followed by "❯ 1. Yes  2. Yes, and ...  N. No" and an
+    // "Esc to cancel" footer.
+    if let Some(p) = detect_numbered_menu(text) {
+        return Some(p);
     }
 
     // 3. Tool/Command Permission Request Prompt
@@ -127,6 +220,7 @@ pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
                 "No".to_string(),
             ]),
             url: None,
+            inputs: None,
         });
     }
 
@@ -139,6 +233,7 @@ pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
             message: "Interactive confirmation requested.".to_string(),
             options: Some(vec!["Yes".to_string(), "No".to_string()]),
             url: None,
+            inputs: None,
         });
     }
 
@@ -150,6 +245,7 @@ pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
             message: "Folder path input requested.".to_string(),
             options: None,
             url: None,
+            inputs: None,
         });
     }
 
@@ -215,6 +311,103 @@ fn peel_to_container(mut path: PathBuf) -> (PathBuf, bool) {
         .map(|name| name == "app")
         .unwrap_or(false);
     (path, is_app_wrapper)
+}
+
+// Expand `${PROJECT_ROOT}` in engine launch args (agent_config.json) to the
+// installation's project root, so an engine can be pointed at a file that
+// lives in the install regardless of the session's working folder -- e.g.
+// Claude Code's `--settings ${PROJECT_ROOT}/.claude/agent-deck-settings.json`
+// (written by setup.py). If a `--settings <path>` file doesn't exist (setup
+// hasn't run yet / failed), that flag pair is dropped: `claude` hard-fails
+// with "Settings file not found" otherwise, and launching without the extra
+// permission rules beats not launching at all.
+pub(crate) fn resolve_launch_args(args: Vec<String>, project_root: &Path) -> Vec<String> {
+    let root = project_root.to_string_lossy();
+    let expanded: Vec<String> = args
+        .into_iter()
+        .map(|a| a.replace("${PROJECT_ROOT}", &root))
+        .collect();
+    let mut out = Vec::with_capacity(expanded.len());
+    let mut i = 0;
+    while i < expanded.len() {
+        if expanded[i] == "--settings" {
+            if let Some(val) = expanded.get(i + 1) {
+                let looks_like_json = val.trim_start().starts_with('{');
+                if !looks_like_json && !Path::new(val).exists() {
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        out.push(expanded[i].clone());
+        i += 1;
+    }
+    out
+}
+
+// Directories that CLI agents' official installers put binaries in but that a
+// Finder/Explorer-launched GUI app does NOT inherit on PATH (a GUI app gets
+// launchd's minimal PATH on macOS, not the user's shell profile). Claude Code's
+// native installer in particular always installs to ~/.local/bin (both OSes),
+// so without this `claude` resolves neither via `which` nor inside the PTY.
+fn user_bin_dirs(home: Option<&str>) -> Vec<String> {
+    let mut dirs: Vec<String> = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push("/opt/homebrew/bin".to_string());
+        dirs.push("/usr/local/bin".to_string());
+    }
+    if let Some(home) = home {
+        if !home.is_empty() {
+            dirs.push(Path::new(home).join(".local").join("bin").to_string_lossy().to_string());
+        }
+    }
+    dirs
+}
+
+// Prepend `extra` dirs (in order, highest priority first) to `base` PATH,
+// skipping any already present as an exact PATH entry.
+pub(crate) fn prepend_path_entries(base: &str, extra: &[String]) -> String {
+    let sep = if cfg!(target_os = "windows") { ';' } else { ':' };
+    let existing: Vec<&str> = base.split(sep).filter(|p| !p.is_empty()).collect();
+    let mut front: Vec<String> = Vec::new();
+    for dir in extra {
+        if !existing.iter().any(|e| e == dir) && !front.contains(dir) {
+            front.push(dir.clone());
+        }
+    }
+    if front.is_empty() {
+        return base.to_string();
+    }
+    let joined = front.join(&sep.to_string());
+    if base.is_empty() { joined } else { format!("{}{}{}", joined, sep, base) }
+}
+
+// PATH for every child process this app spawns (PTY session, pre-launch
+// command, `which`/`where` agent detection): app-local bin dirs first, then
+// the user-level installer dirs, then the inherited PATH.
+pub(crate) fn child_path_env() -> String {
+    let base = std::env::var("PATH").unwrap_or_default();
+    let home = if cfg!(target_os = "windows") {
+        std::env::var("USERPROFILE").ok()
+    } else {
+        std::env::var("HOME").ok()
+    };
+    let mut extra: Vec<String> = Vec::new();
+    if let Ok(exe_path) = std::env::current_exe() {
+        let exe_dir = resolve_app_bundle_dir(exe_path.clone());
+        let proj_dir = resolve_project_root(exe_path);
+        for p in [
+            exe_dir.join("bin"),
+            exe_dir.join("app").join("bin"),
+            proj_dir.join("bin"),
+            proj_dir.join("app").join("bin"),
+        ] {
+            extra.push(p.to_string_lossy().to_string());
+        }
+    }
+    extra.extend(user_bin_dirs(home.as_deref()));
+    prepend_path_entries(&base, &extra)
 }
 
 pub(crate) fn resolve_project_root(path: PathBuf) -> PathBuf {
@@ -353,6 +546,11 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
         })
         .map_err(|e| e.to_string())?;
 
+    let project_root = std::env::current_exe()
+        .map(resolve_project_root)
+        .unwrap_or_else(|_| get_default_cwd());
+    let args = resolve_launch_args(args, &project_root);
+
     let mut cmd = CommandBuilder::new(&command);
     cmd.args(args);
     cmd.env("LANG", "en_US.UTF-8");
@@ -368,38 +566,9 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
     cmd.env("PYTHONIOENCODING", "utf-8");
     cmd.env("PYTHONUTF8", "1");
 
-    // Add local bin directories to PATH so that command-line tools like marp or agy
-    // are directly accessible inside the PTY shell.
-    let mut path_env = std::env::var("PATH").unwrap_or_default();
-    let path_sep = if cfg!(target_os = "windows") { ";" } else { ":" };
-
-    #[cfg(target_os = "macos")]
-    {
-        for path in &["/opt/homebrew/bin", "/usr/local/bin"] {
-            if !path_env.contains(path) {
-                path_env = format!("{}{}{}", path, path_sep, path_env);
-            }
-        }
-    }
-
-    if let Ok(exe_path) = std::env::current_exe() {
-        let exe_dir = resolve_app_bundle_dir(exe_path.clone());
-        let proj_dir = resolve_project_root(exe_path);
-        
-        let mut local_paths = Vec::new();
-        local_paths.push(exe_dir.join("bin"));
-        local_paths.push(exe_dir.join("app").join("bin"));
-        local_paths.push(proj_dir.join("bin"));
-        local_paths.push(proj_dir.join("app").join("bin"));
-
-        for local_path in local_paths {
-            let path_str = local_path.to_string_lossy().to_string();
-            if !path_env.contains(&path_str) {
-                path_env = format!("{}{}{}", path_str, path_sep, path_env);
-            }
-        }
-    }
-    cmd.env("PATH", path_env);
+    // Add local bin directories to PATH so that command-line tools like marp,
+    // agy or claude are directly accessible inside the PTY shell.
+    cmd.env("PATH", child_path_env());
 
     if let Some(cwd_path) = cwd {
         if !cwd_path.is_empty() {
@@ -650,11 +819,124 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_detect_prompts_claude_code() {
+    fn test_resolve_launch_args_expands_project_root() {
+        let dir = std::env::temp_dir().join(format!("agentdeck-args-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".claude")).unwrap();
+        std::fs::write(dir.join(".claude").join("agent-deck-settings.json"), "{}").unwrap();
+        let out = resolve_launch_args(
+            vec!["--settings".into(), "${PROJECT_ROOT}/.claude/agent-deck-settings.json".into(), "--x".into()],
+            &dir,
+        );
+        assert_eq!(out[0], "--settings");
+        assert_eq!(out[1], format!("{}/.claude/agent-deck-settings.json", dir.to_string_lossy()));
+        assert_eq!(out[2], "--x");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_resolve_launch_args_drops_missing_settings_file() {
+        let out = resolve_launch_args(
+            vec!["--settings".into(), "${PROJECT_ROOT}/nope.json".into(), "--verbose".into()],
+            Path::new("/definitely/not/here"),
+        );
+        assert_eq!(out, vec!["--verbose".to_string()]);
+        // inline JSON settings are kept as-is
+        let out = resolve_launch_args(vec!["--settings".into(), "{\"a\":1}".into()], Path::new("/x"));
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn test_prepend_path_entries_adds_missing_in_order_and_skips_existing() {
+        let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+        let base = format!("/usr/bin{}/home/u/.local/bin", sep);
+        let out = prepend_path_entries(&base, &["/a".to_string(), "/home/u/.local/bin".to_string(), "/a".to_string()]);
+        assert_eq!(out, format!("/a{}{}", sep, base));
+        // exact-entry match, not substring: /usr/bin present must not hide /usr
+        let out2 = prepend_path_entries("/usr/bin", &["/usr".to_string()]);
+        assert_eq!(out2, format!("/usr{}/usr/bin", sep));
+        assert_eq!(prepend_path_entries("", &["/x".to_string()]), "/x");
+    }
+
+    #[test]
+    fn test_user_bin_dirs_includes_local_bin_for_claude_native_installer() {
+        let dirs = user_bin_dirs(Some("/Users/someone"));
+        let expected = Path::new("/Users/someone").join(".local").join("bin").to_string_lossy().to_string();
+        assert!(dirs.contains(&expected));
+        assert!(!user_bin_dirs(None).iter().any(|d| d.contains(".local")));
+    }
+
+    #[test]
+    fn test_child_path_env_contains_inherited_path() {
+        let inherited = std::env::var("PATH").unwrap_or_default();
+        let first = inherited.split(if cfg!(target_os = "windows") { ';' } else { ':' }).next().unwrap_or("").to_string();
+        assert!(child_path_env().contains(&first));
+    }
+
+    // Real Claude Code 2.1.x folder-trust frame (captured from a PTY):
+    // words separated by ESC[<n>G column moves, "No, exit" listed first.
+    const CLAUDE_TRUST_RAW: &str = "\x1b[2GQuick\x1b[8Gsafety\x1b[15Gcheck:\x1b[22GIs\x1b[25Gthis\x1b[30Ga\x1b[32Gproject\x1b[40Gyou\x1b[44Gcreated\x1b[52Gor\x1b[55Gone\x1b[59Gyou\x1b[63Gtrust?\r\r\n\x1b[2G\x1b[94m\u{276f}\x1b[4GNo,\x1b[8Gexit\x1b[39m\r\r\n\x1b[4GYes,\x1b[9GI\x1b[11Gtrust\x1b[17Gthis\x1b[22Gfolder\r\r\n\r\r\n\x1b[2G\x1b[37m\x1b[2mEnter\x1b[8Gto\x1b[11Gconfirm\x1b[19G\u{b7}\x1b[21GEsc\x1b[25Gto\x1b[28Gcancel\x1b[22m\x1b[39m\r\r\n";
+
+    #[test]
+    fn test_strip_ansi_keeps_word_gaps_drawn_as_column_moves() {
+        let clean = strip_ansi_rust(CLAUDE_TRUST_RAW);
+        assert!(clean.contains("Yes, I trust this folder"), "{clean}");
+        assert!(clean.contains("No, exit"));
+    }
+
+    #[test]
+    fn test_detect_claude_trust_dialog_orders_no_first() {
+        let p = detect_prompts(&strip_ansi_rust(CLAUDE_TRUST_RAW)).unwrap();
+        assert_eq!(p.prompt_type, "confirm");
+        assert_eq!(p.options.unwrap(), vec!["No, exit", "Yes, I trust this folder"]);
+        assert_eq!(p.inputs.unwrap(), vec!["\r".to_string(), "\x1b[B\r".to_string()]);
+    }
+
+    #[test]
+    fn test_detect_agy_trust_dialog_orders_yes_first() {
+        let text = "Do you trust the contents of this project?\n> Yes, I trust this folder\n  No, exit\n";
+        let p = detect_prompts(text).unwrap();
+        assert_eq!(p.options.unwrap(), vec!["Yes, I trust this folder", "No, exit"]);
+        assert_eq!(p.inputs.unwrap(), vec!["\r".to_string(), "\x1b[B\r".to_string()]);
+    }
+
+    #[test]
+    fn test_detect_claude_numbered_permission_menu() {
+        // Real Claude Code 2.1.x Bash permission frame, after strip_ansi_rust.
+        let text = " Bash command Create empty hello.txt file touch hello.txt Do you want to proceed? \u{276f} 1. Yes 2. Yes, and always allow access to      /private/tmp/x/permprobe from this project   3. Yes, and switch to auto mode \u{b7} auto mode handles these prompts for you   4. No Esc to cancel \u{b7} Tab to amend";
+        let p = detect_prompts(text).unwrap();
+        assert_eq!(p.prompt_type, "confirm");
+        assert_eq!(p.message, "Do you want to proceed?");
+        let opts = p.options.unwrap();
+        assert_eq!(opts.len(), 4);
+        assert_eq!(opts[0], "1. Yes");
+        assert_eq!(opts[1], "2. Yes, and always allow access to /private/tmp/x/permprobe from this project");
+        assert!(opts[2].starts_with("3. Yes, and switch to auto mode"));
+        assert_eq!(opts[3], "4. No");
+        let inputs = p.inputs.unwrap();
+        assert_eq!(inputs[0], "\r");
+        assert_eq!(inputs[3], "\x1b[B\x1b[B\x1b[B\r");
+    }
+
+    #[test]
+    fn test_detect_claude_edit_menu() {
+        let text = "Do you want to make this edit to notes.md?\n\u{276f} 1. Yes\n  2. Yes, allow all edits during this session (shift+tab)\n  3. No\n\nEsc to cancel";
+        let p = detect_prompts(text).unwrap();
+        assert_eq!(p.message, "Do you want to make this edit to notes.md?");
+        assert_eq!(p.options.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_numbered_menu_requires_footer_and_sequence() {
+        assert!(detect_numbered_menu("Do you want to proceed? 1. Yes 2. No").is_none());
+        assert!(detect_numbered_menu("Do you want to proceed? 1. Yes 3. No Esc to cancel").is_none());
+    }
+
+    #[test]
+    fn test_detect_prompts_generic_yn_permission() {
         let text = "Allow tool execution? [y/N]";
         let payload = detect_prompts(text).unwrap();
         assert_eq!(payload.prompt_type, "confirm");
-        assert_eq!(payload.message, "Claude Code is requesting tool/file permission.");
+        assert_eq!(payload.message, "The agent is requesting tool/file permission.");
         assert_eq!(payload.options.unwrap(), vec!["y".to_string(), "n".to_string()]);
 
         let text = "Allow file edit? [y/N]";

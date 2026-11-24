@@ -18,6 +18,9 @@
 - **Claude Codeのサポート除外**: Claude Codeは有償契約時にClaude Desktop経由でGUI実行できるため、初期サポート対象から完全に除外し、将来対応（またはサポート外）に変更。
 - 初期サポート対象を **Antigravity CLI (`agy`) のみ**に限定し、ToDoリストから `claude` (Claude Code) を除外または将来対応用の設計タスクに縮小。
 
+**【v5 更新概要】**
+- **Claude Code のサポート再開**: v4 の「Claude Code のサポート除外」を撤回し、正式サポート対象とした（2026-11-24）。タスクは末尾の Phase 12 に集約。
+
 ---
 
 ## 開発方針
@@ -214,3 +217,16 @@
 - [x] **タスク 11-7**: 単体テスト・結合テストを記述し、パスワード認証の必須バリデーション、TLS接続、WebSocket通信の正常動作を確認する。
 - [x] **タスク 11-8**: Gitコミットを実行し、Phase 11を完了とする。
 
+### Phase 12: Claude Code (`claude`) 対応
+*目標: Claude Code を agy と同等に選択・起動・操作できるようにする。インストールはオンボーディング画面（公式ネイティブインストーラ）から、ログインは Claude Code 自身の手順で行う。*
+
+- [x] **タスク 12-1**: `install_commands.json` の claude 検出パスに公式ネイティブインストーラの既定先（`$HOME/.local/bin/claude`、`$USERPROFILE\.local\bin\claude.exe`）を追加し、子プロセスの PATH 組み立てを `child_path_env()` に共通化して `~/.local/bin` を追加する（`which`/`where` 検出にも適用）。
+- [x] **タスク 12-2**: 選択中エンジンが未インストールのとき、インストール済みエンジンへ自動で切り替える（`src/lib/engineSelection.ts`）。選択を `localStorage` に保存する。自動切り替え時に初回自動起動とエンジン変更時の再起動が二重に走らないようにする。
+- [x] **タスク 12-3**: 更新チェックを `latest_version_url` を持つエンジン（agy）に限定し、エンジン切り替え時に更新バナーをリセットする。
+- [x] **タスク 12-4**: Claude Code の実出力（2.1 系）に基づき、列移動で描かれた空白の復元、フォルダ信頼ダイアログの順序判定、番号付き許可メニューの解析を実装し、`PtyPromptPayload.inputs` で位置ベースのキー入力を返す。
+- [x] **タスク 12-5**: `setup.py install_skills()` で `.claude/skills/` と `~/.claude/skills/` にもインストールする（ユーザー自作の同名スキルは上書きしない）。
+- [x] **タスク 12-6**: `AGENTS.md` をエンジン共通の記述に変更する（`ask_user` / `AskUserQuestion`、`.claude/skills/`、`~/.claude` の保護）。
+- [x] **タスク 12-7**: agy ポリシー相当の Claude Code 許可ルール（`python/config/claude/settings.json` → `.claude/agent-deck-settings.json`）を setup で生成し、`claude --settings ${PROJECT_ROOT}/...` で適用する。
+- [x] **タスク 12-8**: 定期実行（`agy_scheduler.py` / `agy_scheduled_prompt.py`）に `--engine agy|claude` を追加する（既存タスクは agy のまま）。
+- [x] **タスク 12-9**: README・ユーザーガイド・管理者ガイド・本仕様書を更新する。
+- [ ] **タスク 12-10**: Windows 実機で、`%USERPROFILE%\.local\bin\claude.exe` の検出、`//c/...` 形式の deny ルール、`claude -p` による定期実行を確認する（macOS のみ実機確認済み）。

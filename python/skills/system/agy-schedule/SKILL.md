@@ -11,9 +11,9 @@ Always respond to the user in both Japanese and English. Display Japanese first,
 
 ## 概要 / Overview
 
-agyを起動しっぱなしにしておく必要はありません。OS標準のスケジューラ（macOSは`launchd`、Windowsはタスクスケジューラ）から、指定した時刻に `agy --print` をヘッドレス実行し、結果を Chat（`notify-chat` スキルで設定）に届けます。
+agyを起動しっぱなしにしておく必要はありません。OS標準のスケジューラ（macOSは`launchd`、Windowsはタスクスケジューラ）から、指定した時刻に `agy --print`（または Claude Code の `claude -p`）をヘッドレス実行し、結果を Chat（`notify-chat` スキルで設定）に届けます。
 
-You don't need to leave agy running. This skill registers `agy --print` to run headlessly at a specified time via the OS's native scheduler (`launchd` on macOS, Task Scheduler on Windows), delivering the result to Chat (set up via the `notify-chat` skill).
+You don't need to leave agy running. This skill registers `agy --print` (or Claude Code's `claude -p`) to run headlessly at a specified time via the OS's native scheduler (`launchd` on macOS, Task Scheduler on Windows), delivering the result to Chat (set up via the `notify-chat` skill).
 
 **重要な制約 / Important constraint:** 作成されるタスクは全て専用の名前空間に登録されます（macOS: `~/Library/LaunchAgents/` 内の `com.agent-ui.agy.*` というラベルのファイルのみ。Windows: タスクスケジューラの `\AgentUI\AGY\` フォルダ内のみ）。**一覧・編集・無効化・削除の対象は常にこの名前空間内のタスクだけ**であり、ユーザーが別途設定した他のcronジョブやタスクスケジューラのタスクを表示・変更・削除することは一切ありません。
 
@@ -77,6 +77,7 @@ Gather the following (skip anything already given):
 - **実行内容 / What to run**: agyに渡すプロンプト。多くの場合 `info-collector` スキルの利用を想定した文（例:「info-collectorスキルで今日のドル円レートを確認して」）。
 - **頻度 / Frequency**: 毎日 (daily) か、曜日指定 (weekly: MON/TUE/WED/THU/FRI/SAT/SUN)。
 - **時刻 / Time**: 24時間形式 HH:MM。
+- **エンジン / Engine**: 定期実行に使うAI CLI。聞き直さず、**今このスキルを実行しているエンジンと同じもの**を使います（Antigravity CLI なら省略＝`agy`、Claude Code なら `--engine claude`）。ユーザーが明示的に指定した場合はそれに従います。 / The AI CLI the task runs with. Don't ask — use **the same engine that is running this skill right now** (omit for Antigravity CLI = `agy`; add `--engine claude` if you are Claude Code), unless the user explicitly asks for the other one.
 
 内容を確認してから実行します：
 Confirm the details before running:
@@ -87,7 +88,12 @@ python3 python/scripts/automation/agy_scheduler.py create <name> --prompt "<prom
 
 # 曜日指定 / Weekly
 python3 python/scripts/automation/agy_scheduler.py create <name> --prompt "<prompt>" --weekly MON,WED,FRI HH:MM
+
+# Claude Code で実行する場合は末尾に追加 / To run with Claude Code, append:
+#   --engine claude
 ```
+
+Claude Code の定期実行（`claude -p`）は無人実行のため許可ダイアログに応答できません。Web検索・Web取得は自動許可されますが、それ以外の許可が必要な操作は拒否されます。 / Claude Code scheduled runs (`claude -p`) are unattended and can't answer permission prompts: web search/fetch are pre-allowed, anything else that needs permission is denied.
 
 成功したら、次回実行予定と「`agy-schedule list`でいつでも確認できる」ことを伝えます。
 
@@ -113,6 +119,7 @@ Show the current settings from `list` first, then ask what to change (prompt, fr
 python3 python/scripts/automation/agy_scheduler.py edit <name> --prompt "<new prompt>"
 python3 python/scripts/automation/agy_scheduler.py edit <name> --daily HH:MM
 python3 python/scripts/automation/agy_scheduler.py edit <name> --weekly MON,FRI HH:MM
+python3 python/scripts/automation/agy_scheduler.py edit <name> --engine claude   # または / or --engine agy
 ```
 
 内部的には削除して同名で再作成するため、有効/無効の状態はリセットされ有効になります。必要であれば編集後に `disable` してください。
