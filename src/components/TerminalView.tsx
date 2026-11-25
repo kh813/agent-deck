@@ -6,6 +6,9 @@ import "@xterm/xterm/css/xterm.css";
 import { computeFitSize } from "../lib/terminalFit";
 import { registerWrappedUrlLinkProvider } from "../lib/wrappedUrlLinkProvider";
 import { MIN_CONTRAST_RATIO, TerminalTheme } from "../utils/themes";
+import { hasText, isManualPasteKey, pickImageFile } from "../lib/imageAttach";
+
+const IS_MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
 
 interface TerminalViewProps {
   onData?: (data: string) => void;
@@ -14,10 +17,20 @@ interface TerminalViewProps {
   theme: TerminalTheme;
   fontFamily?: string;
   fontSize?: number;
+  // Image pasted via the webview's paste event (macOS Cmd+V).
+  onImagePaste?: (file: File) => void;
+  // Save the OS clipboard's image, if any; true = an image was attached
+  // (then no text is pasted). See lib/imageAttach.ts isManualPasteKey.
+  onNativeImagePaste?: () => Promise<boolean>;
 }
 
-export function TerminalView({ onData, terminalRef, onResize, theme, fontFamily, fontSize }: TerminalViewProps) {
+export function TerminalView({ onData, terminalRef, onResize, theme, fontFamily, fontSize, onImagePaste, onNativeImagePaste }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  // Refs, so the terminal (created once) always calls the latest handlers.
+  const onImagePasteRef = useRef(onImagePaste);
+  onImagePasteRef.current = onImagePaste;
+  const onNativeImagePasteRef = useRef(onNativeImagePaste);
+  onNativeImagePasteRef.current = onNativeImagePaste;
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -61,15 +74,24 @@ export function TerminalView({ onData, terminalRef, onResize, theme, fontFamily,
         return false;
       }
 
-      // Ctrl+Shift+V (or Cmd+Shift+V) - Explicit Paste
-      if (mod && event.shiftKey && event.key.toLowerCase() === "v") {
-        navigator.clipboard.readText().then((text) => {
-          if (text && onData) {
-            onData(text);
+      // Paste handled by the app: Ctrl/Cmd+Shift+V everywhere, and plain
+      // Ctrl+V on Windows/Linux (xterm.js would send it as ^V, and no paste
+      // event would fire). An image on the clipboard is attached as a file
+      // path; otherwise the text is pasted (term.paste keeps bracketed paste).
+      if (isManualPasteKey(event, IS_MAC)) {
+        void (async () => {
+          try {
+            if (onNativeImagePasteRef.current && (await onNativeImagePasteRef.current())) return;
+          } catch (err) {
+            console.error("Failed to attach clipboard image:", err);
           }
-        }).catch((err) => {
-          console.error("Failed to read clipboard:", err);
-        });
+          try {
+            const text = await navigator.clipboard.readText();
+            if (text) term.paste(text);
+          } catch (err) {
+            console.error("Failed to read clipboard:", err);
+          }
+        })();
         return false;
       }
 
@@ -124,6 +146,27 @@ export function TerminalView({ onData, terminalRef, onResize, theme, fontFamily,
       }
     };
 
+    // Native paste event (macOS Cmd+V, Edit -> Paste): an image becomes an
+    // attached file path. Captured before xterm's own textarea handler.
+    const pasteTarget = containerRef.current;
+    const onPasteEvent = (e: ClipboardEvent) => {
+      const file = pickImageFile(e.clipboardData?.items);
+      if (file && onImagePasteRef.current) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        onImagePasteRef.current(file);
+        return;
+      }
+      // Some webviews hand over a copied screenshot without exposing it as
+      // a file item: no text either -> ask the OS clipboard directly.
+      if (!hasText(e.clipboardData) && onNativeImagePasteRef.current) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        void onNativeImagePasteRef.current().catch((err) => console.error("Failed to attach clipboard image:", err));
+      }
+    };
+    pasteTarget.addEventListener("paste", onPasteEvent, true);
+
     // Handle user inputs directly typed inside the debug terminal
     const dataListener = term.onData((data) => {
       if (onData) {
@@ -159,6 +202,7 @@ export function TerminalView({ onData, terminalRef, onResize, theme, fontFamily,
     resizeObserver.observe(containerRef.current);
 
     return () => {
+      pasteTarget.removeEventListener("paste", onPasteEvent, true);
       dataListener.dispose();
       linkProvider.dispose();
       resizeObserver.disconnect();

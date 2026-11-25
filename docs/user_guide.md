@@ -133,6 +133,13 @@ Up to 5 recently used folders are remembered; the `▼` button next to the field
 > [!NOTE]
 > `agy` 以外のエンジン（Claude Code等）を使用している場合、セッション開始時にこの `SKILL.md` の記述が**最初のメタプロンプトとして自動的に注入**され、エージェントへタスク指示が送られます。
 
+### 📎 画像（スクリーンショット）やファイルを渡す / Handing Over Images & Files (v0.2.8+)
+スクリーンショットをコピーして、ターミナル画面または下の入力欄に貼り付けると（Mac は `Cmd+V`、Windows は `Ctrl+V`）、画像が作業フォルダの `tmp/screenshots/` に保存され、そのファイルの場所が入力されます。続けて「この画面のエラーを説明して」のように指示を書き、Enter で送信してください。agy・Claude Code のどちらでも使えます。ファイルをウィンドウにドラッグ＆ドロップすると、そのファイルの場所が入力されます（画像以外も可）。
+Copy a screenshot and paste it into the terminal or the input bar (`Cmd+V` on Mac, `Ctrl+V` on Windows): the image is saved to `tmp/screenshots/` in the working folder and its path is typed in. Add your instruction (e.g. "explain the error on this screen") and press Enter. Works with both agy and Claude Code. Dragging files onto the window types their paths (any file type).
+
+> 保存した画像は 7 日後に自動で削除されます。同じ画像を何度貼り付けても 1 つだけ保存され、大きな画像は自動で縮小されます（長辺 2000px）。Windows では、ターミナル画面で `Ctrl+V` による文字の貼り付けもできるようになりました。
+> Saved images are deleted automatically after 7 days. Pasting the same image again reuses the saved file, and large images are scaled down (2000px on the long side). On Windows, `Ctrl+V` now also pastes text in the terminal.
+
 ### 🌐 表示言語 / Display Language
 画面の表示は日本語と英語に対応しています。通常は OS の言語設定（Windows では表示言語または地域設定のどちらかが日本語なら日本語）に合わせて自動で切り替わります。メニューの「`Settings` ➔ `Language / 言語`」で「日本語」「English」を固定することもできます（「Automatic (OS) / 自動」で元に戻ります）。
 The UI is available in Japanese and English. By default it follows the OS (on Windows, Japanese if either the display language or the regional format is Japanese). Pin it with `Settings` ➔ `Language / 言語` ("日本語" / "English"; "Automatic (OS) / 自動" goes back to following the OS).

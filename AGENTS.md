@@ -62,6 +62,7 @@ Never modify, create, or delete any file in this project **except the locations 
 
 **Writable:**
 - `tmp/` — Temporary files (slide generation, etc.)
+  - `tmp/screenshots/` — images the user pasted or attached in agent-deck (screenshots). When a prompt contains a quoted path into this folder, read that image and use it to answer; never delete or move these files (agent-deck prunes them after 7 days).
 - `files/` — Files managed by the file-organizer skill
 - `python/skills-personal/` — via the `/my-skills` skill only
 

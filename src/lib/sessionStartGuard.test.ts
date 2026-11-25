@@ -106,3 +106,31 @@ describe("terminal contrast wiring", () => {
     expect(tv).toMatch(/minimumContrastRatio: MIN_CONTRAST_RATIO/);
   });
 });
+
+describe("image attach wiring", () => {
+  const app = readFileSync(join(__dirname, "..", "App.tsx"), "utf8");
+  const tv = readFileSync(join(__dirname, "..", "components", "TerminalView.tsx"), "utf8");
+
+  it("both TerminalViews get the image paste handlers", () => {
+    expect(app.match(/onImagePaste=\{handleTerminalImagePaste\}/g)?.length).toBe(2);
+    expect(app.match(/onNativeImagePaste=\{handleNativeImagePaste\}/g)?.length).toBe(2);
+  });
+
+  it("the input bar handles image paste, and window drops are wired", () => {
+    expect(app).toMatch(/onPaste=\{handleInputPaste\}/);
+    expect(app).toMatch(/getCurrentWebview\(\)\s*\.onDragDropEvent\(/);
+  });
+
+  it("paths are typed, never sent (no Enter appended)", () => {
+    const block = app.slice(app.indexOf("── Images (screenshots)"), app.indexOf("getCurrentWebview()"));
+    expect(block).not.toMatch(/\\r|sendMessage\(/);
+    expect(block).toMatch(/promptTextForPaths\(/);
+  });
+
+  it("TerminalView: manual paste key + capture-phase paste listener, removed on cleanup", () => {
+    expect(tv).toMatch(/if \(isManualPasteKey\(event, IS_MAC\)\)/);
+    expect(tv).toMatch(/addEventListener\("paste", onPasteEvent, true\)/);
+    expect(tv).toMatch(/removeEventListener\("paste", onPasteEvent, true\)/);
+    expect(tv).toMatch(/term\.paste\(text\)/);
+  });
+});

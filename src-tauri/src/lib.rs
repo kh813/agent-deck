@@ -7,6 +7,7 @@ mod root_files;
 mod cert;
 mod quit_guard;
 mod locale;
+mod image_attach;
 pub mod web_server;
 
 use pty::PtyState;
@@ -94,6 +95,8 @@ pub fn run() {
             menu::set_font_menu_state,
             quit_guard::set_quit_guard_busy,
             locale::get_os_locales,
+            image_attach::save_pasted_image,
+            image_attach::save_clipboard_image,
             menu::set_language_menu_state,
             pty::force_kill_pty,
             web_server::start_web_server,

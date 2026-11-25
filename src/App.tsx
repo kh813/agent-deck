@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Terminal } from "@xterm/xterm";
 import { useChatSession } from "./hooks/useChatSession";
 import { TerminalView } from "./components/TerminalView";
@@ -12,6 +13,7 @@ import { isTauri, webClient } from "./lib/webClient";
 import "./App.css";
 import { loadSavedEngine, pickEngine, saveEngine } from "./lib/engineSelection";
 import { isUpdateBannerVisible, shouldApplyBackgroundResult, startUpdatePolling } from "./lib/updatePolling";
+import { baseName, pickImageFile, promptTextForPaths, saveClipboardImage, saveImageBlob } from "./lib/imageAttach";
 import { loadLangChoice, parseLangChoice, resolveLang, saveLangChoice, setCurrentLang, type LangChoice } from "./lib/language";
 import { stopAndWaitForExit } from "./lib/ptyHandover";
 import {
@@ -1011,6 +1013,93 @@ function App() {
 
   const hasActivePrompt = activePrompt !== null;
 
+  // ── Images (screenshots) -> a file path in the prompt (lib/imageAttach.ts) ──
+  // Saved under <working folder>/tmp/screenshots/ by the Rust side; the
+  // quoted path is typed into the terminal (not sent), so the user can add
+  // the instruction and press Enter.
+  const reportAttached = useCallback((path: string) => {
+    showStatusMessage(t("imageAttached").replace("{name}", baseName(path)));
+  }, [showStatusMessage, lang]);
+  const reportAttachError = useCallback((e: unknown) => {
+    showStatusMessage(t("imageAttachFailed").replace("{error}", String(e)), false);
+  }, [showStatusMessage, lang]);
+  const typeIntoTerminal = useCallback((text: string) => {
+    if (terminalRef.current) terminalRef.current.paste(text);
+    else handleTerminalInput(text);
+  }, [handleTerminalInput]);
+  const requireRunning = useCallback(() => {
+    if (status === "running") return true;
+    showStatusMessage(t("imageNeedsSession"));
+    return false;
+  }, [status, showStatusMessage, lang]);
+  const handleTerminalImagePaste = useCallback(async (file: File) => {
+    if (!requireRunning()) return;
+    try {
+      const path = await saveImageBlob(file, cwd);
+      typeIntoTerminal(promptTextForPaths([path]));
+      reportAttached(path);
+    } catch (e) {
+      reportAttachError(e);
+    }
+  }, [requireRunning, cwd, typeIntoTerminal, reportAttached, reportAttachError]);
+  const handleNativeImagePaste = useCallback(async (): Promise<boolean> => {
+    if (!isTauri()) return false;
+    try {
+      const path = await saveClipboardImage(cwd);
+      if (!path) return false;
+      if (!requireRunning()) return true;
+      typeIntoTerminal(promptTextForPaths([path]));
+      reportAttached(path);
+      return true;
+    } catch (e) {
+      reportAttachError(e);
+      return true;
+    }
+  }, [cwd, requireRunning, typeIntoTerminal, reportAttached, reportAttachError]);
+  // Paste into the input bar: an image becomes its quoted path at the cursor.
+  const handleInputPaste = useCallback(async (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const file = pickImageFile(e.clipboardData?.items);
+    if (!file || !isTauri()) return;
+    e.preventDefault();
+    const el = e.currentTarget;
+    const start = el.selectionStart ?? input.length;
+    const end = el.selectionEnd ?? input.length;
+    try {
+      const path = await saveImageBlob(file, cwd);
+      const text = promptTextForPaths([path]);
+      setInput((cur) => cur.slice(0, start) + text + cur.slice(end));
+      reportAttached(path);
+    } catch (err) {
+      reportAttachError(err);
+    }
+  }, [input, cwd, reportAttached, reportAttachError]);
+  // Files dropped on the window: their paths are typed into the terminal
+  // (any file type -- the CLIs read files by path; images aren't copied).
+  const dropHandlerRef = useRef<(paths: string[]) => void>(() => {});
+  dropHandlerRef.current = (paths: string[]) => {
+    if (!paths.length || !requireRunning()) return;
+    typeIntoTerminal(promptTextForPaths(paths));
+    showStatusMessage(t("filesAttached").replace("{count}", String(paths.length)));
+  };
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "drop") dropHandlerRef.current(event.payload.paths);
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   return (
     <div className="app-container">
       {/* Header and Connection Panel */}
@@ -1372,6 +1461,8 @@ function App() {
                     theme={themes[currentThemeId].terminal}
                     fontFamily={terminalFont.family}
                     fontSize={terminalFont.size}
+                    onImagePaste={handleTerminalImagePaste}
+                    onNativeImagePaste={handleNativeImagePaste}
                   />
                 </div>
               </div>
@@ -1396,6 +1487,8 @@ function App() {
                     theme={themes[currentThemeId].terminal}
                     fontFamily={terminalFont.family}
                     fontSize={terminalFont.size}
+                    onImagePaste={handleTerminalImagePaste}
+                    onNativeImagePaste={handleNativeImagePaste}
                   />
                 </div>
               </div>
@@ -1506,6 +1599,7 @@ function App() {
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
+                  onPaste={handleInputPaste}
                   placeholder={
                     status !== "running"
                       ? t("placeholderStartSession")
