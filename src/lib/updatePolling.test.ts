@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CHECK_INTERVAL_MS,
   INITIAL_DELAY_MS,
+  isTestKind,
   isUpdateBannerVisible,
   shouldApplyBackgroundResult,
   startUpdatePolling,
@@ -105,16 +106,26 @@ describe("startUpdatePolling", () => {
 
 describe("shouldApplyBackgroundResult", () => {
   it("shows a newly found update", () => {
-    expect(shouldApplyBackgroundResult(none, "github", avail("v0.2.7"))).toBe(true);
+    expect(shouldApplyBackgroundResult(none, "github", avail("v0.2.7"), "github")).toBe(true);
+    expect(shouldApplyBackgroundResult(none, "org-prod", avail("x"), "org-test")).toBe(true);
   });
-  it("replaces an older offer with a newer one", () => {
-    expect(shouldApplyBackgroundResult(avail("v0.2.7"), "org-prod", avail("v0.2.8"))).toBe(true);
+  it("replaces an older offer from the same channel with a newer one", () => {
+    expect(shouldApplyBackgroundResult(avail("v0.2.7"), "org-prod", avail("v0.2.8"), "org-prod")).toBe(true);
+    expect(shouldApplyBackgroundResult(avail("v0.2.8-rc1"), "github-test", avail("v0.2.8-rc2"), "github-test")).toBe(true);
   });
   it("never hides an offer because a later check failed or found nothing", () => {
-    expect(shouldApplyBackgroundResult(avail("v0.2.7"), "github", none)).toBe(false);
+    expect(shouldApplyBackgroundResult(avail("v0.2.7"), "github", none, "github")).toBe(false);
   });
-  it("leaves an explicitly requested test-channel offer alone", () => {
-    expect(shouldApplyBackgroundResult(avail("rc"), "org-test", avail("v0.2.7"))).toBe(false);
+  it("leaves an explicitly requested offer from the other channel alone", () => {
+    expect(shouldApplyBackgroundResult(avail("rc"), "org-test", avail("v0.2.7"), "org-prod")).toBe(false);
+    expect(shouldApplyBackgroundResult(avail("v0.2.7"), "org-prod", avail("rc"), "org-test")).toBe(false);
+  });
+});
+
+describe("isTestKind", () => {
+  it("org-test and github-test are the test channels", () => {
+    expect(isTestKind("org-test") && isTestKind("github-test")).toBe(true);
+    expect(isTestKind("org-prod") || isTestKind("github")).toBe(false);
   });
 });
 

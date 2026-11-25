@@ -6,7 +6,7 @@
 // returns both the display (UI) language and the regional-format locale
 // ("ja-JP" either way means Japanese); elsewhere the usual LANG-style env
 // vars. The frontend combines these with navigator.language and an explicit
-// Settings -> Language choice (src/lib/language.ts).
+// View -> Language choice (src/lib/language.ts).
 
 #[cfg(windows)]
 fn os_locales_impl() -> Vec<String> {

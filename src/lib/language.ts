@@ -1,4 +1,4 @@
-// UI language: an explicit Settings -> Language choice, or "auto" = the OS.
+// UI language: an explicit View -> Language choice, or "auto" = the OS.
 //
 // "auto" used to be navigator.language alone, which Windows' WebView2 can
 // report as English on a Japanese setup -- Windows users got an English-only

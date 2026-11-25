@@ -13,7 +13,7 @@ import { Lang, translations } from "./utils/i18n";
 import { isTauri, webClient } from "./lib/webClient";
 import "./App.css";
 import { loadSavedEngine, pickEngine, saveEngine } from "./lib/engineSelection";
-import { isUpdateBannerVisible, shouldApplyBackgroundResult, startUpdatePolling } from "./lib/updatePolling";
+import { isTestKind, isUpdateBannerVisible, shouldApplyBackgroundResult, startUpdatePolling, type BackgroundKind, type SelfUpdateKind } from "./lib/updatePolling";
 import { baseName, pickImageFile, promptTextForPaths, saveClipboardImage, saveImageBlob } from "./lib/imageAttach";
 import { loadLangChoice, parseLangChoice, resolveLang, saveLangChoice, setCurrentLang, type LangChoice } from "./lib/language";
 import { stopAndWaitForExit } from "./lib/ptyHandover";
@@ -120,7 +120,7 @@ function App() {
     return unsub;
   }, []);
 
-  // UI language: Settings -> Language choice, or the OS (lib/language.ts --
+  // UI language: View -> Language choice, or the OS (lib/language.ts --
   // the Rust side reports the OS settings, since Windows' WebView2 can say
   // en-US on a Japanese setup).
   const [langChoice, setLangChoice] = useState<LangChoice>(loadLangChoice);
@@ -220,7 +220,7 @@ function App() {
   // always targets the item that was just checked. "github" only appears
   // when neither org Drive channel is configured in config.toml; otherwise
   // only "org-prod"/"org-test" are ever offered.
-  const [selfUpdateKind, setSelfUpdateKind] = useState<"github" | "org-prod" | "org-test">("github");
+  const [selfUpdateKind, setSelfUpdateKind] = useState<SelfUpdateKind>("github");
   // "Later" on the banner: hides it for that version until a newer one
   // appears or the user checks explicitly from the menu (not persisted, so
   // the reminder comes back on the next launch).
@@ -469,7 +469,7 @@ function App() {
   // checkUpdateStatus above) so an explicit, user-triggered check can report
   // "already up to date" -- there's no startup auto-check for this one to
   // silently fall back to.
-  const checkSelfUpdateStatus = useCallback(async (kind: "github" | "org-prod" | "org-test") => {
+  const checkSelfUpdateStatus = useCallback(async (kind: SelfUpdateKind) => {
     try {
       const res = await invoke<UpdateStatus>("check_self_update", { kind });
       setSelfUpdateStatus(res);
@@ -516,10 +516,14 @@ function App() {
     return startUpdatePolling(async () => {
       if (engineInstalledRef.current) void checkUpdateStatusRef.current();
       if (selfUpdateActiveRef.current) return;
-      const kind = await invoke<"github" | "org-prod" | "org-test">("default_self_update_kind");
+      // This build's own channel only: test builds hear about new test
+      // builds, stable builds about new stable releases ("none": an org
+      // install that doesn't publish this channel -> no automatic check).
+      const kind = await invoke<BackgroundKind>("default_self_update_kind");
+      if (kind === "none") return;
       const res = await invoke<UpdateStatus>("check_self_update", { kind, background: true });
       const shown = selfUpdateShownRef.current;
-      if (shouldApplyBackgroundResult(shown.status, shown.kind, res)) {
+      if (shouldApplyBackgroundResult(shown.status, shown.kind, res, kind)) {
         setSelfUpdateStatus(res);
         setSelfUpdateKind(kind);
       }
@@ -1353,7 +1357,7 @@ function App() {
         }}>
           <div>
             {t("selfUpdateAvailableMsg").replace("{latest}", selfUpdateStatus.latest_version || "").replace("{current}", selfUpdateStatus.current_version || "")}
-            {selfUpdateKind === "org-test" && (
+            {isTestKind(selfUpdateKind) && (
               <span style={{ fontSize: "0.75rem", color: "#94a3b8", marginLeft: "12px" }}>
                 {t("selfUpdateTestChannelNote")}
               </span>

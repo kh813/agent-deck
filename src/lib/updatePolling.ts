@@ -15,7 +15,12 @@ export interface UpdateStatusLike {
   update_available: boolean;
 }
 
-export type SelfUpdateKind = "github" | "org-prod" | "org-test";
+export type SelfUpdateKind = "github" | "github-test" | "org-prod" | "org-test";
+/** default_self_update_kind's answer: the channel this build came from, or
+ *  "none" (an org install that doesn't publish it: no automatic check). */
+export type BackgroundKind = SelfUpdateKind | "none";
+
+export const isTestKind = (k: SelfUpdateKind) => k === "org-test" || k === "github-test";
 
 /**
  * Starts the schedule; returns a stop function. `run` is never called
@@ -66,17 +71,19 @@ export function startUpdatePolling(
 
 /**
  * Should a background result replace what the banner currently shows?
- * Not while an explicit test-channel check's offer is on screen (the user
- * asked for that one; the periodic prod check must not swap it out), and
+ * The background check only looks at this build's own channel (test builds:
+ * test channel; stable builds: stable). It never swaps out an offer from
+ * the other channel that the user asked for explicitly from the menu, and
  * a failed/empty check (no update) never hides an offer already shown.
  */
 export function shouldApplyBackgroundResult(
   shown: UpdateStatusLike,
   shownKind: SelfUpdateKind,
   incoming: UpdateStatusLike,
+  incomingKind: SelfUpdateKind,
 ): boolean {
-  if (shown.update_available && shownKind === "org-test") return false;
   if (!incoming.update_available) return false;
+  if (shown.update_available && isTestKind(shownKind) !== isTestKind(incomingKind)) return false;
   return true;
 }
 

@@ -73,23 +73,45 @@ pub fn org_release_configured() -> (bool, bool) {
     )
 }
 
-// What the app's periodic background check looks at: the org's production
-// channel when this install has one, otherwise GitHub's latest release. Never
-// the test channel -- that's only ever an explicit menu choice.
-pub(crate) fn default_kind_for(org_prod_configured: bool) -> &'static str {
-    if org_prod_configured {
-        "org-prod"
-    } else {
-        "github"
+/// A test-edition build: its version carries a semver prerelease suffix
+/// (0.2.8-rc2), exactly like the release tags (release.yml publishes those as
+/// GitHub pre-releases and package_release.py --test puts them on the org's
+/// test channel).
+pub(crate) fn is_test_build(version: &str) -> bool {
+    version.contains('-')
+}
+
+/// What the app's periodic background check looks at -- the channel this
+/// build came from, never the other one (2026-11-25: a test build was
+/// offered the stable release, and vice versa would push testers off rc's):
+///   test build   -> org test channel, or GitHub's newest pre-release
+///   stable build -> org prod channel, or GitHub's latest release
+/// An org install that doesn't publish this build's channel gets "none"
+/// (no automatic check) rather than a fallback to the other channel or to
+/// raw GitHub, which an org-managed install deliberately doesn't use.
+pub(crate) fn default_kind_for(app_is_test: bool, org_prod_configured: bool, org_test_configured: bool) -> &'static str {
+    let org_managed = org_prod_configured || org_test_configured;
+    match (app_is_test, org_managed) {
+        (true, true) if org_test_configured => "org-test",
+        (false, true) if org_prod_configured => "org-prod",
+        (_, true) => "none",
+        (true, false) => "github-test",
+        (false, false) => "github",
     }
 }
 
 // self_update.py arguments for a check. `background` adds --background:
 // never opens a browser login (Drive), and fails quietly (exit 3) instead.
 pub(crate) fn check_args(kind: &str, drive_file_id: Option<&str>, background: bool) -> Option<Vec<String>> {
+    if kind == "none" {
+        return None;
+    }
     let mut args = vec!["check".to_string(), "--json".to_string()];
     if background {
         args.push("--background".to_string());
+    }
+    if kind == "github-test" {
+        args.push("--test".to_string());
     }
     if kind == "org-prod" || kind == "org-test" {
         args.push("--drive-file-id".to_string());
@@ -160,6 +182,9 @@ pub fn get_self_update_command_internal(kind: &str) -> Result<InstallCommand, St
         self_update_script_path().to_string_lossy().to_string(),
         "apply".to_string(),
     ];
+    if kind == "github-test" {
+        args.push("--test".to_string());
+    }
     if kind == "org-prod" || kind == "org-test" {
         let file_id = org_release_file_id(kind)
             .ok_or_else(|| format!("No Drive file ID configured in config.toml for {kind}"))?;
@@ -184,7 +209,8 @@ pub async fn check_self_update(kind: String, background: Option<bool>) -> Result
 
 #[tauri::command]
 pub fn default_self_update_kind() -> String {
-    default_kind_for(org_release_configured().0).to_string()
+    let (prod, test) = org_release_configured();
+    default_kind_for(is_test_build(env!("CARGO_PKG_VERSION")), prod, test).to_string()
 }
 
 #[tauri::command]
@@ -197,9 +223,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_kind_prefers_org_prod() {
-        assert_eq!(default_kind_for(true), "org-prod");
-        assert_eq!(default_kind_for(false), "github");
+    fn test_build_detection() {
+        assert!(is_test_build("0.2.8-rc2"));
+        assert!(is_test_build("1.0.0-test1"));
+        assert!(!is_test_build("0.2.7"));
+    }
+
+    #[test]
+    fn test_stable_build_checks_only_stable() {
+        assert_eq!(default_kind_for(false, true, true), "org-prod");
+        assert_eq!(default_kind_for(false, true, false), "org-prod");
+        assert_eq!(default_kind_for(false, false, false), "github");
+    }
+
+    #[test]
+    fn test_test_build_checks_only_test() {
+        assert_eq!(default_kind_for(true, true, true), "org-test");
+        assert_eq!(default_kind_for(true, false, true), "org-test");
+        assert_eq!(default_kind_for(true, false, false), "github-test");
+    }
+
+    #[test]
+    fn test_org_install_without_this_channel_does_not_auto_check() {
+        assert_eq!(default_kind_for(true, true, false), "none");
+        assert_eq!(default_kind_for(false, false, true), "none");
+    }
+
+    #[test]
+    fn test_check_args_github_test_and_none() {
+        assert_eq!(check_args("github-test", None, true).unwrap(), vec!["check", "--json", "--background", "--test"]);
+        assert!(check_args("none", None, true).is_none());
+    }
+
+    #[test]
+    fn test_apply_command_for_github_test() {
+        let c = get_self_update_command_internal("github-test").unwrap();
+        assert_eq!(&c.args[1..], ["apply", "--test"]);
+        let c = get_self_update_command_internal("github").unwrap();
+        assert_eq!(&c.args[1..], ["apply"]);
     }
 
     #[test]

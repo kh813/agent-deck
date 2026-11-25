@@ -768,3 +768,26 @@ class TestBackgroundCli:
 def textwrap_dedent(s):
     import textwrap
     return textwrap.dedent(s).strip("\n")
+
+
+class TestBackgroundChannel:
+    def test_background_test_flag_checks_the_test_channel(self, tmp_path):
+        script = _background_cli(tmp_path, textwrap_dedent('''
+            def check(channel='prod'):
+                return (True, 'v0.2.8-rc1', 'v0.2.8-rc2' if channel == 'test' else 'v0.2.7')
+        '''))
+        r = subprocess.run([sys.executable, "-I", str(script), "check", "--json", "--background", "--test"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        assert r.returncode == 0, r.stderr
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        assert out["channel"] == "test" and out["latest_tag"] == "v0.2.8-rc2"
+
+    def test_background_without_test_flag_checks_stable(self, tmp_path):
+        script = _background_cli(tmp_path, textwrap_dedent('''
+            def check(channel='prod'):
+                return (True, 'v0.2.6', 'v0.2.8-rc2' if channel == 'test' else 'v0.2.7')
+        '''))
+        r = subprocess.run([sys.executable, "-I", str(script), "check", "--json", "--background"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        assert out["channel"] == "prod" and out["latest_tag"] == "v0.2.7"

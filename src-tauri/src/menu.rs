@@ -20,7 +20,7 @@ const UPDATE_TEST_LABEL: &str = "Update to Test Edition...";
 const FORCE_KILL_SESSION_MENU_ID: &str = "session:force-kill";
 const LANGUAGE_MENU_ID_PREFIX: &str = "language:";
 const SETTINGS_MENU_LABEL: &str = "Settings";
-/// Settings -> Language choices: (id, label). "auto" follows the OS
+/// View -> Language choices: (id, label). "auto" follows the OS
 /// (src/lib/language.ts resolves it); the frontend stores the choice.
 pub(crate) const LANGUAGES: &[(&str, &str)] = &[
     ("auto", "Automatic (OS) / 自動"),
@@ -145,7 +145,12 @@ fn menu_outline(items: &[tauri::menu::MenuItemKind<tauri::Wry>], depth: usize) -
             K::Submenu(s) => (s.text().unwrap_or_default(), s.items().ok()),
             K::MenuItem(i) => (i.text().unwrap_or_default(), None),
             K::Check(i) => (i.text().unwrap_or_default(), None),
-            K::Predefined(i) => (format!("{} (predefined)", i.text().unwrap_or_default()), None),
+            // Separators have no text; anything else predefined is tagged so
+            // tests can tell muda's built-ins from our own items.
+            K::Predefined(i) => {
+                let t = i.text().unwrap_or_default();
+                (if t.is_empty() { t } else { format!("{t} (predefined)") }, None)
+            }
             K::Icon(i) => (i.text().unwrap_or_default(), None),
         };
         let label = if text.is_empty() { "---".to_string() } else { text };
@@ -310,8 +315,9 @@ pub fn build_menu(
     let update_test_sep = PredefinedMenuItem::separator(handle)?;
     let settings_sep = PredefinedMenuItem::separator(handle)?;
 
-    // One "Settings" menu for everything app-wide: updates (what most people
-    // look for), then the automatic-check switch and the UI language.
+    // Settings = updates and settings only: the update items (what most
+    // people look for), then the automatic-check switch. Display options
+    // (theme, font, language) live under View.
     let mut settings_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = Vec::new();
     for (i, item) in update_items.iter().enumerate() {
         if i > 0 && item.id().as_ref() == UPDATE_ORG_TEST_MENU_ID {
@@ -321,12 +327,12 @@ pub fn build_menu(
     }
     settings_refs.push(&settings_sep);
     settings_refs.push(&auto_check_update_item);
-    settings_refs.push(&language_submenu);
     let settings_submenu = Submenu::with_items(handle, SETTINGS_MENU_LABEL, true, &settings_refs)?;
 
     // Fewer top-level menus (2026-11-25: there were too many): Theme and Font
     // live under View, Force Kill Session under File, and Update merged into
-    // Settings. Resulting bar: [app] File Edit View Window Settings Help.
+    // Settings, Language under View (2026-11-25). Resulting bar:
+    // [app] File Edit View Window Settings Help.
     let view_sep = PredefinedMenuItem::separator(handle)?;
     match find_submenu(&menu, "View")? {
         // macOS default View holds Enter Full Screen: add ours below it.
@@ -334,9 +340,10 @@ pub fn build_menu(
             view.append(&view_sep)?;
             view.append(&theme_submenu)?;
             view.append(&font_submenu)?;
+            view.append(&language_submenu)?;
         }
         None => {
-            let view = Submenu::with_items(handle, "View", true, &[&theme_submenu, &font_submenu])?;
+            let view = Submenu::with_items(handle, "View", true, &[&theme_submenu, &font_submenu, &language_submenu])?;
             let at = top_level_position(&menu, "Edit")?.map(|i| i + 1);
             match at {
                 Some(index) => menu.insert(&view, index)?,
@@ -488,7 +495,7 @@ pub fn set_auto_check_update(app: AppHandle, enabled: bool) {
 }
 
 // Invoked by the frontend whenever the language choice changes (and on
-// load) so Settings -> Language shows the right checkmark.
+// load) so View -> Language shows the right checkmark.
 #[tauri::command]
 pub fn set_language_menu_state(app: AppHandle, choice: String) {
     if let Some(state) = app.try_state::<LanguageMenuState>() {

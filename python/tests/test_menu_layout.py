@@ -62,20 +62,20 @@ def test_top_level_is_compact(menu):
     assert list(menu) == expected
 
 
-def test_view_holds_theme_and_font(menu):
-    assert "Theme" in menu["View"] and "Font" in menu["View"]
+def test_view_holds_theme_font_and_language(menu):
+    for item in ("Theme", "Font", "Language / 言語"):
+        assert item in menu["View"], menu["View"]
 
 
 def test_file_holds_force_kill(menu):
     assert menu["File"][0] == "Force Kill Session"
 
 
-def test_settings_holds_updates_auto_check_and_language(menu):
-    s = menu["Settings"]
+def test_settings_is_only_updates_and_settings(menu):
+    s = [l for l in menu["Settings"] if l != "---"]
     assert s[0] == "Update to Latest..."
-    assert "Check for Updates Automatically" in s
-    assert "Language / 言語" in s
-    assert s.index("Update to Latest...") < s.index("Check for Updates Automatically")
+    assert s[-1] == "Check for Updates Automatically"
+    assert set(s) <= {"Update to Latest...", "Update to Test Edition...", "Check for Updates Automatically"}, s
 
 
 def test_quit_is_our_guarded_item(menu):

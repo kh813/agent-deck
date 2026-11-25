@@ -145,14 +145,14 @@ Copy a screenshot and paste it into the terminal or the input bar (`Cmd+V` on Ma
 |---|---|
 | File | Force Kill Session、Close Window（Windows は Quit も） |
 | Edit | コピー・貼り付けなど / Copy, Paste, ... |
-| View | Theme（配色）、Font（フォント・文字サイズ）（Mac は全画面表示も） |
+| View | Theme（配色）、Font（フォント・文字サイズ）、Language / 言語（表示言語）（Mac は全画面表示も） |
 | Window | 最小化など / Minimize, ... |
-| Settings | Update to Latest... / Update to Test Edition...（アップデート）、Check for Updates Automatically、Language / 言語 |
+| Settings | Update to Latest... / Update to Test Edition...（アップデート）、Check for Updates Automatically（自動チェック） |
 | Help | バージョン表示 / Version |
 
 ### 🌐 表示言語 / Display Language
-画面の表示は日本語と英語に対応しています。通常は OS の言語設定（Windows では表示言語または地域設定のどちらかが日本語なら日本語）に合わせて自動で切り替わります。メニューの「`Settings` ➔ `Language / 言語`」で「日本語」「English」を固定することもできます（「Automatic (OS) / 自動」で元に戻ります）。
-The UI is available in Japanese and English. By default it follows the OS (on Windows, Japanese if either the display language or the regional format is Japanese). Pin it with `Settings` ➔ `Language / 言語` ("日本語" / "English"; "Automatic (OS) / 自動" goes back to following the OS).
+画面の表示は日本語と英語に対応しています。通常は OS の言語設定（Windows では表示言語または地域設定のどちらかが日本語なら日本語）に合わせて自動で切り替わります。メニューの「`View` ➔ `Language / 言語`」で「日本語」「English」を固定することもできます（「Automatic (OS) / 自動」で元に戻ります）。
+The UI is available in Japanese and English. By default it follows the OS (on Windows, Japanese if either the display language or the regional format is Japanese). Pin it with `View` ➔ `Language / 言語` ("日本語" / "English"; "Automatic (OS) / 自動" goes back to following the OS).
 
 ### 💭 AI の思考過程の表示 / How AI Thinking Is Shown
 AI の思考過程（agy の考え中の要約や「Thought for …」、Claude Code の補足表示）は、回答本文より淡いグレーで表示され、目立たないようになっています。思考の詳細はどちらのエンジンも折りたたまれており、回答だけを読めば済むようになっています。
@@ -692,8 +692,8 @@ When a new version is published, you can update to the latest from the menu bar 
 > すでに最新版の場合は、その旨を伝えるメッセージが表示されます。
 > If you already have the latest version, a message says so and no changes are made.
 
-**自動チェック / Automatic check (v0.2.7+):** メニューから操作しなくても、起動の約30秒後と、その後4時間ごと（スリープ明けにウィンドウを開いたときも）に新しいバージョンを確認し、あれば同じ通知バナーを表示します。**確認するだけで、「今すぐ更新」を押すまで更新は行いません。**「後で」を押すとそのバージョンの通知は次回起動まで表示されません。対象は通常の最新版のみです（テスト版は自動では案内されません）。この確認は Settings メニューの「Check for Updates Automatically」でオフにできます。
-Without using the menu, the app checks about 30 seconds after launch and then every 4 hours (and when you return to the window after sleep), showing the same banner when a new version exists. **It only checks — nothing is updated until you click Update Now.** "Later" hides the banner for that version until the next launch. Only the regular latest release is offered automatically (never the test edition). Turn this off with Settings → "Check for Updates Automatically".
+**自動チェック / Automatic check (v0.2.7+):** メニューから操作しなくても、起動の約30秒後と、その後4時間ごと（スリープ明けにウィンドウを開いたときも）に新しいバージョンを確認し、あれば同じ通知バナーを表示します。**確認するだけで、「今すぐ更新」を押すまで更新は行いません。**「後で」を押すとそのバージョンの通知は次回起動まで表示されません。確認するのは、今使っている版と同じ種類の最新版だけです（v0.2.8 から）。正式版を使っている人には正式版の、テスト版（バージョンに「-rc1」などが付く版）を使っている人にはテスト版の最新版だけを案内します。この確認は Settings メニューの「Check for Updates Automatically」でオフにできます。
+Without using the menu, the app checks about 30 seconds after launch and then every 4 hours (and when you return to the window after sleep), showing the same banner when a new version exists. **It only checks — nothing is updated until you click Update Now.** "Later" hides the banner for that version until the next launch. It only looks at the same kind of build you run (v0.2.8+): stable users are told about new stable releases, test-edition users (versions like "-rc1") about new test builds only. Turn this off with Settings → "Check for Updates Automatically".
 
 ### ツールが起動しないとき / If the Tool Won't Launch
 

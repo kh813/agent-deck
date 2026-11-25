@@ -48,6 +48,8 @@ describe("periodic update check wiring", () => {
   it("the background check asks self_update for a non-interactive check", () => {
     expect(app).toMatch(/invoke<UpdateStatus>\("check_self_update", \{ kind, background: true \}\)/);
     expect(app).toMatch(/invoke<[^>]*>\("default_self_update_kind"\)/);
+    expect(app).toMatch(/if \(kind === "none"\) return;/);
+    expect(app).toMatch(/shouldApplyBackgroundResult\(shown\.status, shown\.kind, res, kind\)/);
   });
 
   it("the background check never starts an update by itself", () => {
@@ -88,7 +90,7 @@ describe("language wiring", () => {
     expect(app).toMatch(/setCurrentLang\(lang\)/);
   });
 
-  it("the Settings -> Language menu is wired both ways", () => {
+  it("the View -> Language menu is wired both ways", () => {
     expect(app).toMatch(/listen<string>\("language-menu"/);
     expect(app).toMatch(/invoke\("set_language_menu_state", \{ choice: langChoice \}\)/);
   });
