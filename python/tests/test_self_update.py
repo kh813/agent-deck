@@ -582,3 +582,18 @@ def test_drive_mode_reexec_uses_root_venv(monkeypatch, tmp_path):
     except SystemExit:
         pass
     assert calls and str(calls[0]) == str(venv_python)
+
+
+def test_restart_notice_is_red_bold_in_a_terminal(monkeypatch, capsys):
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    su._print_restart_notice()
+    out = capsys.readouterr().out
+    assert "\033[1;31m" in out and "agent-deck" in out
+
+
+def test_restart_notice_is_plain_when_not_a_terminal(monkeypatch, capsys):
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
+    su._print_restart_notice()
+    out = capsys.readouterr().out
+    assert "\033[" not in out and "Close agent-deck" in out

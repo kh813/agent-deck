@@ -336,7 +336,22 @@ def apply(channel: str = "prod") -> None:
 
     _marker_path(dest_name).write_text(latest_tag)
     print(f"  {latest_tag} installed to {dest}.")
-    print("  Restart the app to use the new version.")
+    _print_restart_notice()
+
+
+def _print_restart_notice() -> None:
+    """The one line users must not miss once an update has been applied.
+    Bold red inside agent-deck's own terminal (xterm.js; the PTY sets TERM)
+    and any other ANSI-capable terminal; plain text where escapes would show
+    up raw (a classic Windows console without TERM, e.g. the one-time
+    migration .bat), or when output isn't a terminal."""
+    ja = "更新が完了しました。新しいバージョンを使うには、agent-deck を一度閉じてから起動し直してください。"
+    en = "Update complete. Close agent-deck and start it again to use the new version."
+    color = sys.stdout.isatty() and (sys.platform != "win32" or bool(os.environ.get("TERM")))
+    print()
+    for line in (ja, en):
+        print(f"\033[1;31m  {line}\033[0m" if color else f"  {line}")
+    print()
 
 
 # ── Org (Google Drive) channel ───────────────────────────────────────────
@@ -502,7 +517,7 @@ def apply_drive(file_id: str) -> None:
         "modifiedTime": latest_modified,
     }))
     print(f"  Org build installed to {dest}.")
-    print("  Restart the app to use the new version.")
+    _print_restart_notice()
 
 
 def _usage():

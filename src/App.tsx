@@ -11,6 +11,7 @@ import { Lang, translations } from "./utils/i18n";
 import { isTauri, webClient } from "./lib/webClient";
 import "./App.css";
 import { loadSavedEngine, pickEngine, saveEngine } from "./lib/engineSelection";
+import { stopAndWaitForExit } from "./lib/ptyHandover";
 
 interface AgentStatus {
   installed: boolean;
@@ -117,6 +118,11 @@ function App() {
   // Config & Selection States
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentStatus>>({});
+  // False until the first detection pass has finished. Until then an empty
+  // agentStatuses means "not checked yet", NOT "not installed" -- showing the
+  // "X is required / Install X" panel during that window made it look like
+  // agy/Claude Code was missing on every launch.
+  const [agentStatusChecked, setAgentStatusChecked] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState(() => loadSavedEngine() ?? "agy");
 
   const currentAgentStatus = agentStatuses[selectedAgentId] || {
@@ -174,6 +180,11 @@ function App() {
   const [isInstalling, setIsInstalling] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [isSelfUpdating, setIsSelfUpdating] = useState(false);
+  // Set only once the update command itself owns the PTY (see
+  // lib/ptyHandover.ts): the "terminated" handler below must ignore the
+  // previous session's exit, which used to be taken as "update complete".
+  const agentUpdateActiveRef = useRef(false);
+  const selfUpdateActiveRef = useRef(false);
   const [isInstallTerminalOpen, setIsInstallTerminalOpen] = useState(false);
 
   // Web UI Server State (Desktop & Browser)
@@ -257,6 +268,7 @@ function App() {
     status,
     activePrompt,
     statusMessage,
+    showStatusMessage,
     startSession,
     stopSession,
     sendMessage,
@@ -346,19 +358,23 @@ function App() {
   const checkAgentStatus = useCallback(async () => {
     if (!appConfig) return;
     try {
-      const newStatuses: Record<string, AgentStatus> = {};
-      for (const engine of appConfig.engines) {
-        try {
-          const status = await invoke<AgentStatus>("detect_agent", { agentId: engine.id });
-          newStatuses[engine.id] = status;
-        } catch (e) {
-          console.error(`Failed to detect agent ${engine.id}:`, e);
-          newStatuses[engine.id] = { installed: false, path: null, version: null };
-        }
-      }
-      setAgentStatuses(newStatuses);
+      // All engines in parallel: each detection runs `<cli> --version`, which
+      // can take seconds, so sequential checks added up on startup.
+      const entries = await Promise.all(
+        appConfig.engines.map(async (engine): Promise<[string, AgentStatus]> => {
+          try {
+            return [engine.id, await invoke<AgentStatus>("detect_agent", { agentId: engine.id })];
+          } catch (e) {
+            console.error(`Failed to detect agent ${engine.id}:`, e);
+            return [engine.id, { installed: false, path: null, version: null }];
+          }
+        })
+      );
+      setAgentStatuses(Object.fromEntries(entries));
     } catch (e) {
       console.error("Failed to detect agent status:", e);
+    } finally {
+      setAgentStatusChecked(true);
     }
   }, [appConfig]);
 
@@ -535,18 +551,21 @@ function App() {
             setIsInstalling(false);
             checkAgentStatus();
           }
-          if (isUpdating) {
+          if (isUpdating && agentUpdateActiveRef.current) {
+            agentUpdateActiveRef.current = false;
             setIsUpdating(false);
             checkAgentStatus().then(() => {
               checkUpdateStatus();
             });
           }
-          if (isSelfUpdating) {
+          if (isSelfUpdating && selfUpdateActiveRef.current) {
+            selfUpdateActiveRef.current = false;
             // Unlike agy above, there's no "re-detect" step that makes sense
             // here: the running process's own version can't change without
             // an actual restart, so self_update.py apply's own completion
             // (this process exiting) is the whole signal -- just relay it.
             setIsSelfUpdating(false);
+            showStatusMessage(t("selfUpdateAppliedRestart"), false);
             alert(t("selfUpdateAppliedRestart"));
           }
         }
@@ -554,7 +573,7 @@ function App() {
     );
 
     return unsubStatus;
-  }, [isInstalling, isUpdating, isSelfUpdating, checkAgentStatus, checkUpdateStatus]);
+  }, [isInstalling, isUpdating, isSelfUpdating, checkAgentStatus, checkUpdateStatus, showStatusMessage]);
 
   // Poll for install/update completion independent of the PTY session ever
   // reporting "terminated".
@@ -621,6 +640,15 @@ function App() {
     }
   };
 
+  // Stop the running session (if any) and wait until its exit has been
+  // reported, so that exit isn't mistaken for the update's own completion.
+  const handOverPty = () =>
+    stopAndWaitForExit({
+      isRunning: status === "running",
+      stop: () => invoke("stop_pty"),
+      onStatus: (cb) => listen<string>("pty-status", (e) => cb(e.payload)),
+    });
+
   // Trigger update via PTY. This reuses the same always-visible main
   // terminal (the backend only ever runs one PTY session at a time), so no
   // separate terminal instance is needed here.
@@ -634,6 +662,8 @@ function App() {
 
       const appBundleDir = await invoke<string>("get_app_bundle_dir");
 
+      await handOverPty();
+      agentUpdateActiveRef.current = true;
       await invoke("start_pty", {
         command: updateCmd.command,
         args: updateCmd.args,
@@ -642,6 +672,7 @@ function App() {
         cols: terminalSizeRef.current?.cols,
       });
     } catch (e: any) {
+      agentUpdateActiveRef.current = false;
       setIsUpdating(false);
       console.error("Update failed to launch:", e);
       alert(`${t("failedToUpdate")}: ${e.toString()}`);
@@ -660,6 +691,9 @@ function App() {
         kind: selfUpdateKind,
       });
 
+      await handOverPty();
+      selfUpdateActiveRef.current = true;
+      showStatusMessage(t("selfUpdateStarted"), false);
       await invoke("start_pty", {
         command: updateCmd.command,
         args: updateCmd.args,
@@ -667,7 +701,9 @@ function App() {
         cols: terminalSizeRef.current?.cols,
       });
     } catch (e: any) {
+      selfUpdateActiveRef.current = false;
       setIsSelfUpdating(false);
+      showStatusMessage("", true);
       console.error("agent-deck update failed to launch:", e);
       alert(`${t("failedToUpdate")}: ${e.toString()}`);
     }
@@ -1155,7 +1191,14 @@ function App() {
           main panel can use the full width) */}
       <div className="app-body-layout">
         {/* Main Panel View (live terminal OR Onboarding installer) */}
-        {!currentAgentStatus.installed ? (
+        {!agentStatusChecked ||
+        (appConfig && pickEngine(appConfig.engines.map(e => e.id), agentStatuses, selectedAgentId) !== selectedAgentId) ? (
+          /* First detection still running, or the selection is about to move
+             to an installed engine: don't claim anything is missing yet */
+          <div className="onboarding-panel" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
+            <p className="onboarding-desc">{t("checkingAgents")}</p>
+          </div>
+        ) : !currentAgentStatus.installed ? (
           /* Onboarding Panel */
           <div className="onboarding-panel" style={{ display: "flex", flexDirection: isInstallTerminalOpen ? "row" : "column", gap: "24px", width: "100%" }}>
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>

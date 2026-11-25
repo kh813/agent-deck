@@ -357,6 +357,7 @@ export function useChatSession({
     status,
     activePrompt,
     statusMessage,
+    showStatusMessage,
     startSession,
     stopSession,
     sendMessage,
