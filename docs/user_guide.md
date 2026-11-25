@@ -627,8 +627,8 @@ When a new version is published, you can update to the latest from the menu bar 
 
 **アップデートの流れ / What happens:**
 
-1. メニューバーの「**Update**」を開きます。通常は「**Update to Latest Stable...**」（最新の正式版）をクリックしてください。「Update to Test Edition...」（テスト版）は、開発・テストに参加している人向けです（組織の設定によっては表示されません）。
-   Open the **Update** menu. Normally click "**Update to Latest Stable...**" (the latest official release). "Update to Test Edition..." is for people taking part in development/testing (it may not appear, depending on your organization's setup).
+1. メニューバーの「**Update**」を開きます。通常は「**Update to Latest...**」（最新の正式版）をクリックしてください。「Update to Test Edition...」（テスト版）は、開発・テストに参加している人向けです（組織の設定によっては表示されません）。
+   Open the **Update** menu. Normally click "**Update to Latest...**" (the latest official release). "Update to Test Edition..." is for people taking part in development/testing (it may not appear, depending on your organization's setup).
 2. 更新がある場合、画面上部に通知バナーが表示されます。「**Update Now**」をクリックすると、ダウンロード・適用が自動で行われます（進行状況はターミナル画面に表示されます）。
    If an update is available, a notification banner appears at the top of the window. Click **Update Now** to download and apply it automatically (progress is shown in the terminal view).
 3. 完了後に再起動を案内するメッセージが表示されます。ウィンドウを閉じて `agent-deck.app`/`agent-deck.exe` を起動し直してください。
