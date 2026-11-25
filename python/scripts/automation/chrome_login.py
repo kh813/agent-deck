@@ -17,6 +17,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# Windows: a PTY/pipe stdout defaults to the ANSI code page, so the Japanese
+# messages below would print as mojibake without this.
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except AttributeError:
+        pass
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from playwright.sync_api import sync_playwright  # noqa: E402
 
