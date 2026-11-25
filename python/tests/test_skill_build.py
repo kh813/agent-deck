@@ -37,7 +37,7 @@ def _skill_mds(roots):
 
 class TestPreflightBuildStep:
     def _src(self, name: str) -> str:
-        return (ROOT / name).read_text()
+        return (ROOT / name).read_text(encoding="utf-8")
 
     def test_preflight_sh_rebuilds_skills(self):
         assert "skills' 'rebuild" in self._src("preflight.sh") or \
@@ -57,7 +57,7 @@ class TestPreflightBuildStep:
 
 class TestSetupPySkillsRebuild:
     def _src(self) -> str:
-        return (ROOT / "python" / "scripts" / "setup" / "setup.py").read_text()
+        return (ROOT / "python" / "scripts" / "setup" / "setup.py").read_text(encoding="utf-8")
 
     def test_skills_rebuild_calls_build_skills(self):
         """skills_rebuild() must call build_skills() to create .skill files."""
@@ -169,11 +169,15 @@ class TestInstallSkillsCleansUpStaleHomeSkills:
 class TestSkillBuildOutput:
     @classmethod
     def setup_class(cls):
-        result = subprocess.run(
-            ["bash", str(ROOT / "python" / "scripts" / "setup" / "build-skills.sh")],
-            capture_output=True,
-            text=True,
-        )
+        setup_dir = ROOT / "python" / "scripts" / "setup"
+        # Same script per OS as setup.py's build_skills().
+        if sys.platform == "win32":
+            cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                   "-File", str(setup_dir / "build-skills.ps1")]
+        else:
+            cmd = ["bash", str(setup_dir / "build-skills.sh")]
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace")
         cls._stdout = result.stdout
         cls._returncode = result.returncode
 

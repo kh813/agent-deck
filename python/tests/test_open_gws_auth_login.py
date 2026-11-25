@@ -30,6 +30,7 @@ class TestEscaping:
 
 
 class TestMain:
+    @pytest.mark.skipif(sys.platform == "win32", reason="builds a POSIX shell command from this machine's paths")
     def test_darwin_opens_terminal_via_osascript_with_app_bin_on_path(self, monkeypatch):
         monkeypatch.setattr(m.platform, "system", lambda: "Darwin")
         calls = []

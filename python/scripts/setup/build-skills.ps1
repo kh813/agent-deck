@@ -31,7 +31,7 @@ foreach ($root in $SkillRoots) {
             $skillName = $_.Directory.Name
 
             if ($seen.ContainsKey($skillName)) {
-                Write-Warning "Duplicate skill name '$skillName': $($seen[$skillName]) vs $($_.Directory.FullName) — keeping the first one."
+                Write-Warning "Duplicate skill name '$skillName': $($seen[$skillName]) vs $($_.Directory.FullName) -- keeping the first one."
                 return
             }
             $seen[$skillName] = $_.Directory.FullName

@@ -1,4 +1,4 @@
-# setup_wt_font.ps1
+﻿# setup_wt_font.ps1
 # Configures Windows Terminal default font for Japanese text rendering.
 # Called from start-agent(Windows).bat when WT_SESSION is set (running inside Windows Terminal).
 # Only modifies settings.json when no font is already configured in defaults.

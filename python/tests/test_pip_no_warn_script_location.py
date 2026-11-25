@@ -26,7 +26,7 @@ SETUP_PY = ROOT / "python" / "scripts" / "setup" / "setup.py"
 
 class TestSetupBatSuppressesPipScriptWarnings:
     def test_every_pip_install_line_has_the_flag(self):
-        text = SETUP_BAT.read_text()
+        text = SETUP_BAT.read_text(encoding="utf-8")
         pip_install_lines = [
             line for line in text.splitlines() if "pip install" in line
         ]
@@ -40,7 +40,7 @@ class TestSetupBatSuppressesPipScriptWarnings:
 
 class TestSetupPySuppressesPipScriptWarnings:
     def test_pip_flags_include_the_flag(self):
-        text = SETUP_PY.read_text()
+        text = SETUP_PY.read_text(encoding="utf-8")
         match = re.search(r"pip_flags\s*=\s*\[([^\]]*)\]", text)
         assert match, "expected a pip_flags = [...] list in setup.py"
         assert "--no-warn-script-location" in match.group(1), (

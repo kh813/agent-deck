@@ -19,7 +19,10 @@ def test_renders_absolute_python_deny_rule(tmp_path):
     data = json.loads(dest.read_text(encoding="utf-8"))
     assert "$comment" not in data
     deny = data["permissions"]["deny"]
-    assert f"Edit(/{tmp_path.as_posix()}/python/**)" in deny
+    assert f"Edit({agent_setup._claude_abs_rule_path(tmp_path)}/python/**)" in deny
+    # POSIX: //Users/x/...   Windows: C:\Users\x -> //c/Users/x (Claude Code's form)
+    assert agent_setup._claude_abs_rule_path("/Users/x") == "//Users/x"
+    assert agent_setup._claude_abs_rule_path("C:/Users/x") == "//c/Users/x"
     assert not any("${" in rule for rule in deny + data["permissions"]["allow"])
 
 

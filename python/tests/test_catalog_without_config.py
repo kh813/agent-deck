@@ -20,7 +20,8 @@ def _tree(tmp_path: Path) -> Path:
 
 def _run(script: Path, *args):
     return subprocess.run([sys.executable, "-I", str(script), *args],
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=60)
 
 
 def test_sync_is_silent_noop_without_config(tmp_path):

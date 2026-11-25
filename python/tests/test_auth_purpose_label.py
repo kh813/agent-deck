@@ -46,7 +46,7 @@ class TestRunAuthFlowPurposeLabel:
 
 class TestSkillsCatalogPassesAPurposeLabel:
     def test_get_credentials_labels_its_auth_flow(self):
-        source = (ROOT / "python" / "scripts" / "setup" / "skills_catalog.py").read_text()
+        source = (ROOT / "python" / "scripts" / "setup" / "skills_catalog.py").read_text(encoding="utf-8")
         match = re.search(r"run_auth_flow\(flow[^)]*\)", source, re.DOTALL)
         assert match and "purpose=" in match.group(0), (
             "skills_catalog.py's _get_credentials() no longer passes a purpose "
