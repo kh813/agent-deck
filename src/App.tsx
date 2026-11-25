@@ -13,7 +13,7 @@ import { Lang, translations } from "./utils/i18n";
 import { isTauri, webClient } from "./lib/webClient";
 import "./App.css";
 import { loadSavedEngine, pickEngine, saveEngine } from "./lib/engineSelection";
-import { isTestKind, isUpdateBannerVisible, shouldApplyBackgroundResult, startUpdatePolling, type BackgroundKind, type SelfUpdateKind } from "./lib/updatePolling";
+import { isTestKind, isUpdateBannerVisible, lastCheckStore, shouldApplyBackgroundResult, startUpdatePolling, type BackgroundKind, type SelfUpdateKind } from "./lib/updatePolling";
 import { baseName, pickImageFile, promptTextForPaths, saveClipboardImage, saveImageBlob } from "./lib/imageAttach";
 import { loadLangChoice, parseLangChoice, resolveLang, saveLangChoice, setCurrentLang, type LangChoice } from "./lib/language";
 import { stopAndWaitForExit } from "./lib/ptyHandover";
@@ -528,6 +528,7 @@ function App() {
         setSelfUpdateKind(kind);
       }
     }, {
+      store: lastCheckStore,
       onFocus: (cb) => {
         window.addEventListener("focus", cb);
         return () => window.removeEventListener("focus", cb);

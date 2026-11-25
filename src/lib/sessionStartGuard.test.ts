@@ -41,6 +41,10 @@ describe("session start guard wiring", () => {
 describe("periodic update check wiring", () => {
   const app = readFileSync(join(__dirname, "..", "App.tsx"), "utf8");
 
+  it("the poller remembers the last check across restarts (once a day)", () => {
+    expect(app).toMatch(/store: lastCheckStore,/);
+  });
+
   it("App starts the poller, gated on the auto-check setting", () => {
     expect(app).toMatch(/if \(!isTauri\(\) \|\| !autoCheckUpdate\) return;\s*return startUpdatePolling\(/);
   });

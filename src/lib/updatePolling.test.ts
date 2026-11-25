@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CHECK_INTERVAL_MS,
   INITIAL_DELAY_MS,
+  LAST_CHECK_STORAGE_KEY,
+  TICK_MS,
+  isCheckDue,
+  lastCheckStore,
   isTestKind,
   isUpdateBannerVisible,
   shouldApplyBackgroundResult,
@@ -15,7 +19,7 @@ describe("startUpdatePolling", () => {
   let clock = 0;
   beforeEach(() => {
     vi.useFakeTimers();
-    clock = 0;
+    clock = 1_000_000;
   });
   afterEach(() => vi.useRealTimers());
 
@@ -23,38 +27,93 @@ describe("startUpdatePolling", () => {
     clock += ms;
     await vi.advanceTimersByTimeAsync(ms);
   };
+  const memStore = (initial: number | null = null) => {
+    let v = initial;
+    return { get: () => v, set: (ms: number) => void (v = ms), peek: () => v };
+  };
+  const H = 3600_000;
 
-  it("defaults: first check 30s after launch, then every 4h", () => {
+  it("defaults: looked at 30s after launch and hourly, but runs at most once a day", () => {
     expect(INITIAL_DELAY_MS).toBe(30_000);
-    expect(CHECK_INTERVAL_MS).toBe(4 * 3600_000);
+    expect(TICK_MS).toBe(H);
+    expect(CHECK_INTERVAL_MS).toBe(24 * H);
   });
 
-  it("checks after the initial delay, then on every interval", async () => {
+  it("first launch: checks 30s in, then not again until a day has passed", async () => {
     const run = vi.fn().mockResolvedValue(undefined);
-    const stop = startUpdatePolling(run, { initialDelayMs: 1000, intervalMs: 10_000, now: () => clock });
-    await advance(999);
+    const store = memStore();
+    const stop = startUpdatePolling(run, { now: () => clock, store });
+    await advance(29_999);
     expect(run).toHaveBeenCalledTimes(0);
     await advance(1);
     expect(run).toHaveBeenCalledTimes(1);
-    await advance(10_000);
+    expect(store.peek()).toBe(clock);
+    await advance(23 * H);
+    expect(run).toHaveBeenCalledTimes(1);
+    await advance(H);
     expect(run).toHaveBeenCalledTimes(2);
-    await advance(20_000);
-    expect(run).toHaveBeenCalledTimes(4);
     stop();
+  });
+
+  it("a relaunch within the day does not check again (the last check is remembered)", async () => {
+    const run = vi.fn().mockResolvedValue(undefined);
+    const store = memStore(clock - 2 * H); // checked 2h ago in a previous run
+    const stop = startUpdatePolling(run, { now: () => clock, store });
+    await advance(30_000);
+    expect(run).not.toHaveBeenCalled();
+    await advance(21 * H);
+    expect(run).not.toHaveBeenCalled();
+    await advance(H); // 24h since the last check (the hourly tick lands on it)
+    expect(run).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("a relaunch after more than a day checks 30s in", async () => {
+    const run = vi.fn().mockResolvedValue(undefined);
+    const stop = startUpdatePolling(run, { now: () => clock, store: memStore(clock - 25 * H) });
+    await advance(30_000);
+    expect(run).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("focus after waking from sleep checks if due, not otherwise", async () => {
+    const run = vi.fn().mockResolvedValue(undefined);
+    let focus!: () => void;
+    const off = vi.fn();
+    const stop = startUpdatePolling(run, {
+      now: () => clock,
+      store: memStore(),
+      onFocus: (cb) => {
+        focus = cb;
+        return off;
+      },
+    });
+    await advance(30_000);
+    expect(run).toHaveBeenCalledTimes(1);
+    clock += 5 * H; // focus later the same day: nothing
+    focus();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run).toHaveBeenCalledTimes(1);
+    clock += 30 * H; // laptop slept overnight: timers didn't fire, the clock moved
+    focus();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run).toHaveBeenCalledTimes(2);
+    stop();
+    expect(off).toHaveBeenCalled();
   });
 
   it("never runs while stopped", async () => {
     const run = vi.fn().mockResolvedValue(undefined);
-    const stop = startUpdatePolling(run, { initialDelayMs: 1000, intervalMs: 10_000, now: () => clock });
+    const stop = startUpdatePolling(run, { now: () => clock, store: memStore() });
     stop();
-    await advance(100_000);
+    await advance(48 * H);
     expect(run).not.toHaveBeenCalled();
   });
 
   it("does not overlap a slow check with the next one", async () => {
     let release!: () => void;
     const run = vi.fn(() => new Promise<void>((r) => (release = r)));
-    const stop = startUpdatePolling(run, { initialDelayMs: 0, intervalMs: 1000, now: () => clock });
+    const stop = startUpdatePolling(run, { initialDelayMs: 0, intervalMs: 1000, tickMs: 1000, now: () => clock, store: memStore() });
     await advance(0);
     await advance(5000);
     expect(run).toHaveBeenCalledTimes(1);
@@ -64,43 +123,47 @@ describe("startUpdatePolling", () => {
     stop();
   });
 
-  it("keeps going after a failed check", async () => {
+  it("keeps going after a failed check (and still counts it, so offline doesn't retry hourly)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const run = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);
-    const stop = startUpdatePolling(run, { initialDelayMs: 0, intervalMs: 1000, now: () => clock });
-    await advance(0);
-    await advance(1000);
+    const stop = startUpdatePolling(run, { now: () => clock, store: memStore() });
+    await advance(30_000);
+    expect(run).toHaveBeenCalledTimes(1);
+    await advance(23 * H);
+    expect(run).toHaveBeenCalledTimes(1);
+    await advance(H);
     expect(run).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalled();
     stop();
     warn.mockRestore();
   });
+});
 
-  it("checks on focus only once the interval has passed (catches wake from sleep)", async () => {
-    const run = vi.fn().mockResolvedValue(undefined);
-    let focus!: () => void;
-    const off = vi.fn();
-    const stop = startUpdatePolling(run, {
-      initialDelayMs: 0,
-      intervalMs: 10_000,
-      now: () => clock,
-      onFocus: (cb) => {
-        focus = cb;
-        return off;
-      },
-    });
-    await advance(0);
-    expect(run).toHaveBeenCalledTimes(1);
-    clock += 5000; // focus soon after: no extra check
-    focus();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(run).toHaveBeenCalledTimes(1);
-    clock += 20_000; // laptop slept: timers didn't fire, but the clock moved
-    focus();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(run).toHaveBeenCalledTimes(2);
-    stop();
-    expect(off).toHaveBeenCalled();
+describe("isCheckDue / lastCheckStore", () => {
+  it("due when never checked, a day has passed, or the clock went backwards", () => {
+    expect(isCheckDue(null, 1000)).toBe(true);
+    expect(isCheckDue(0, CHECK_INTERVAL_MS)).toBe(true);
+    expect(isCheckDue(1, CHECK_INTERVAL_MS)).toBe(false);
+    expect(isCheckDue(5000, 1000)).toBe(true);
+    expect(isCheckDue(NaN, 1000)).toBe(true);
+  });
+
+  it("persists in localStorage and tolerates garbage / no storage", () => {
+    const map = new Map<string, string>();
+    (globalThis as any).localStorage = {
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => void map.set(k, v),
+    };
+    expect(lastCheckStore.get()).toBeNull();
+    lastCheckStore.set(123);
+    expect(map.get(LAST_CHECK_STORAGE_KEY)).toBe("123");
+    expect(lastCheckStore.get()).toBe(123);
+    map.set(LAST_CHECK_STORAGE_KEY, "garbage");
+    expect(lastCheckStore.get()).toBeNull();
+    (globalThis as any).localStorage = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } };
+    expect(lastCheckStore.get()).toBeNull();
+    expect(() => lastCheckStore.set(1)).not.toThrow();
+    delete (globalThis as any).localStorage;
   });
 });
 
