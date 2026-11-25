@@ -289,7 +289,7 @@
 
 ### 5.7.1 ターミナルのフォント設定（新設、v0.2.5）
 
-* メニュー **Font** で、ターミナル（xterm.js）のフォントと文字サイズを変更できる。
+* メニュー **View → Font**（v0.2.8 から View の下。それ以前はトップレベルの Font）で、ターミナル（xterm.js）のフォントと文字サイズを変更できる。
   * **Font Family**: `Default`（= `agent_config.json` の `font_family`）と、OS ごとのプリセット（各プリセットは末尾に `monospace` までの代替フォントを持つ）。
   * **Font Size**: 10〜24 のプリセット、および Increase / Decrease（`CmdOrCtrl+=` / `CmdOrCtrl+-`、8〜32 の範囲）。
   * **Reset Font to Default**（`CmdOrCtrl+0`）: 利用者の設定を消し、`agent_config.json` の値に戻す。

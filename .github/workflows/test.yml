@@ -55,3 +55,16 @@ jobs:
           # Windows only has an effect there: see src-tauri/build.rs.
           AGENT_DECK_EMBED_TEST_MANIFEST: "1"
         run: cargo test --lib
+
+      # The real app's native menu bar on this OS (menus can't be built in
+      # unit tests): build the debug binary and let python/tests/
+      # test_menu_layout.py launch it with AGENT_DECK_DUMP_MENU=1.
+      - name: menu layout (real app)
+        shell: bash
+        env:
+          AGENT_DECK_EMBED_TEST_MANIFEST: "1"
+        run: |
+          (cd src-tauri && cargo build)
+          if [ -f src-tauri/target/debug/agent-deck.exe ]; then BIN=src-tauri/target/debug/agent-deck.exe; else BIN=src-tauri/target/debug/agent-deck; fi
+          if [ -x .ci-test-venv/Scripts/python.exe ]; then PY=.ci-test-venv/Scripts/python.exe; else PY=.ci-test-venv/bin/python; fi
+          AGENT_DECK_BIN="$PWD/$BIN" "$PY" -m pytest python/tests/test_menu_layout.py -v

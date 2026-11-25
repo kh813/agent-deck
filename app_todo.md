@@ -256,6 +256,7 @@
 - [x] **タスク 14-6**: 処理中の終了確認（Cmd/Ctrl+Q・ウィンドウを閉じる・Dock、`src-tauri/src/quit_guard.rs`）。
 - [x] **タスク 14-7**: AI の思考過程・補足表示を本文より淡い灰色に（テーマの brightBlack / white の見直し、`MIN_CONTRAST_RATIO` 3）。
 - [x] **タスク 14-8**: Windows の日本語 UI（OS の表示言語・地域設定を取得）と Settings → Language メニュー。
+- [x] **タスク 14-9**: メニューの整理（Theme・Font を View の下へ、Force Kill Session を File へ、Update を Settings に統合）。実アプリのメニュー構成を CI（macOS / Windows）で検証（`python/tests/test_menu_layout.py`、`AGENT_DECK_DUMP_MENU=1`）。
 
 ### Phase 15: 画像（スクリーンショット）の受け渡し（v0.2.8-rc1）
 *目標: 貼り付け・ドロップした画像を agy / Claude Code に渡す（app_specs.md 5.7.2）。*

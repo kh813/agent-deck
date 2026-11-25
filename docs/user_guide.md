@@ -140,6 +140,16 @@ Copy a screenshot and paste it into the terminal or the input bar (`Cmd+V` on Ma
 > 保存した画像は 7 日後に自動で削除されます。同じ画像を何度貼り付けても 1 つだけ保存され、大きな画像は自動で縮小されます（長辺 2000px）。Windows では、ターミナル画面で `Ctrl+V` による文字の貼り付けもできるようになりました。
 > Saved images are deleted automatically after 7 days. Pasting the same image again reuses the saved file, and large images are scaled down (2000px on the long side). On Windows, `Ctrl+V` now also pastes text in the terminal.
 
+### 🧭 メニューの構成 / Menu Layout (v0.2.8+)
+| メニュー / Menu | 主な項目 / Main items |
+|---|---|
+| File | Force Kill Session、Close Window（Windows は Quit も） |
+| Edit | コピー・貼り付けなど / Copy, Paste, ... |
+| View | Theme（配色）、Font（フォント・文字サイズ）（Mac は全画面表示も） |
+| Window | 最小化など / Minimize, ... |
+| Settings | Update to Latest... / Update to Test Edition...（アップデート）、Check for Updates Automatically、Language / 言語 |
+| Help | バージョン表示 / Version |
+
 ### 🌐 表示言語 / Display Language
 画面の表示は日本語と英語に対応しています。通常は OS の言語設定（Windows では表示言語または地域設定のどちらかが日本語なら日本語）に合わせて自動で切り替わります。メニューの「`Settings` ➔ `Language / 言語`」で「日本語」「English」を固定することもできます（「Automatic (OS) / 自動」で元に戻ります）。
 The UI is available in Japanese and English. By default it follows the OS (on Windows, Japanese if either the display language or the regional format is Japanese). Pin it with `Settings` ➔ `Language / 言語` ("日本語" / "English"; "Automatic (OS) / 自動" goes back to following the OS).
@@ -150,8 +160,8 @@ The AI's thinking (agy's live summary and "Thought for …", Claude Code's side 
 
 ### 🔤 ターミナルのフォントと文字サイズ / Terminal Font & Size
 
-メニューバーの **Font** から、ターミナルの表示フォントと文字サイズを変更できます（すぐに反映され、次回起動時も保持されます）。
-Use the **Font** menu in the menu bar to change the terminal's font and size (applied immediately and remembered across launches).
+メニューバーの **View → Font** から、ターミナルの表示フォントと文字サイズを変更できます（すぐに反映され、次回起動時も保持されます）。
+Use **View → Font** in the menu bar to change the terminal's font and size (applied immediately and remembered across launches).
 
 | メニュー / Menu | 内容 / What it does |
 | :--- | :--- |
@@ -163,7 +173,7 @@ Use the **Font** menu in the menu bar to change the terminal's font and size (ap
 > If the chosen font isn't installed on this PC, a standard monospace font is used instead.
 
 ### ⚡ セッションの強制終了 (SIGKILL) / Force Kill Session
-エージェントの処理がフリーズしたり無限ループに陥った場合は、画面上部のメニューバーから「`Session` ➔ `Force Kill Session`」を選択することで、実行中のプロセスグループ（子プロセスや孫プロセスを含む）を完全に強制終了させ、即座にチャット入力を受け付ける状態に戻すことができます。
+エージェントの処理がフリーズしたり無限ループに陥った場合は、画面上部のメニューバーから「`File` ➔ `Force Kill Session`」を選択することで、実行中のプロセスグループ（子プロセスや孫プロセスを含む）を完全に強制終了させ、即座にチャット入力を受け付ける状態に戻すことができます。
 
 ### 終了時の確認 / Confirmation on Quit (v0.2.8+)
 スキルの実行中やエージェントの応答中（画面が動いている間）、またはアップデート・インストール中に `Cmd+Q`（Windows は `Ctrl+Q`）を押したりウィンドウを閉じたりすると、「本当に終了しますか？」と確認されます。入力待ちで止まっているときは確認なしで終了します。
@@ -672,8 +682,8 @@ When a new version is published, you can update to the latest from the menu bar 
 
 **アップデートの流れ / What happens:**
 
-1. メニューバーの「**Update**」を開きます。通常は「**Update to Latest...**」（最新の正式版）をクリックしてください。「Update to Test Edition...」（テスト版）は、開発・テストに参加している人向けです（組織の設定によっては表示されません）。
-   Open the **Update** menu. Normally click "**Update to Latest...**" (the latest official release). "Update to Test Edition..." is for people taking part in development/testing (it may not appear, depending on your organization's setup).
+1. メニューバーの「**Settings**」を開きます。通常は「**Update to Latest...**」（最新の正式版）をクリックしてください。「Update to Test Edition...」（テスト版）は、開発・テストに参加している人向けです（組織の設定によっては表示されません）。
+   Open the **Settings** menu. Normally click "**Update to Latest...**" (the latest official release). "Update to Test Edition..." is for people taking part in development/testing (it may not appear, depending on your organization's setup).
 2. 更新がある場合、画面上部に通知バナーが表示されます。「**Update Now**」をクリックすると、ダウンロード・適用が自動で行われます（進行状況はターミナル画面に表示されます）。
    If an update is available, a notification banner appears at the top of the window. Click **Update Now** to download and apply it automatically (progress is shown in the terminal view).
 3. 完了後に再起動を案内するメッセージが表示されます。ウィンドウを閉じて `agent-deck.app`/`agent-deck.exe` を起動し直してください。

@@ -19,6 +19,7 @@ const UPDATE_STABLE_LABEL: &str = "Update to Latest...";
 const UPDATE_TEST_LABEL: &str = "Update to Test Edition...";
 const FORCE_KILL_SESSION_MENU_ID: &str = "session:force-kill";
 const LANGUAGE_MENU_ID_PREFIX: &str = "language:";
+const SETTINGS_MENU_LABEL: &str = "Settings";
 /// Settings -> Language choices: (id, label). "auto" follows the OS
 /// (src/lib/language.ts resolves it); the frontend stores the choice.
 pub(crate) const LANGUAGES: &[(&str, &str)] = &[
@@ -136,6 +137,51 @@ pub(crate) fn language_menu_choice(id: &str) -> Option<&'static str> {
     LANGUAGES.iter().find(|(c, _)| *c == choice).map(|(c, _)| *c)
 }
 
+fn menu_outline(items: &[tauri::menu::MenuItemKind<tauri::Wry>], depth: usize) -> String {
+    use tauri::menu::MenuItemKind as K;
+    let mut out = String::new();
+    for item in items {
+        let (text, children) = match item {
+            K::Submenu(s) => (s.text().unwrap_or_default(), s.items().ok()),
+            K::MenuItem(i) => (i.text().unwrap_or_default(), None),
+            K::Check(i) => (i.text().unwrap_or_default(), None),
+            K::Predefined(i) => (format!("{} (predefined)", i.text().unwrap_or_default()), None),
+            K::Icon(i) => (i.text().unwrap_or_default(), None),
+        };
+        let label = if text.is_empty() { "---".to_string() } else { text };
+        out.push_str(&format!("[menu] {}{}\n", "  ".repeat(depth), label));
+        if let Some(c) = children {
+            if depth < 1 {
+                out.push_str(&menu_outline(&c, depth + 1));
+            }
+        }
+    }
+    out
+}
+
+/// Top-level submenu with this label (e.g. the default "View"/"File").
+fn find_submenu(menu: &Menu<tauri::Wry>, label: &str) -> tauri::Result<Option<Submenu<tauri::Wry>>> {
+    for item in menu.items()? {
+        if let Some(sub) = item.as_submenu() {
+            if sub.text()? == label {
+                return Ok(Some(sub.clone()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn top_level_position(menu: &Menu<tauri::Wry>, label: &str) -> tauri::Result<Option<usize>> {
+    for (i, item) in menu.items()?.iter().enumerate() {
+        if let Some(sub) = item.as_submenu() {
+            if sub.text()? == label {
+                return Ok(Some(i));
+            }
+        }
+    }
+    Ok(None)
+}
+
 // Tauri only builds its default Edit/Window/Help menu automatically on macOS,
 // so build it explicitly (Windows/Linux get a menu bar too) and add a Theme
 // submenu that mirrors the in-app theme selector.
@@ -219,7 +265,6 @@ pub fn build_menu(
         true,
         None::<&str>,
     )?;
-    let session_submenu = Submenu::with_items(handle, "Session", true, &[&force_kill_item])?;
 
     let auto_check_update_item = CheckMenuItem::with_id(
         handle,
@@ -241,70 +286,78 @@ pub fn build_menu(
     let language_refs: Vec<&dyn IsMenuItem<tauri::Wry>> =
         language_items.iter().map(|(_, i)| i as &dyn IsMenuItem<tauri::Wry>).collect();
     let language_submenu = Submenu::with_items(handle, "Language / 言語", true, &language_refs)?;
-    let settings_submenu =
-        Submenu::with_items(handle, "Settings", true, &[&auto_check_update_item, &language_submenu])?;
-
-    // Update submenu: an org-managed install (config.toml's [drive]
+    // Update items: an org-managed install (config.toml's [drive]
     // org_release_prod_file_id / org_release_test_file_id set -- see
     // package_release.py) should use its own controlled Drive channel
     // rather than bypass it via raw GitHub, so the plain GitHub item is
     // hidden whenever either org item is available. A plain OSS install
     // with no org config.toml at all gets just the GitHub item, which
-    // works even fresh out of a ZIP with no config.toml present yet.
+    // works even fresh out of a ZIP with no config.toml present yet. Most
+    // people should just take the stable build; the test edition is for
+    // developers/testers, so it sits below a separator.
     let (org_prod_configured, org_test_configured) = org_release_configured();
-    let update_submenu = if org_prod_configured || org_test_configured {
-        // Most people should just take the stable build; the test edition
-        // is for developers/testers, so it sits below a separator.
-        let prod_item = if org_prod_configured {
-            Some(MenuItem::with_id(handle, UPDATE_ORG_PROD_MENU_ID, UPDATE_STABLE_LABEL, true, None::<&str>)?)
-        } else {
-            None
-        };
-        let test_item = if org_test_configured {
-            Some(MenuItem::with_id(handle, UPDATE_ORG_TEST_MENU_ID, UPDATE_TEST_LABEL, true, None::<&str>)?)
-        } else {
-            None
-        };
-        let sep = PredefinedMenuItem::separator(handle)?;
-        let mut refs: Vec<&dyn IsMenuItem<tauri::Wry>> = Vec::new();
-        if let Some(i) = &prod_item {
-            refs.push(i);
+    let mut update_items: Vec<MenuItem<tauri::Wry>> = Vec::new();
+    if org_prod_configured || org_test_configured {
+        if org_prod_configured {
+            update_items.push(MenuItem::with_id(handle, UPDATE_ORG_PROD_MENU_ID, UPDATE_STABLE_LABEL, true, None::<&str>)?);
         }
-        if let Some(i) = &test_item {
-            if !refs.is_empty() {
-                refs.push(&sep);
-            }
-            refs.push(i);
+        if org_test_configured {
+            update_items.push(MenuItem::with_id(handle, UPDATE_ORG_TEST_MENU_ID, UPDATE_TEST_LABEL, true, None::<&str>)?);
         }
-        Submenu::with_items(handle, "Update", true, &refs)?
     } else {
-        let github_item = MenuItem::with_id(
-            handle, UPDATE_GITHUB_MENU_ID, UPDATE_STABLE_LABEL, true, None::<&str>,
-        )?;
-        Submenu::with_items(handle, "Update", true, &[&github_item])?
-    };
+        update_items.push(MenuItem::with_id(handle, UPDATE_GITHUB_MENU_ID, UPDATE_STABLE_LABEL, true, None::<&str>)?);
+    }
+    let update_test_sep = PredefinedMenuItem::separator(handle)?;
+    let settings_sep = PredefinedMenuItem::separator(handle)?;
 
-    // Place Theme/Session/Update/Settings just before Help, matching where most apps put extra top-level menus.
-    let help_index = menu.items()?.iter().position(|item| item.id() == HELP_SUBMENU_ID);
-    match help_index {
-        Some(index) => menu.insert(&theme_submenu, index)?,
-        None => menu.append(&theme_submenu)?,
+    // One "Settings" menu for everything app-wide: updates (what most people
+    // look for), then the automatic-check switch and the UI language.
+    let mut settings_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = Vec::new();
+    for (i, item) in update_items.iter().enumerate() {
+        if i > 0 && item.id().as_ref() == UPDATE_ORG_TEST_MENU_ID {
+            settings_refs.push(&update_test_sep);
+        }
+        settings_refs.push(item);
     }
-    let help_index = menu.items()?.iter().position(|item| item.id() == HELP_SUBMENU_ID);
-    match help_index {
-        Some(index) => menu.insert(&font_submenu, index)?,
-        None => menu.append(&font_submenu)?,
+    settings_refs.push(&settings_sep);
+    settings_refs.push(&auto_check_update_item);
+    settings_refs.push(&language_submenu);
+    let settings_submenu = Submenu::with_items(handle, SETTINGS_MENU_LABEL, true, &settings_refs)?;
+
+    // Fewer top-level menus (2026-11-25: there were too many): Theme and Font
+    // live under View, Force Kill Session under File, and Update merged into
+    // Settings. Resulting bar: [app] File Edit View Window Settings Help.
+    let view_sep = PredefinedMenuItem::separator(handle)?;
+    match find_submenu(&menu, "View")? {
+        // macOS default View holds Enter Full Screen: add ours below it.
+        Some(view) => {
+            view.append(&view_sep)?;
+            view.append(&theme_submenu)?;
+            view.append(&font_submenu)?;
+        }
+        None => {
+            let view = Submenu::with_items(handle, "View", true, &[&theme_submenu, &font_submenu])?;
+            let at = top_level_position(&menu, "Edit")?.map(|i| i + 1);
+            match at {
+                Some(index) => menu.insert(&view, index)?,
+                None => menu.append(&view)?,
+            }
+        }
     }
-    let help_index = menu.items()?.iter().position(|item| item.id() == HELP_SUBMENU_ID);
-    match help_index {
-        Some(index) => menu.insert(&session_submenu, index)?,
-        None => menu.append(&session_submenu)?,
+
+    let file_sep = PredefinedMenuItem::separator(handle)?;
+    match find_submenu(&menu, "File")? {
+        Some(file) => {
+            file.prepend(&file_sep)?;
+            file.prepend(&force_kill_item)?;
+        }
+        // No File menu on this platform (Linux default): keep it reachable.
+        None => {
+            let session = Submenu::with_items(handle, "Session", true, &[&force_kill_item])?;
+            menu.append(&session)?;
+        }
     }
-    let help_index = menu.items()?.iter().position(|item| item.id() == HELP_SUBMENU_ID);
-    match help_index {
-        Some(index) => menu.insert(&update_submenu, index)?,
-        None => menu.append(&update_submenu)?,
-    }
+
     let help_index = menu.items()?.iter().position(|item| item.id() == HELP_SUBMENU_ID);
     match help_index {
         Some(index) => menu.insert(&settings_submenu, index)?,
@@ -327,6 +380,12 @@ pub fn build_menu(
         // No Help submenu on this platform -- surface it as its own
         // top-level entry rather than silently dropping it.
         None => menu.append(&version_item)?,
+    }
+
+    // AGENT_DECK_DUMP_MENU=1 prints the finished menu tree (used to verify
+    // the layout on a real build; native menus can't be built in unit tests).
+    if std::env::var("AGENT_DECK_DUMP_MENU").as_deref() == Ok("1") {
+        eprintln!("{}", menu_outline(&menu.items()?, 0));
     }
 
     handle.manage(ThemeMenuState(Mutex::new(items)));

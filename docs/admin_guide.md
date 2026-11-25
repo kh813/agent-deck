@@ -346,7 +346,7 @@ Node.js and Python are self-contained inside the project folder, so agent-deck i
 > **定期チェック（v0.2.7〜）/ Periodic check (v0.2.7+):** アプリは起動30秒後・以後4時間ごと・長時間後のフォーカス時に、組織本番チャネル（`org_release_prod_file_id` 設定時）または GitHub 最新版を `self_update.py check --json --background` で確認し、更新があればバナーを出すだけです（適用はボタン押下時のみ。テストチャネルは自動確認しない）。`--background` は Drive のブラウザログインを**決して開かず**、未認証・オフライン等は静かに終了コード 3 で終わります（Drive を一度でも対話的に認証済みの端末だけが組織チャネルを自動確認できます）。Settings →「Check for Updates Automatically」（旧 "Check for Updates on Startup"）でオフ。実装: `src/lib/updatePolling.ts`、`self_update.rs` の `default_self_update_kind`。
 > The app checks 30 s after launch, every 4 h, and on focus after a long gap — against the org prod channel (when `org_release_prod_file_id` is set) or GitHub latest — via `self_update.py check --json --background`, and only shows the banner (applying still needs the button; the test channel is never auto-checked). `--background` **never opens a Drive browser login**; missing auth/offline is a quiet exit 3 (so only machines that have authorized Drive interactively at least once auto-check the org channel). Off via Settings → "Check for Updates Automatically" (formerly "Check for Updates on Startup").
 
-メニューバーの「**Update**」サブメニューには、`config.toml` の設定に応じて**どちらか一方**しか表示されません：
+メニューバーの「**Settings**」メニュー上部の更新項目（v0.2.8 から。それ以前は「Update」メニュー）は、`config.toml` の設定に応じて**どちらか一方**しか表示されません：
 
 | `config.toml` の状態 | 表示される項目 | 取得元 |
 |---|---|---|
@@ -357,7 +357,7 @@ Node.js and Python are self-contained inside the project folder, so agent-deck i
 
 チャットスキルとして提供されていた `/update` は廃止され、メニューからの操作に置き換わりました（スキル自体は既に自動で毎回同期される仕組みだったため、実質的に必要だったのはagent-deck本体の更新トリガーだけでした — §2参照）。
 
-Depending on `config.toml`, the **Update** submenu in the menu bar shows **exactly one** of two mutually exclusive sets:
+Depending on `config.toml`, the update items at the top of the **Settings** menu (v0.2.8+; formerly the "Update" menu) show **exactly one** of two mutually exclusive sets:
 
 | `config.toml` state | Items shown | Source |
 |---|---|---|
