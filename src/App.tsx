@@ -306,6 +306,7 @@ function App() {
   const {
     cwd,
     status,
+    isStarting,
     activePrompt,
     noteTerminalInput,
     statusMessage,
@@ -955,7 +956,7 @@ function App() {
                 <select
                   value={selectedAgentId}
                   onChange={(e) => setSelectedAgentId(e.target.value)}
-                  disabled={status === "running"}
+                  disabled={status === "running" || isStarting}
                   className="agent-select-dropdown"
                   style={{
                     background: "transparent",
@@ -964,7 +965,7 @@ function App() {
                     fontFamily: "inherit",
                     fontSize: "inherit",
                     fontWeight: "600",
-                    cursor: status === "running" ? "not-allowed" : "pointer",
+                    cursor: status === "running" || isStarting ? "not-allowed" : "pointer",
                     outline: "none",
                     paddingRight: "4px"
                   }}
@@ -1088,7 +1089,7 @@ function App() {
                   {t("stop")}
                 </button>
               ) : (
-                <button className="primary" onClick={handleStartPty}>
+                <button className="primary" onClick={handleStartPty} disabled={isStarting}>
                   {t("startSession")}
                 </button>
               )}

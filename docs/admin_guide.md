@@ -212,6 +212,8 @@ preflight.sh / preflight.bat
                                        First run (or after the move above) only: venv, skill build, policy install
 3. python3 setup.py skills rebuild   — 常に実行。カタログ同期 → ビルド → 再インストール
                                        Always runs: catalog sync → build → reinstall
+                                       skills/.build.lock（OS ファイルロック）で直列化。同時実行は先行分の完了を待つ（最大5分）
+                                       Serialized by skills/.build.lock (OS file lock): a concurrent run waits for the first (up to 5 min)
 4. 認証チェック（sentinel ファイル）  / Auth check (sentinel file)
         ↓
 選択中のエンジン（agy / claude / codex）を起動 / Launch the selected engine (agy / claude / codex)
@@ -706,9 +708,13 @@ cd src-tauri && cargo test --lib
 | `test_markitdown_convert.py` / `test_rename_files.py` | 各スキルのロジック |
 | `test_agy_scheduler.py` / `test_agy_scheduled_prompt.py` / `test_automate_dispatch.py` / `test_gcalendar.py` / `test_notify_chat.py` | 自動化・通知系（定期実行の `--engine agy\|claude` を含む） |
 | `test_install_skills_claude.py` / `test_claude_settings.py` / `test_agents_md_engines.py` | Claude Code 対応（`.claude/skills/` へのインストール、許可設定の生成、`AGENTS.md` のエンジン共通化） |
+| `test_skills_lock.py` / `test_build_skills_ps1.py` | スキル再ビルドの排他（実プロセスでの同時実行・タイムアウト・強制終了時の解放、3並列 `skills rebuild` の E2E）と、`build-skills.ps1` の実行（PowerShell がある環境のみ） |
 | `test_skill_path_render.py` | インストール時のスクリプトパス絶対化（`render_skill_md()`）と、それに合わせた agy ポリシー・Claude 許可ルール |
 
 Rust 側（`src-tauri/`）のテストは PTY・pre-launch コマンドなど、ランチャー本体の挙動をカバーします（Claude Code の実出力を使ったプロンプト検出、PATH への `~/.local/bin` 追加、`${PROJECT_ROOT}` 展開、エンジン別の更新チェック等を含む）。フロントエンドは `npx vitest run`（`src/lib/*.test.ts`、エンジン自動選択を含む）。
+
+`.github/workflows/test.yml` が main への push ごとに **macOS と Windows の両方**で vitest・tsc・pytest・cargo test を実行します。OS 依存の挙動（ファイルロック、PowerShell、文字コード等）は手動確認ではなくここで検証し、タグはテストが緑のコミットからのみ切ってください。
+`.github/workflows/test.yml` runs vitest, tsc, pytest and cargo test on **both macOS and Windows** for every push to main. OS-specific behavior is verified there rather than by hand; only tag a commit whose test run is green.
 
 ---
 

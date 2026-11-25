@@ -51,6 +51,7 @@ __pycache__/
 *.pyo
 python/**/__pycache__/
 /skills/*.skill
+/skills/.build.lock
 python/scripts/automation/logs/
 python/scripts/automation/ChromeUserData/
 python/scripts/automation/ChromeUserData-bundled/

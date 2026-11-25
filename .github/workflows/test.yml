@@ -1,0 +1,54 @@
+name: "test"
+
+# Runs every test suite on BOTH macOS and Windows for each push to main (and
+# on demand). Platform-specific behavior -- file locking, PowerShell skill
+# builds, CRLF/encoding, path handling -- is verified here instead of by hand
+# on each OS. Separate from release.yml so a red run never blocks a tag, but
+# a tag should only be cut from a green commit.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: install frontend dependencies
+        run: npm install
+
+      - name: frontend tests (vitest)
+        run: npx vitest run
+
+      - name: typecheck
+        run: npx tsc --noEmit
+
+      - name: python tests (pytest)
+        shell: bash
+        run: |
+          python -m venv .ci-test-venv
+          if [ -x .ci-test-venv/Scripts/python.exe ]; then PY=.ci-test-venv/Scripts/python.exe; else PY=.ci-test-venv/bin/python; fi
+          "$PY" -m pip install -q --upgrade pip
+          "$PY" -m pip install -q pytest
+          "$PY" -m pytest python/tests/ -v
+
+      - name: rust tests (cargo)
+        working-directory: src-tauri
+        run: cargo test --lib

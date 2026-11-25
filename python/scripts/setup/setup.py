@@ -29,6 +29,110 @@ def run_command(cmd, description=None):
         return False
     return True
 
+# ── skills lock ───────────────────────────────────────────────
+# Serializes everything that rewrites skills/*.skill and the installed skill
+# folders. Confirmed for real on Windows (2026-11-25): two preflights ran at
+# once (a second session start while the first was still in its pre-launch
+# step) and their build-skills.ps1 runs collided on the same files --
+# "used by another process" / access denied -- failing the rebuild and the
+# session start. macOS tolerated it only because unlinking an open file
+# succeeds there. The UI now refuses a second concurrent start, but other
+# overlaps (a scheduled task, two app windows, a `my-skills` command during
+# a launch) are still possible, so the rebuild itself waits for its turn.
+SKILLS_LOCK_PATH = Path(SCRIPT_DIR).parents[2] / "skills" / ".build.lock"
+SKILLS_LOCK_TIMEOUT_S = 300
+_skills_lock_depth = 0
+
+
+def _try_lock_file(fh):
+    if platform.system().lower() == "windows":
+        import msvcrt
+        try:
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    import fcntl
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _unlock_file(fh):
+    if platform.system().lower() == "windows":
+        import msvcrt
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+class _skills_lock:
+    """Exclusive, cross-process, re-entrant (within one process) lock.
+
+    Waits up to SKILLS_LOCK_TIMEOUT_S for another rebuild to finish, then
+    proceeds anyway with a warning rather than blocking the session start
+    forever (an OS file lock is released automatically when its holder
+    exits, so a stale lock can only mean a genuinely hung rebuild)."""
+
+    def __init__(self, path=None, timeout=None, poll=0.2):
+        self.path = Path(path) if path else SKILLS_LOCK_PATH
+        self.timeout = SKILLS_LOCK_TIMEOUT_S if timeout is None else timeout
+        self.poll = poll
+        self.fh = None
+        self.locked = False
+
+    def __enter__(self):
+        global _skills_lock_depth
+        _skills_lock_depth += 1
+        if _skills_lock_depth > 1:
+            return self
+        import time
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.fh = open(self.path, "a+")
+        deadline = time.monotonic() + self.timeout
+        announced = False
+        while True:
+            if _try_lock_file(self.fh):
+                self.locked = True
+                return self
+            if not announced:
+                print("  (another skill rebuild is running; waiting for it to finish...)")
+                announced = True
+            if time.monotonic() >= deadline:
+                print("  [WARN] Timed out waiting for the other skill rebuild; continuing anyway.")
+                return self
+            time.sleep(self.poll)
+
+    def __exit__(self, *exc):
+        global _skills_lock_depth
+        _skills_lock_depth -= 1
+        if _skills_lock_depth > 0 or self.fh is None:
+            return False
+        try:
+            if self.locked:
+                _unlock_file(self.fh)
+        finally:
+            self.fh.close()
+            self.fh = None
+            self.locked = False
+        return False
+
+
+def _with_skills_lock(fn):
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _skills_lock():
+            return fn(*args, **kwargs)
+    return wrapper
+
+
 def build_skills():
     print("==> Building skill packages...")
     system = platform.system().lower()
@@ -403,6 +507,7 @@ def sync_catalog_skills():
     except Exception as e:
         print(f"  [WARN] Catalog sync failed ({e}) — continuing with existing skills.")
 
+@_with_skills_lock
 def skills_rebuild():
     sync_catalog_skills()
     build_skills()
@@ -410,6 +515,7 @@ def skills_rebuild():
     install_claude_settings()
     print("==> Skills rebuilt and reinstalled.")
 
+@_with_skills_lock
 def skills_disable(skill_name):
     import shutil
     project_root = Path(SCRIPT_DIR).parents[2]
@@ -439,6 +545,7 @@ def skills_disable(skill_name):
     print(f"Error: skill '{skill_name}' not found in {roots_desc}")
     sys.exit(1)
 
+@_with_skills_lock
 def skills_enable(skill_name):
     import shutil
     project_root = Path(SCRIPT_DIR).parents[2]
@@ -737,8 +844,9 @@ if __name__ == "__main__":
         setup_config()
         setup_gws()
         setup_venv()
-        build_skills()
-        install_skills()
+        with _skills_lock():
+            build_skills()
+            install_skills()
         install_gemini_policies()
         install_claude_settings()
         trust_project_folder()

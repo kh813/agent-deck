@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { resolvePromptResponseInput } from "../lib/promptResponse";
 import { answersPrompt, isEchoOfAnswered, promptKey } from "../lib/promptSync";
+import { createSingleFlight } from "../lib/singleFlight";
 import { subscribeToTauriEvent } from "../lib/tauriListener";
 import { isTauri, webClient } from "../lib/webClient";
 
@@ -69,6 +70,12 @@ export function useChatSession({
     if (activePromptRef.current && answersPrompt(data)) markPromptAnswered();
   }, [markPromptAnswered]);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  // True from a start request until the session is running (or failed):
+  // status is still "idle" through the pre-launch step, so this is what
+  // keeps a second start (Start button, engine-switch auto-start) from
+  // launching a concurrent preflight. See lib/singleFlight.ts.
+  const [isStarting, setIsStarting] = useState(false);
+  const startFlightRef = useRef(createSingleFlight());
 
   const statusRef = useRef(status);
   const cwdRef = useRef(cwd);
@@ -96,7 +103,7 @@ export function useChatSession({
   // Start PTY Session. overrideCommand/overrideArgs let a caller start with
   // a command/args pair that hasn't propagated into the `command`/
   // `defaultArgs` props yet
-  const startSession = useCallback(
+  const startSessionOnce = useCallback(
     async (targetCwd: string = cwdRef.current, overrideCommand?: string, overrideArgs?: string[]) => {
       const isJa = navigator.language.startsWith("ja");
       setStatus("idle");
@@ -254,6 +261,23 @@ export function useChatSession({
     [command, defaultArgs, showStatusMessage, getTerminalSize, preLaunchCommand, preLaunchArgs, preLaunchRequired]
   );
 
+  const startSession = useCallback(
+    async (targetCwd?: string, overrideCommand?: string, overrideArgs?: string[]) => {
+      const flight = startFlightRef.current;
+      if (flight.running) {
+        console.warn("startSession ignored: a session start is already in progress");
+        return;
+      }
+      setIsStarting(true);
+      try {
+        await flight.run(() => startSessionOnce(targetCwd, overrideCommand, overrideArgs));
+      } finally {
+        setIsStarting(false);
+      }
+    },
+    [startSessionOnce]
+  );
+
   // Stop PTY Session
   const stopSession = useCallback(async () => {
     const isJa = navigator.language.startsWith("ja");
@@ -378,6 +402,7 @@ export function useChatSession({
   return {
     cwd,
     status,
+    isStarting,
     activePrompt,
     noteTerminalInput,
     statusMessage,
