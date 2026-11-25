@@ -1001,8 +1001,25 @@ function App() {
                 </div>
               )}
 
-              {/* Web UI Button */}
+              <div className={`status-badge ${status}`}>
+                {status}
+              </div>
+
+              {status === "running" ? (
+                <button className="danger" onClick={stopSession}>
+                  {t("stop")}
+                </button>
+              ) : (
+                <button className="primary" onClick={handleStartPty}>
+                  {t("startSession")}
+                </button>
+              )}
+
+              {/* Web UI is a separate feature from the session controls
+                  (engine / folder / status / start-stop), so it sits apart at
+                  the right edge behind a divider. */}
               {isTauri() && (
+                <div className="header-aside">
                 <button
                   className="secondary"
                   onClick={() => {
@@ -1021,20 +1038,7 @@ function App() {
                 >
                   🌐 Web UI {webServerStatus.running ? "● ON" : ""}
                 </button>
-              )}
-
-              <div className={`status-badge ${status}`}>
-                {status}
-              </div>
-
-              {status === "running" ? (
-                <button className="danger" onClick={stopSession}>
-                  {t("stop")}
-                </button>
-              ) : (
-                <button className="primary" onClick={handleStartPty}>
-                  {t("startSession")}
-                </button>
+                </div>
               )}
             </>
           )}

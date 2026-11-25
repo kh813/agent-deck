@@ -280,6 +280,17 @@ body {
   white-space: nowrap;
 }
 
+/* Features unrelated to the session controls (Web UI): pushed to the right
+   edge, set off by a divider that stays visible even when the header is
+   too tight for any free space. */
+.header-aside {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  border-left: 1px solid var(--header-border);
+}
+
 /* The working-folder chip is a button (click = pick folder) but keeps the
    chip look instead of the global button styling. */
 .cwd-button {
