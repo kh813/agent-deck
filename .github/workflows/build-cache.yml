@@ -1,0 +1,58 @@
+name: "build-cache"
+
+# Keeps a release-profile Rust build cache on main for release.yml.
+# GitHub only lets a tag run read caches from its own tag or the default
+# branch, so release builds can't reuse each other's -- this builds the
+# app exactly like release.yml (same target, `tauri build`, no bundling)
+# and saves the compiled dependencies under the shared-key release.yml
+# restores. Runs only when dependencies may have changed (Cargo files,
+# toolchain, this workflow) or on demand; between runs rust-cache's
+# fallback key still hands release.yml the closest older cache.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src-tauri/Cargo.toml"
+      - "src-tauri/Cargo.lock"
+      - "src-tauri/build.rs"
+      - "src-tauri/tauri.conf.json"
+      - ".github/workflows/build-cache.yml"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+  schedule:
+    # Weekly: a new Rust stable changes the cache key; refresh before a
+    # release needs it. (Caches unused for 7 days are also evicted.)
+    - cron: "0 18 * * 0"
+
+jobs:
+  warm:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest"
+            args: "--target aarch64-apple-darwin"
+          - platform: "windows-latest"
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: release-${{ matrix.platform }}
+
+      - name: install frontend dependencies
+        run: npm install
+
+      - name: build (no bundle, nothing published)
+        run: npm run tauri build -- ${{ matrix.args }} --no-bundle

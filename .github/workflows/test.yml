@@ -31,6 +31,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # Compiled dependencies (debug/test profile) from the previous run on
+      # main; saved only from main so PR runs can't evict it.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: test-${{ matrix.platform }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: install frontend dependencies
         run: npm install
 

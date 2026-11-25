@@ -56,6 +56,18 @@ jobs:
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
 
+      # Compiled dependencies from the last build (~400 crates: the bulk of
+      # the build time, ~9 min on Windows without it). A tag run can't reuse
+      # another tag's cache, only main's -- build-cache.yml keeps one there
+      # under this same shared-key, built the same way. Read-only here:
+      # saving from a tag would only be visible to this one tag.
+      - name: restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: release-${{ matrix.platform }}
+          save-if: false
+
       - name: install frontend dependencies
         run: npm install
 
