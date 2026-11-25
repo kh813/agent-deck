@@ -391,13 +391,22 @@ The group has a shared "skill catalog" where employees can share their original 
 画面右上の「📚 スキル」ボタンでスキルカタログ画面が開きます。チャットでコマンドを打たなくても、次の操作ができます。
 Click "📚 Skills" at the top right to open the Skill Catalog screen, where you can do the following without typing commands.
 
-- **カタログ / Catalog**: スキルの一覧とキーワード検索。「インポート」で自分の PC に取り込みます（取り込み済みなら「更新を取り込む」）。「詳細」で説明全文を表示。
-  List and search skills. "Import" installs one ("Get update" if already imported). "Details" shows the full description.
-- **マイスキル / My Skills**: 自分の PC のスキル一覧。自作スキルは「カタログに共有」「共有を取り下げ」、どのスキルも「無効にする / 有効にする」を切り替えられます（標準搭載のスキルは除く）。
-  Your local skills. Share/unshare your own skills, and enable/disable any non-built-in skill.
+- **カタログ / Catalog**: スキルの一覧。検索欄に入力するとその場で絞り込まれます（スキル名・作成者・説明文が対象。複数キーワードは AND、全角/半角・大文字/小文字は区別しません）。作成者メニュー、またはカードの作成者名をクリックして作成者で絞り込めます。「インポート」で自分の PC に取り込みます（取り込み済みなら「更新を取り込む」）。「詳細」で説明全文を表示。
+  The list filters as you type (name, author and description; several keywords must all match; width and case don't matter). Filter by author from the menu or by clicking an author's name. "Import" installs a skill ("Get update" if already imported). "Details" shows the full description.
+- **マイスキル / My Skills**: 自分の PC のスキル一覧（同じ検索欄で絞り込めます）。
+  Your local skills (the same filter box works here).
+  - **自作スキル / Your own**: 「＋ 新しいスキル」で作成、「編集」で説明と手順を変更、「削除」で PC から削除。「カタログに共有」「カタログの版を更新」（編集後にカタログ側も最新にする）「共有を取り下げ」。共有中のスキルを保存すると、カタログの版も更新するか確認されます。
+    "+ New skill" creates one, "Edit" changes its description and instructions, "Delete" removes it from this PC. "Share to catalog", "Update shared copy" (after editing) and "Unshare". Saving a shared skill asks whether to update the catalog's copy too.
+  - **AI と相談 / With the AI**: 「🤖 AI と相談して作る」「🤖 AI と相談して改善」（編集画面）は、実行中のセッションに `my-skills create` / `my-skills update <名前>` を送り、AI と対話しながら作成・改善します。
+    "🤖 Create with AI" and "🤖 Improve with AI" (in the editor) send `my-skills create` / `my-skills update <name>` to the running session so you can build the skill in conversation.
+  - **インポートしたスキル / Imported**: 「中身を見る」「無効にする / 有効にする」「アンインストール」。全員に自動配布されるスキル（「全員に配布」）は次回起動時に戻るため、アンインストールではなく無効化で止めます。
+    "View", "Disable / Enable", "Uninstall". Skills installed for everyone ("For everyone") come back on the next launch, so turn them off with Disable instead.
+  - **標準スキル / Built-in**: 「中身を見る」のみ。 / "View" only.
+- 共有スキルカタログのない環境（組織向け設定のない公開版）では「マイスキル」だけが表示され、自作スキルの作成・編集とインストール済みスキルの管理ができます。
+  Without a shared catalog (the public edition without the org's settings), only "My Skills" is shown: you can still create and edit your own skills and manage installed ones.
 
-> インポートや有効・無効の変更は自動で反映され、新しく始めたセッションから使えます。実行中のセッションで使うには「停止」→「セッション開始」してください。初回の Drive 操作では、ブラウザで Google のログイン画面が開きます。
-> Imports and enable/disable changes are applied automatically and are available in new sessions (Stop, then Start Session for the current one). The first Drive operation opens a Google sign-in page in your browser.
+> インポート・作成・編集・削除・有効/無効の変更は自動で反映され、新しく始めたセッションから使えます。実行中のセッションで使うには「停止」→「セッション開始」してください。初回の Drive 操作では、ブラウザで Google のログイン画面が開きます。
+> Imports, creating, editing, deleting and enable/disable changes are applied automatically and are available in new sessions (Stop, then Start Session for the current one). The first Drive operation opens a Google sign-in page in your browser.
 
 ### カタログを見る / Browse the Catalog
 

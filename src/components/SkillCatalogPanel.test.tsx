@@ -10,7 +10,7 @@ describe("SkillCatalogPanel renders", () => {
     expect(html).toContain("スキルカタログ");
     expect(html).toContain("カタログ");
     expect(html).toContain("マイスキル");
-    expect(html).toContain("キーワードで検索");
+    expect(html).toContain("名前・作成者・説明で絞り込み");
     expect(html).toContain("閉じる");
     expect(html).toContain('role="dialog"');
   });

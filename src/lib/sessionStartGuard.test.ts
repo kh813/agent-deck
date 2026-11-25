@@ -145,6 +145,11 @@ describe("skill catalog wiring", () => {
   const app = readFileSync(join(__dirname, "..", "App.tsx"), "utf8");
   it("header button opens the panel; the panel reports busy to the quit guard", () => {
     expect(app).toMatch(/onClick=\{\(\) => setIsCatalogOpen\(true\)\}/);
-    expect(app).toMatch(/<SkillCatalogPanel lang=\{lang\} onClose=\{\(\) => setIsCatalogOpen\(false\)\} onBusyChange=\{setCatalogBusy\} \/>/);
+    expect(app).toMatch(/<SkillCatalogPanel lang=\{lang\} onClose=\{\(\) => setIsCatalogOpen\(false\)\} onBusyChange=\{setCatalogBusy\}/);
+  });
+  it("'with AI' sends to the session only while one is running", () => {
+    const m = app.match(/onAskAgent=\{\(prompt\) => \{([\s\S]*?)\}\} \/>/);
+    expect(m).not.toBeNull();
+    expect(m![1]).toMatch(/if \(status !== "running"\) return false;\s*sendMessage\(prompt\);\s*return true;/);
   });
 });

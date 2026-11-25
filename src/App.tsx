@@ -1702,7 +1702,13 @@ function App() {
 
         {/* Web UI Management Modal (Desktop) */}
         {isCatalogOpen && isTauri() && (
-          <SkillCatalogPanel lang={lang} onClose={() => setIsCatalogOpen(false)} onBusyChange={setCatalogBusy} />
+          <SkillCatalogPanel lang={lang} onClose={() => setIsCatalogOpen(false)} onBusyChange={setCatalogBusy}
+            onAskAgent={(prompt) => {
+              // "Create/Improve with AI": hand it to the running agent (my-skills skill).
+              if (status !== "running") return false;
+              sendMessage(prompt);
+              return true;
+            }} />
         )}
 
         {isWebUiModalOpen && isTauri() && (

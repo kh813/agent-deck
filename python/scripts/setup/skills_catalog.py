@@ -42,6 +42,7 @@ import sys
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import zipfile
@@ -97,6 +98,20 @@ def _reexec_with_venv():
         else:
             os.execv(str(venv_python), [str(venv_python)] + sys.argv)
 
+# api ops that only touch skills on this PC: they work on a public install
+# too (no config.toml, no Google libraries needed).
+LOCAL_API_OPS = frozenset({"local", "read", "create", "save", "delete", "uninstall",
+                           "enable", "disable", "rebuild"})
+
+
+def _is_local_api_call() -> bool:
+    return sys.argv[1:2] == ["api"] and sys.argv[2:3] != [] and sys.argv[2] in LOCAL_API_OPS
+
+
+def _has_org_config() -> bool:
+    return (Path(__file__).resolve().parents[3] / "config.toml").exists()
+
+
 def _exit_if_no_org_config():
     """No config.toml = an install from the public GitHub ZIP, which has no
     org skill catalog. The launch-time `sync` must then be a silent no-op
@@ -107,7 +122,7 @@ def _exit_if_no_org_config():
     just to find out there's nothing to do."""
     if __name__ != "__main__":
         return
-    if (Path(__file__).resolve().parents[3] / "config.toml").exists():
+    if _has_org_config() or _is_local_api_call():
         return
     if sys.argv[1:2] == ["sync"]:
         sys.exit(0)
@@ -125,7 +140,8 @@ def _exit_if_no_org_config():
     sys.exit(1)
 
 _exit_if_no_org_config()
-_reexec_with_venv()
+if not (__name__ == "__main__" and _is_local_api_call() and not _has_org_config()):
+    _reexec_with_venv()
 
 # ============================================================
 # Configuration
@@ -133,12 +149,22 @@ _reexec_with_venv()
 SCRIPT_DIR   = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "python"))
-from config import (  # noqa: E402
-    OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET,
-    CATALOG_FOLDER_ID, CATALOG_URL, CATALOG_FILE_ID, CONFIG_PATH,
-    USER_EMAIL,
-)
-from scripts.auth import run_auth_flow  # noqa: E402
+try:
+    from config import (  # noqa: E402
+        OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET,
+        CATALOG_FOLDER_ID, CATALOG_URL, CATALOG_FILE_ID, CONFIG_PATH,
+        USER_EMAIL,
+    )
+    from scripts.auth import run_auth_flow  # noqa: E402
+except (FileNotFoundError, ImportError):
+    # Only reachable for LOCAL_API_OPS on a public install (anything else
+    # already exited in _exit_if_no_org_config): no catalog, no owner email.
+    if __name__ == "__main__" and not _is_local_api_call():
+        raise
+    OAUTH_CLIENT_ID = OAUTH_CLIENT_SECRET = CATALOG_FOLDER_ID = CATALOG_URL = CATALOG_FILE_ID = ""
+    CONFIG_PATH = PROJECT_ROOT / "config.toml"
+    USER_EMAIL = ""
+    run_auth_flow = None
 SCOPES    = ["https://www.googleapis.com/auth/drive"]
 TOKEN_PATH = Path.home() / ".gemini" / "agent_ui_library_token.json"
 # ============================================================
@@ -1307,6 +1333,7 @@ def api_local(args):
     """Every local skill, disabled ones included, with who owns it."""
     me = _me()
     shared = {s["name"] for s in (_read_index() or []) if me and s.get("owner") == me}
+    auto = _auto_synced()
     out = []
     for kind, roots in (("common", COMMON_SKILL_ROOTS), ("catalog", [CATALOG_SKILLS_DIR]),
                         ("personal", [SKILLS_SRC])):
@@ -1320,6 +1347,7 @@ def api_local(args):
                     "name": d.name, "description": meta.get("description", ""),
                     "root": kind, "enabled": enabled, "owner": owner, "mine": bool(mine),
                     "shared": bool(mine and d.name in shared),
+                    "auto_sync": kind == "catalog" and d.name in auto,
                 })
     return {"skills": out, "me": me}
 
@@ -1383,10 +1411,218 @@ def api_rebuild(args):
     return {}
 
 
+# ── Authoring your own skills (create / read / save / delete) ──
+#
+# create and save take their text as JSON on stdin ({"name", "description",
+# "body"}), not argv: a skill's instructions are multi-line and can be long.
+# Only skills-personal/ is ever written; catalog and built-in skills can be
+# read (to look inside) but not edited here.
+
+SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
+MAX_SKILL_MD_BYTES = 200_000
+
+
+def _read_stdin_json() -> dict:
+    # Bytes decoded as UTF-8 whatever the console code page (Windows), so
+    # Japanese text from the app arrives intact.
+    if sys.stdin is None or sys.stdin.isatty():
+        raw = ""
+    elif hasattr(sys.stdin, "buffer"):
+        raw = sys.stdin.buffer.read().decode("utf-8-sig", errors="replace")
+    else:
+        raw = sys.stdin.read()
+    try:
+        data = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError as e:
+        raise ApiError("usage", f"入力が JSON ではありません / stdin is not JSON: {e}")
+    if not isinstance(data, dict):
+        raise ApiError("usage", "入力が JSON オブジェクトではありません / stdin is not a JSON object")
+    return data
+
+
+def _split_frontmatter(content: str):
+    """(frontmatter lines incl. both '---', body). No frontmatter -> ([], content)."""
+    lines = content.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return [], content
+    end = next((i for i, l in enumerate(lines[1:], 1) if l.strip() == "---"), -1)
+    if end == -1:
+        return [], content
+    return lines[:end + 1], "\n".join(lines[end + 1:]).lstrip("\n")
+
+
+def _clean_description(desc) -> str:
+    """Frontmatter values here are one `key: value` line: fold newlines."""
+    return " ".join(str(desc or "").split())
+
+
+def _validate_skill_input(data: dict, *, need_name=True) -> tuple:
+    name = str(data.get("name", "")).strip()
+    desc = _clean_description(data.get("description"))
+    body = str(data.get("body", "")).replace("\r\n", "\n")
+    if need_name and (not SKILL_NAME_RE.match(name) or name == "disabled"):
+        raise ApiError("invalid_name", "スキル名は半角英小文字・数字・ハイフンで 2〜64 文字にしてください"
+                       " / Use 2-64 lowercase letters, digits and hyphens for the name")
+    if not desc:
+        raise ApiError("invalid_description", "説明を入力してください（AI がいつこのスキルを使うかの手がかりになります）"
+                       " / Enter a description (it tells the AI when to use this skill)")
+    if not body.strip():
+        raise ApiError("invalid_body", "手順（本文）を入力してください / Enter the instructions")
+    if len(body.encode("utf-8")) + len(desc.encode("utf-8")) > MAX_SKILL_MD_BYTES:
+        raise ApiError("too_large", "スキルが大きすぎます / The skill is too large")
+    return name, desc, body
+
+
+def _find_local_skill(name: str, only_kind: str = ""):
+    """(root kind, dir, enabled) of the skill that's in effect, or None.
+    Same precedence as the build: common, then catalog, then personal.
+    only_kind limits it to one root (a personal skill shadowed by an
+    imported one of the same name is still yours to open)."""
+    _safe_name(name)
+    for kind, roots in (("common", COMMON_SKILL_ROOTS), ("catalog", [CATALOG_SKILLS_DIR]),
+                        ("personal", [SKILLS_SRC])):
+        if only_kind and kind != only_kind:
+            continue
+        for root in roots:
+            for d, enabled in ((root / name, True), (root / "disabled" / name, False)):
+                if (d / "SKILL.md").is_file():
+                    return kind, d, enabled
+    return None
+
+
+def _safe_name(name: str) -> str:
+    """A bare directory name (older skills may predate SKILL_NAME_RE, so only
+    path-like names are refused)."""
+    if not name or name in (".", "..", "disabled") or any(c in name for c in "/\\:"):
+        raise ApiError("not_found", f"スキルが見つかりません / Skill not found: {name}")
+    return name
+
+
+def _personal_skill_dir(name: str) -> Path:
+    _safe_name(name)
+    for d in (SKILLS_SRC / name, SKILLS_SRC / "disabled" / name):
+        if (d / "SKILL.md").is_file():
+            return d
+    raise ApiError("not_editable", f"自作スキルではないため編集できません / Not one of your own skills: {name}")
+
+
+def _shared_by_me(name: str) -> bool:
+    me = _me()
+    return bool(me) and any(s.get("name") == name and s.get("owner") == me for s in (_read_index() or []))
+
+
+def _taken_in_catalog_by_other(name: str) -> str:
+    """Owner of a same-named catalog skill that isn't yours ('' if none).
+    From the local index cache: sharing would be refused later anyway."""
+    me = _me()
+    for s in _read_index() or []:
+        if s.get("name") == name and s.get("owner") not in (me, AUTO_SYNC_OWNER):
+            return s.get("owner", "")
+    return ""
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8", newline="\n")
+    os.replace(tmp, path)
+
+
+def api_read(args):
+    if not args:
+        raise ApiError("usage", "スキル名を指定してください / Give a skill name")
+    only = args[1] if len(args) > 1 and args[1] in ("common", "catalog", "personal") else ""
+    found = _find_local_skill(args[0], only)
+    if not found:
+        raise ApiError("not_found", f"スキルが見つかりません / Skill not found: {args[0]}")
+    kind, d, enabled = found
+    content = (d / "SKILL.md").read_text(encoding="utf-8")
+    meta = _parse_frontmatter(content)
+    _fm, body = _split_frontmatter(content)
+    me = _me()
+    email = meta.get("email", "")
+    mine = kind == "personal" and (not email or (me and _owner_prefix(email) == me))
+    return {
+        "name": d.name, "root": kind, "enabled": enabled,
+        "description": meta.get("description", ""), "body": body, "content": content,
+        "editable": kind == "personal", "mine": bool(mine),
+        "shared": bool(mine and _shared_by_me(d.name)),
+        "extra_files": [p.relative_to(d).as_posix() for p in _skill_extra_files(d)],
+    }
+
+
+def api_create(args):
+    name, desc, body = _validate_skill_input(_read_stdin_json())
+    found = _find_local_skill(name)
+    if found:
+        where = {"common": "標準スキル / built-in", "catalog": "インポート済み / imported",
+                 "personal": "自作 / yours"}[found[0]]
+        raise ApiError("exists", f"同じ名前のスキルがあります（{where}）/ A skill named {name} already exists")
+    other = _taken_in_catalog_by_other(name)
+    if other:
+        raise ApiError("exists", f"カタログに {other} さんの同名スキルがあります。別の名前にしてください"
+                       f" / {other} already shares a skill named {name} in the catalog")
+    d = SKILLS_SRC / name
+    d.mkdir(parents=True, exist_ok=False)
+    _atomic_write(d / "SKILL.md", f"---\nname: {name}\ndescription: {desc}\n---\n\n{body.rstrip()}\n")
+    return {"name": name}
+
+
+def api_save(args):
+    data = _read_stdin_json()
+    name = str(data.get("name", "")).strip()
+    d = _personal_skill_dir(name)
+    _n, desc, body = _validate_skill_input({**data, "name": name}, need_name=False)
+    content = (d / "SKILL.md").read_text(encoding="utf-8")
+    fm, _old = _split_frontmatter(content)
+    if fm:
+        head = _update_frontmatter("\n".join(fm) + "\n", {"description": desc}).rstrip("\n")
+    else:
+        head = f"---\nname: {name}\ndescription: {desc}\n---"
+    _atomic_write(d / "SKILL.md", f"{head}\n\n{body.rstrip()}\n")
+    return {"name": name, "shared": _shared_by_me(name)}
+
+
+def api_delete(args):
+    """Deletes one of your own skills from this PC. A shared one must be
+    unshared first (the UI does that, after asking) -- otherwise the catalog
+    would keep offering a skill you no longer have."""
+    if not args:
+        raise ApiError("usage", "スキル名を指定してください / Give a skill name")
+    d = _personal_skill_dir(args[0])
+    if _shared_by_me(args[0]):
+        raise ApiError("shared", "カタログに共有中です。先に共有を取り下げてください"
+                       " / It's shared in the catalog; unshare it first")
+    shutil.rmtree(d)
+    return {"name": args[0]}
+
+
+def _auto_synced() -> set:
+    return set(_read_sync_manifest())
+
+
+def api_uninstall(args):
+    """Removes a skill imported from the catalog. Skills the org installs on
+    every PC (_default/, tracked by sync) would just come back on the next
+    launch: those can only be disabled."""
+    if not args:
+        raise ApiError("usage", "スキル名を指定してください / Give a skill name")
+    name = _safe_name(args[0])
+    if name in _auto_synced():
+        raise ApiError("auto_sync", "全員に自動配布されるスキルのため削除できません（無効にはできます）"
+                       " / Installed for everyone automatically: it can be disabled, not removed")
+    for d in (CATALOG_SKILLS_DIR / name, CATALOG_SKILLS_DIR / "disabled" / name):
+        if (d / "SKILL.md").is_file():
+            shutil.rmtree(d)
+            return {"name": name}
+    raise ApiError("not_found", f"インポートしたスキルが見つかりません / No imported skill named {name}")
+
+
 API_OPS = {
     "catalog": api_catalog, "search": api_search, "info": api_info, "local": api_local,
     "import": api_import, "share": api_share, "unshare": api_unshare,
     "enable": api_enable, "disable": api_disable, "rebuild": api_rebuild,
+    "read": api_read, "create": api_create, "save": api_save, "delete": api_delete,
+    "uninstall": api_uninstall,
 }
 
 

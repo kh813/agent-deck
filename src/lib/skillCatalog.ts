@@ -22,6 +22,29 @@ export interface LocalSkill {
   owner: string;
   mine: boolean;
   shared: boolean;
+  /** Installed on every PC by the org (catalog _default/): can't be uninstalled. */
+  auto_sync?: boolean;
+}
+
+/** `read`: one local skill's SKILL.md, split for the editor. */
+export interface SkillDoc {
+  name: string;
+  root: LocalSkill["root"];
+  enabled: boolean;
+  description: string;
+  body: string;
+  content: string;
+  editable: boolean;
+  mine: boolean;
+  shared: boolean;
+  extra_files: string[];
+}
+
+/** What create/save send (as JSON on stdin). */
+export interface SkillDraft {
+  name: string;
+  description: string;
+  body: string;
 }
 
 export interface ApiError {
@@ -32,17 +55,20 @@ export interface ApiError {
 
 export type ApiResult<T> = { ok: true; data: T; log: string } | { ok: false; error: ApiError; log: string };
 
-export type CatalogOp = "catalog" | "search" | "info" | "local" | "import" | "share" | "unshare" | "enable" | "disable" | "rebuild";
+export type CatalogOp =
+  | "catalog" | "search" | "info" | "local" | "import" | "share" | "unshare" | "enable" | "disable" | "rebuild"
+  | "read" | "create" | "save" | "delete" | "uninstall";
 
-export function callCatalog<T>(op: CatalogOp, args: string[] = []): Promise<ApiResult<T>> {
-  return invoke<ApiResult<T>>("catalog_api", { op, args });
+/** `input` goes to the script's stdin (create/save: a SkillDraft). */
+export function callCatalog<T>(op: CatalogOp, args: string[] = [], input?: unknown): Promise<ApiResult<T>> {
+  return invoke<ApiResult<T>>("catalog_api", { op, args, input: input === undefined ? null : JSON.stringify(input) });
 }
 
 /** Ops that may need the Google login in a browser (Drive access). */
 export const DRIVE_OPS: ReadonlySet<CatalogOp> = new Set(["catalog", "search", "info", "import", "share", "unshare"]);
 
 /** Ops that change installed skills -> run `rebuild` afterwards. */
-export const NEEDS_REBUILD: ReadonlySet<CatalogOp> = new Set(["import", "enable", "disable"]);
+export const NEEDS_REBUILD: ReadonlySet<CatalogOp> = new Set(["import", "enable", "disable", "create", "save", "delete", "uninstall"]);
 
 export type CardAction = { kind: "import" | "reimport" } | { kind: "none"; label: "builtin" | "yours" };
 
@@ -60,15 +86,127 @@ export function catalogCardAction(s: CatalogSkill): CardAction {
   }
 }
 
-export type LocalAction = "share" | "unshare" | "enable" | "disable";
+export type LocalAction =
+  | "view" | "edit" | "share" | "reshare" | "unshare" | "enable" | "disable" | "delete" | "uninstall";
 
-/** Buttons for a skill on the "My skills" tab. Built-in skills get none. */
+/**
+ * Buttons for a skill on the "My skills" tab.
+ *  - your own (skills-personal/): edit, share / update the shared copy /
+ *    unshare, enable/disable, delete
+ *  - imported from the catalog: view, enable/disable, uninstall (not for the
+ *    ones the org installs on every PC -- they'd come back on next launch)
+ *  - built-in: view only
+ */
 export function localActions(s: LocalSkill): LocalAction[] {
-  if (s.root === "common") return [];
-  const out: LocalAction[] = [];
-  if (s.mine && s.enabled) out.push(s.shared ? "unshare" : "share");
-  out.push(s.enabled ? "disable" : "enable");
+  if (s.root === "common") return ["view"];
+  if (s.root === "catalog") {
+    return ["view", s.enabled ? "disable" : "enable", ...(s.auto_sync ? [] : (["uninstall"] as const))];
+  }
+  const out: LocalAction[] = ["edit"];
+  if (s.mine && s.shared) out.push("reshare", "unshare");
+  else if (s.mine && s.enabled) out.push("share");
+  out.push(s.enabled ? "disable" : "enable", "delete");
   return out;
+}
+
+/** The API op behind a button ("view"/"edit" open the editor instead). */
+export function opForAction(a: LocalAction): CatalogOp | null {
+  switch (a) {
+    case "view":
+    case "edit":
+      return null;
+    case "reshare":
+      return "share";
+    default:
+      return a;
+  }
+}
+
+/** Same rule as skills_catalog.py SKILL_NAME_RE. */
+export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
+
+export type DraftProblem = "name" | "description" | "body" | null;
+
+/** First thing wrong with a draft, checked before calling the API. */
+export function draftProblem(d: SkillDraft, isNew: boolean): DraftProblem {
+  if (isNew && (!SKILL_NAME_RE.test(d.name) || d.name === "disabled")) return "name";
+  if (!d.description.trim()) return "description";
+  if (!d.body.trim()) return "body";
+  return null;
+}
+
+/** A starting point for a new skill's instructions. */
+export function skillTemplate(lang: Lang): string {
+  return lang === "ja"
+    ? "# スキル名\n\n## やること\n\n1. \n2. \n3. \n\n## 注意点\n\n- \n"
+    : "# Skill name\n\n## Steps\n\n1. \n2. \n3. \n\n## Notes\n\n- \n";
+}
+
+/** What "Create with AI" / "Improve with AI" type into the session. */
+export function agentPrompt(kind: "create" | "update", name = ""): string {
+  return kind === "create" ? "my-skills create" : `my-skills update ${name}`.trim();
+}
+
+// ── Search (same rules as skills_catalog.py search_skills) ──
+
+/** Case-, width- and kana-insensitive form (NFKC + lower-case + hiragana->katakana). */
+export function normalizeForSearch(text: string): string {
+  const t = (text ?? "").normalize("NFKC").toLowerCase();
+  let out = "";
+  for (const c of t) {
+    const code = c.codePointAt(0)!;
+    out += code >= 0x3041 && code <= 0x3096 ? String.fromCodePoint(code + 0x60) : c;
+  }
+  return out;
+}
+
+export function searchKeywords(query: string): string[] {
+  return query.replace(/\u3000/g, " ").split(/\s+/).filter((k) => k.trim()).map(normalizeForSearch);
+}
+
+type Searchable = { name: string; owner?: string; description?: string; author?: string };
+
+/**
+ * Entries matching EVERY keyword (AND) in name, owner/author or description,
+ * ranked like the CLI: name hits first, then owner, then description; ties
+ * by name. An empty query keeps everything in its original order.
+ */
+export function filterSkills<T extends Searchable>(skills: readonly T[], query: string): T[] {
+  const keywords = searchKeywords(query);
+  if (!keywords.length) return [...skills];
+  const ranked: { score: number; s: T }[] = [];
+  for (const s of skills) {
+    const name = normalizeForSearch(s.name);
+    const owner = normalizeForSearch(`${s.owner ?? ""} ${s.author ?? ""}`);
+    const desc = normalizeForSearch(s.description ?? "");
+    let score = 0;
+    let all = true;
+    for (const k of keywords) {
+      if (name.includes(k)) score += 100;
+      else if (owner.includes(k)) score += 10;
+      else if (desc.includes(k)) score += 1;
+      else {
+        all = false;
+        break;
+      }
+    }
+    if (all) ranked.push({ score, s });
+  }
+  ranked.sort((a, b) => b.score - a.score || a.s.name.localeCompare(b.s.name) || (a.s.owner ?? "").localeCompare(b.s.owner ?? ""));
+  return ranked.map((r) => r.s);
+}
+
+export const AUTO_SYNC_OWNER = "_default";
+
+/** Owners for the filter menu: the org's auto-installed set first, then A-Z. */
+export function catalogOwners(skills: readonly CatalogSkill[]): string[] {
+  const set = new Set(skills.map((s) => s.owner).filter(Boolean));
+  const rest = [...set].filter((o) => o !== AUTO_SYNC_OWNER).sort((a, b) => a.localeCompare(b));
+  return set.has(AUTO_SYNC_OWNER) ? [AUTO_SYNC_OWNER, ...rest] : rest;
+}
+
+export function filterByOwner<T extends { owner: string }>(skills: readonly T[], owner: string): T[] {
+  return owner ? skills.filter((s) => s.owner === owner) : [...skills];
 }
 
 /** The "My skills" tab: yours first, then imported; built-ins last. */
@@ -83,6 +221,44 @@ export const importTarget = (s: Pick<CatalogSkill, "owner" | "name">) => `${s.ow
 const TEXT = {
   ja: {
     title: "スキルカタログ",
+    view: "中身を見る",
+    edit: "編集",
+    reshare: "カタログの版を更新",
+    delete: "削除",
+    uninstall: "アンインストール",
+    newSkill: "＋ 新しいスキル",
+    noCatalogNote: "この環境には共有スキルカタログがありません。自分のスキルの作成・編集と、インストール済みスキルの管理ができます。",
+    createWithAi: "🤖 AI と相談して作る",
+    improveWithAi: "🤖 AI と相談して改善",
+    needSession: "AI と相談するには、先にセッションを開始してください。",
+    filterPlaceholder: "名前・作成者・説明で絞り込み（例: 経費、taro、PDF）",
+    ownerAll: "すべての作成者",
+    ownerDefault: "全員に配布",
+    autoSyncTag: "全員に配布",
+    count: "{n} 件",
+    editorNew: "新しいスキル",
+    editorEdit: "スキルを編集",
+    editorView: "スキルの中身",
+    fieldName: "スキル名",
+    fieldNameHint: "半角英小文字・数字・ハイフン（例: weekly-report）。作成後は変更できません。",
+    fieldDescription: "説明",
+    fieldDescriptionHint: "何をするスキルか、どんな言葉で頼まれたら使うか。AI はこの説明を見てスキルを使うか判断します。",
+    fieldBody: "手順（AI への指示）",
+    fieldBodyHint: "Markdown で書けます。AI が上から順に読んで実行します。",
+    save: "保存",
+    create: "作成",
+    cancel: "キャンセル",
+    extraFiles: "同梱ファイル（この画面では編集できません）",
+    readOnlyNote: "このスキルは編集できません（標準スキル・インポートしたスキル）。",
+    problem_name: "スキル名は半角英小文字・数字・ハイフンで 2〜64 文字にしてください。",
+    problem_description: "説明を入力してください。",
+    problem_body: "手順を入力してください。",
+    unsavedChanges: "保存していない変更があります。破棄しますか？",
+    confirmDelete: "「{name}」をこの PC から削除しますか？元に戻せません。",
+    confirmDeleteShared: "「{name}」はカタログに共有中です。共有を取り下げてから削除しますか？元に戻せません。",
+    confirmUninstall: "インポートした「{name}」をアンインストールしますか？（カタログから再インポートできます）",
+    confirmReshare: "「{name}」のカタログの版を、この PC の内容で更新しますか？",
+    askReshareAfterSave: "保存しました。「{name}」はカタログに共有中です。カタログの版も更新しますか？",
     tabCatalog: "カタログ",
     tabMine: "マイスキル",
     searchPlaceholder: "キーワードで検索（例: 経費、PDF、slide）",
@@ -122,6 +298,44 @@ const TEXT = {
   },
   en: {
     title: "Skill Catalog",
+    view: "View",
+    edit: "Edit",
+    reshare: "Update shared copy",
+    delete: "Delete",
+    uninstall: "Uninstall",
+    newSkill: "+ New skill",
+    noCatalogNote: "No shared skill catalog here. You can still create and edit your own skills and manage installed ones.",
+    createWithAi: "🤖 Create with AI",
+    improveWithAi: "🤖 Improve with AI",
+    needSession: "Start a session first to work on it with the AI.",
+    filterPlaceholder: "Filter by name, author or description (e.g. expense, taro, PDF)",
+    ownerAll: "All authors",
+    ownerDefault: "For everyone",
+    autoSyncTag: "For everyone",
+    count: "{n}",
+    editorNew: "New skill",
+    editorEdit: "Edit skill",
+    editorView: "Skill contents",
+    fieldName: "Name",
+    fieldNameHint: "Lowercase letters, digits and hyphens (e.g. weekly-report). Can't be changed later.",
+    fieldDescription: "Description",
+    fieldDescriptionHint: "What it does and what requests should trigger it. The AI decides whether to use the skill from this.",
+    fieldBody: "Instructions (for the AI)",
+    fieldBodyHint: "Markdown. The AI reads and follows it top to bottom.",
+    save: "Save",
+    create: "Create",
+    cancel: "Cancel",
+    extraFiles: "Bundled files (not editable here)",
+    readOnlyNote: "This skill can't be edited here (built-in or imported).",
+    problem_name: "Use 2-64 lowercase letters, digits and hyphens for the name.",
+    problem_description: "Enter a description.",
+    problem_body: "Enter the instructions.",
+    unsavedChanges: "Discard unsaved changes?",
+    confirmDelete: "Delete \"{name}\" from this PC? This can't be undone.",
+    confirmDeleteShared: "\"{name}\" is shared in the catalog. Unshare it and delete it? This can't be undone.",
+    confirmUninstall: "Uninstall the imported \"{name}\"? (You can import it again from the catalog.)",
+    confirmReshare: "Update the catalog's copy of \"{name}\" with the one on this PC?",
+    askReshareAfterSave: "Saved. \"{name}\" is shared in the catalog; update the catalog's copy too?",
     tabCatalog: "Catalog",
     tabMine: "My Skills",
     searchPlaceholder: "Search by keyword (e.g. expense, PDF, slide)",
@@ -179,7 +393,42 @@ export function describeError(lang: Lang, e: ApiError): string {
       return catalogText(lang, `err_${e.code}` as CatalogTextKey);
     case "ambiguous":
       return catalogText(lang, "err_ambiguous", { candidates: (e.candidates ?? []).join(", ") });
+    case "exists":
+    case "shared":
+    case "auto_sync":
+    case "not_editable":
+    case "invalid_name":
+    case "invalid_description":
+    case "invalid_body":
+    case "too_large":
+      return pickLang(e.message, lang);
     default:
       return catalogText(lang, "err_other", { message: e.message });
+  }
+}
+
+/** The script's messages read "日本語 / English": show the reader's half. */
+export function pickLang(message: string, lang: Lang): string {
+  const i = message.indexOf(" / ");
+  if (i < 0) return message;
+  return lang === "ja" ? message.slice(0, i) : message.slice(i + 3);
+}
+
+/**
+ * Yes/no question. The native dialog (plugin-dialog `ask`), since the
+ * webview's window.confirm isn't reliable on every platform; plain
+ * window.confirm outside Tauri (dev in a browser).
+ */
+export async function confirmDialog(message: string, lang: Lang): Promise<boolean> {
+  try {
+    const { ask } = await import("@tauri-apps/plugin-dialog");
+    return await ask(message, {
+      title: "agent-deck",
+      kind: "warning",
+      okLabel: lang === "ja" ? "はい" : "Yes",
+      cancelLabel: lang === "ja" ? "いいえ" : "No",
+    });
+  } catch {
+    return typeof window !== "undefined" && window.confirm(message);
   }
 }

@@ -3,7 +3,7 @@
 // JSON result line to the frontend. All catalog logic (Drive auth, sync,
 // sharing) stays in Python; this only runs it off the UI thread with a time
 // limit and turns "no JSON at all" (python missing, crash) into an error.
-use std::io::Read;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -20,8 +20,13 @@ pub const API_MARKER: &str = "@@AGENT_DECK_JSON@@ ";
 pub const API_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// Ops the screen may call (mirrors skills_catalog.py API_OPS).
-pub(crate) const ALLOWED_OPS: &[&str] =
-    &["catalog", "search", "info", "local", "import", "share", "unshare", "enable", "disable", "rebuild"];
+pub(crate) const ALLOWED_OPS: &[&str] = &[
+    "catalog", "search", "info", "local", "import", "share", "unshare", "enable", "disable", "rebuild",
+    "read", "create", "save", "delete", "uninstall",
+];
+/// Ops that read a JSON document on stdin (a skill's multi-line text).
+pub(crate) const STDIN_OPS: &[&str] = &["create", "save"];
+pub const MAX_INPUT_BYTES: usize = 1_000_000;
 
 /// The last marker line's JSON, if any.
 pub(crate) fn parse_api_output(stdout: &str) -> Option<serde_json::Value> {
@@ -34,8 +39,20 @@ pub(crate) fn parse_api_output(stdout: &str) -> Option<serde_json::Value> {
 
 /// Skill names / queries only: no option-looking or control-character args.
 pub(crate) fn validate_args(op: &str, args: &[String]) -> Result<(), String> {
+    validate_request(op, args, None)
+}
+
+pub(crate) fn validate_request(op: &str, args: &[String], input: Option<&str>) -> Result<(), String> {
     if !ALLOWED_OPS.contains(&op) {
         return Err(format!("unknown catalog op: {op}"));
+    }
+    if let Some(i) = input {
+        if !STDIN_OPS.contains(&op) {
+            return Err(format!("{op} takes no input"));
+        }
+        if i.len() > MAX_INPUT_BYTES {
+            return Err("input too large".into());
+        }
     }
     for a in args {
         if a.starts_with('-') || a.chars().any(|c| c.is_control()) || a.len() > 200 {
@@ -50,7 +67,11 @@ fn error_value(code: &str, message: String) -> serde_json::Value {
 }
 
 pub fn run_catalog_api(op: &str, args: &[String], timeout: Duration) -> serde_json::Value {
-    if let Err(e) = validate_args(op, args) {
+    run_catalog_api_with_input(op, args, None, timeout)
+}
+
+pub fn run_catalog_api_with_input(op: &str, args: &[String], input: Option<&str>, timeout: Duration) -> serde_json::Value {
+    if let Err(e) = validate_request(op, args, input) {
         return error_value("usage", e);
     }
     let root = get_default_cwd();
@@ -59,7 +80,9 @@ pub fn run_catalog_api(op: &str, args: &[String], timeout: Duration) -> serde_js
     cmd.arg(&script).arg("api").arg(op).args(args);
     cmd.current_dir(&root);
     cmd.env("PYTHONIOENCODING", "utf-8");
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
@@ -67,6 +90,12 @@ pub fn run_catalog_api(op: &str, args: &[String], timeout: Duration) -> serde_js
         Ok(c) => c,
         Err(e) => return error_value("python_missing", format!("Python を起動できません / cannot run Python: {e}")),
     };
+    if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
+        // Small (<= MAX_INPUT_BYTES) and read in full before Python writes
+        // anything big, so writing it up front can't deadlock; dropping
+        // stdin closes it (EOF).
+        let _ = stdin.write_all(text.as_bytes());
+    }
     // Drain both pipes concurrently: a large result (a skill's full SKILL.md)
     // would otherwise fill the pipe and deadlock the wait below.
     let drain = |pipe: Option<Box<dyn Read + Send>>| {
@@ -104,8 +133,8 @@ pub fn run_catalog_api(op: &str, args: &[String], timeout: Duration) -> serde_js
 }
 
 #[tauri::command]
-pub async fn catalog_api(op: String, args: Vec<String>) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(move || run_catalog_api(&op, &args, API_TIMEOUT))
+pub async fn catalog_api(op: String, args: Vec<String>, input: Option<String>) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || run_catalog_api_with_input(&op, &args, input.as_deref(), API_TIMEOUT))
         .await
         .map_err(|e| e.to_string())
 }
@@ -153,6 +182,38 @@ mod tests {
             assert!(py.contains(&format!("\"{op}\": api_")), "{op} missing from API_OPS");
         }
         assert!(py.contains(&format!("API_MARKER = \"{API_MARKER}\"")));
+    }
+
+    #[test]
+    fn input_only_for_stdin_ops_and_bounded() {
+        assert!(validate_request("create", &[], Some("{}")).is_ok());
+        assert!(validate_request("save", &[], Some("{\"body\":\"複数\\n行\"}")).is_ok());
+        assert!(validate_request("import", &["x".into()], Some("{}")).is_err());
+        assert!(validate_request("create", &[], Some(&"x".repeat(MAX_INPUT_BYTES + 1))).is_err());
+        for op in STDIN_OPS {
+            assert!(ALLOWED_OPS.contains(op));
+        }
+    }
+
+    #[test]
+    fn authoring_ops_are_allowed_but_not_admin_ones() {
+        for op in ["read", "create", "save", "delete", "uninstall"] {
+            assert!(validate_args(op, &[]).is_ok(), "{op}");
+        }
+        for op in ["publish", "upload", "download", "sync", "change-owner", "update-index"] {
+            assert!(validate_args(op, &[]).is_err(), "{op}");
+        }
+    }
+
+    #[test]
+    fn stdin_ops_read_stdin_in_python() {
+        let py = include_str!("../../python/scripts/setup/skills_catalog.py");
+        for op in STDIN_OPS {
+            let f = format!("def api_{op}(args):");
+            let start = py.find(&f).unwrap_or_else(|| panic!("{f}"));
+            let body = &py[start..start + 400.min(py.len() - start)];
+            assert!(body.contains("_read_stdin_json()"), "{op} must read stdin");
+        }
     }
 
     #[test]
