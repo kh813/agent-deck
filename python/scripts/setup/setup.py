@@ -379,6 +379,8 @@ def sync_catalog_skills():
     other problem just means skills stay as they are until the next
     launch (skills_catalog.py sync already prints its own [WARN] with the
     reason in those cases)."""
+    if not CONFIG_PATH.exists():
+        return  # public-ZIP install: no org catalog to sync from
     script = os.path.join(SCRIPT_DIR, "skills_catalog.py")
     try:
         result = subprocess.run([sys.executable, script, "sync"],

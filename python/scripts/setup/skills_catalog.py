@@ -95,6 +95,25 @@ def _reexec_with_venv():
         else:
             os.execv(str(venv_python), [str(venv_python)] + sys.argv)
 
+def _exit_if_no_org_config():
+    """No config.toml = an install from the public GitHub ZIP, which has no
+    org skill catalog. The launch-time `sync` must then be a silent no-op
+    (it used to die with a FileNotFoundError traceback from config/ on every
+    launch -- confirmed on a real Windows install); any other command gets a
+    plain explanation instead of a traceback. Checked before the venv
+    re-exec so a public install never pip-installs the Google libraries
+    just to find out there's nothing to do."""
+    if __name__ != "__main__":
+        return
+    if (Path(__file__).resolve().parents[3] / "config.toml").exists():
+        return
+    if sys.argv[1:2] == ["sync"]:
+        sys.exit(0)
+    print("[INFO] config.toml がないため、共有スキルカタログは使えません（組織向け設定のない公開版です）。\n"
+          "       The shared skill catalog needs the org's config.toml, which this install doesn't have.")
+    sys.exit(1)
+
+_exit_if_no_org_config()
 _reexec_with_venv()
 
 # ============================================================
