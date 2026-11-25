@@ -88,6 +88,16 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+# Windows: a PTY/pipe stdout defaults to the ANSI code page, so the
+# Japanese messages (restart notice, downgrade skip) would print as
+# mojibake or crash without this.
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except AttributeError:
+        pass
+
 # This file lives at <root>/python/scripts/setup/self_update.py, so the
 # project root is parents[3]. It used to be parents[2] (= <root>/python),
 # which made every real update fail: the Drive channel looked for
