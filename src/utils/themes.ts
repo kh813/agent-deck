@@ -39,7 +39,11 @@ export const themes: Record<string, ThemeConfig> = {
       black: "#0f172a",
       red: "#dc2626",
       green: "#16a34a",
-      yellow: "#ca8a04",
+      // Accents are dark enough to read as-is on the light background, so
+      // xterm's contrast floor never shifts their hue: Claude Code colors
+      // code with ANSI 16 colors (keywords bright blue, functions yellow,
+      // numbers green, builtins cyan -- captured 2026-11-25).
+      yellow: "#a16207",
       blue: "#2563eb",
       magenta: "#9333ea",
       cyan: "#0891b2",
@@ -54,11 +58,11 @@ export const themes: Record<string, ThemeConfig> = {
       // which made the AI's thinking look exactly like its answer.
       brightBlack: "#868d95",
       brightRed: "#ef4444",
-      brightGreen: "#22c55e",
-      brightYellow: "#eab308",
+      brightGreen: "#15803d",
+      brightYellow: "#b45309",
       brightBlue: "#3b82f6",
       brightMagenta: "#a855f7",
-      brightCyan: "#06b6d4",
+      brightCyan: "#0e7490",
       brightWhite: "#f8fafc",
     }
   },
@@ -108,11 +112,15 @@ export const themes: Record<string, ThemeConfig> = {
       // near-invisible base2.
       white: "#839496",
       brightBlack: "#93a1a1", // base1: Solarized's own secondary/comment tone
-      brightRed: "#cb4b16",
-      brightGreen: "#586e75",
-      brightYellow: "#93a1a1",
-      brightBlue: "#839496",
-      brightMagenta: "#6c71c4",
+      // Solarized's classic mapping puts its gray base tones in the bright
+      // green/yellow/blue slots, so anything colored with those (Claude
+      // Code's keywords are bright blue) came out as plain body text. Use the
+      // accent hues instead, like most modern Solarized terminal themes.
+      brightRed: "#cb4b16", // orange
+      brightGreen: "#859900",
+      brightYellow: "#b58900",
+      brightBlue: "#268bd2",
+      brightMagenta: "#6c71c4", // violet
       brightCyan: "#2aa198",
       brightWhite: "#fdf6e3",
     }
@@ -134,11 +142,15 @@ export const themes: Record<string, ThemeConfig> = {
       cyan: "#2aa198",
       white: "#eee8d5",
       brightBlack: "#586e75", // base01
-      brightRed: "#cb4b16",
-      brightGreen: "#586e75",
-      brightYellow: "#93a1a1",
-      brightBlue: "#839496",
-      brightMagenta: "#6c71c4",
+      // Solarized's classic mapping puts its gray base tones in the bright
+      // green/yellow/blue slots, so anything colored with those (Claude
+      // Code's keywords are bright blue) came out as plain body text. Use the
+      // accent hues instead, like most modern Solarized terminal themes.
+      brightRed: "#cb4b16", // orange
+      brightGreen: "#859900",
+      brightYellow: "#b58900",
+      brightBlue: "#268bd2",
+      brightMagenta: "#6c71c4", // violet
       brightCyan: "#2aa198",
       brightWhite: "#fdf6e3",
     }

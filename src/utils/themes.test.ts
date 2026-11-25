@@ -66,3 +66,56 @@ describe("secondary text (AI thinking) is visibly lighter than the answer", () =
     expect(MIN_CONTRAST_RATIO).toBeLessThan(4.5);
   });
 });
+
+// Syntax highlighting as the CLIs draw it should come through on every
+// theme. Claude Code colors code blocks with ANSI 16 colors (captured
+// 2026-11-25: keywords 94 bright blue, function names 33 yellow, numbers 32
+// green, builtins 36 cyan); agy's TUI likewise relies on the ANSI palette.
+function lab(hex: string): [number, number, number] {
+  const lin = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((v) => (v > 0.04045 ? ((v + 0.055) / 1.055) ** 2.4 : v / 12.92));
+  const [r, g, b] = lin;
+  const f = (t: number) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  const x = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 0.95047;
+  const y = r * 0.2126 + g * 0.7152 + b * 0.0722;
+  const z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 1.08883;
+  return [116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z))];
+}
+const deltaE = (a: string, b: string) => {
+  const [p, q] = [lab(a), lab(b)];
+  return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+};
+
+describe("ANSI accent colors (syntax highlighting)", () => {
+  const ACCENTS = ["red", "green", "yellow", "blue", "magenta", "cyan",
+    "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan"] as const;
+  // What Claude Code's code blocks use, in the same line next to each other.
+  const CLAUDE_CODE_SYNTAX = ["brightBlue", "yellow", "green", "cyan"] as const;
+
+  for (const [id, { terminal: t }] of Object.entries(themes)) {
+    describe(id, () => {
+      it("every accent is clearly different from plain text", () => {
+        for (const k of ACCENTS) expect(deltaE(t[k], t.foreground), k).toBeGreaterThanOrEqual(15);
+      });
+
+      it("accents are readable as designed (at most a tiny contrast-floor nudge)", () => {
+        for (const k of ACCENTS) expect(contrast(t[k], t.background), k).toBeGreaterThanOrEqual(MIN_CONTRAST_RATIO - 0.15);
+      });
+
+      it("Claude Code's keyword / function / number / builtin colors are mutually distinct", () => {
+        for (let i = 0; i < CLAUDE_CODE_SYNTAX.length; i++)
+          for (let j = i + 1; j < CLAUDE_CODE_SYNTAX.length; j++) {
+            const [a, b] = [CLAUDE_CODE_SYNTAX[i], CLAUDE_CODE_SYNTAX[j]];
+            expect(deltaE(t[a], t[b]), `${a} vs ${b}`).toBeGreaterThanOrEqual(20);
+          }
+      });
+
+      it("the six base hues are mutually distinct", () => {
+        const base = ACCENTS.slice(0, 6);
+        for (let i = 0; i < base.length; i++)
+          for (let j = i + 1; j < base.length; j++)
+            expect(deltaE(t[base[i]], t[base[j]]), `${base[i]} vs ${base[j]}`).toBeGreaterThanOrEqual(20);
+      });
+    });
+  }
+});

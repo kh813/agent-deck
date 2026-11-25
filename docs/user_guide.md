@@ -154,6 +154,10 @@ Copy a screenshot and paste it into the terminal or the input bar (`Cmd+V` on Ma
 画面の表示は日本語と英語に対応しています。通常は OS の言語設定（Windows では表示言語または地域設定のどちらかが日本語なら日本語）に合わせて自動で切り替わります。メニューの「`View` ➔ `Language / 言語`」で「日本語」「English」を固定することもできます（「Automatic (OS) / 自動」で元に戻ります）。
 The UI is available in Japanese and English. By default it follows the OS (on Windows, Japanese if either the display language or the regional format is Japanese). Pin it with `View` ➔ `Language / 言語` ("日本語" / "English"; "Automatic (OS) / 自動" goes back to following the OS).
 
+### 🎨 コードの色付け / Syntax Highlighting
+agy・Claude Code が表示するコードの色付け（キーワード・関数名・数値など）は、どのテーマでも本文と見分けられる色で表示されます（v0.2.8 で Solarized・Light テーマの配色を調整）。色合いはテーマ（`View` ➔ `Theme`）によって変わります。
+Code colors shown by agy and Claude Code (keywords, function names, numbers, ...) stay distinguishable from plain text on every theme (Solarized and Light palettes adjusted in v0.2.8). The exact hues follow the theme (`View` ➔ `Theme`).
+
 ### 💭 AI の思考過程の表示 / How AI Thinking Is Shown
 AI の思考過程（agy の考え中の要約や「Thought for …」、Claude Code の補足表示）は、回答本文より淡いグレーで表示され、目立たないようになっています。思考の詳細はどちらのエンジンも折りたたまれており、回答だけを読めば済むようになっています。
 The AI's thinking (agy's live summary and "Thought for …", Claude Code's side notes) is shown in a lighter gray than the answer, so it stays in the background. Both engines keep the detailed thinking collapsed, so you only need to read the answer.
