@@ -507,6 +507,7 @@ fn emit_output<R: tauri::Runtime>(
     broadcast_tx: &Option<tokio::sync::broadcast::Sender<crate::web_server::WsServerEvent>>,
     data: &[u8],
 ) {
+    crate::quit_guard::note_output();
     let _ = app.emit("pty-output", PtyOutputPayload { data: data.to_vec() });
     if let Some(ref tx) = broadcast_tx {
         let _ = tx.send(crate::web_server::WsServerEvent::Output(data.to_vec()));

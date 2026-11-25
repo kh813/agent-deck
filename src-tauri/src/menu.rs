@@ -130,6 +130,10 @@ pub fn build_menu(
     initial_auto_check_update: bool,
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::default(handle)?;
+    // Our own Quit (CmdOrCtrl+Q) so quitting mid-task asks first.
+    if !crate::quit_guard::install_quit_menu_item(handle, &menu)? && cfg!(any(target_os = "macos", windows)) {
+        eprintln!("[quit_guard] predefined Quit item not found; Cmd/Ctrl+Q will not ask before quitting");
+    }
 
     let items: Vec<(String, CheckMenuItem<tauri::Wry>)> = THEMES
         .iter()
@@ -332,6 +336,11 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         // CheckMenuItems toggle themselves on click; the frontend answers
         // with set_font_menu_state, which puts the right checkmarks back.
         let _ = app.emit("font-menu", action);
+        return;
+    }
+
+    if id == crate::quit_guard::QUIT_MENU_ID {
+        crate::quit_guard::request_quit(app);
         return;
     }
 

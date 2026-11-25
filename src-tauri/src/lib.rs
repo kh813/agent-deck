@@ -5,6 +5,7 @@ mod menu;
 mod self_update;
 mod root_files;
 mod cert;
+mod quit_guard;
 pub mod web_server;
 
 use pty::PtyState;
@@ -52,6 +53,17 @@ pub fn run() {
         // plus Theme and Settings submenus mirroring in-app preferences.
         .menu(|handle| menu::build_menu(handle, &config::get_app_config(None).default_theme, true))
         .on_menu_event(menu::handle_menu_event)
+        // Window close button (and Cmd+W, the only window) quits too: same
+        // "ask only while busy" rule as the Quit item (quit_guard.rs).
+        .on_window_event(|window, event| {
+            use tauri::Manager;
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if !quit_guard::exit_confirmed() && quit_guard::is_busy() {
+                    api.prevent_close();
+                    quit_guard::request_quit(window.app_handle());
+                }
+            }
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -79,6 +91,7 @@ pub fn run() {
             menu::set_theme,
             menu::set_auto_check_update,
             menu::set_font_menu_state,
+            quit_guard::set_quit_guard_busy,
             pty::force_kill_pty,
             web_server::start_web_server,
             web_server::stop_web_server,
@@ -87,8 +100,19 @@ pub fn run() {
             cert::get_ssl_configuration,
             cert::reset_ssl_to_self_signed
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Exit requests from outside our own Quit item (e.g. the Dock's
+            // Quit, the last window closing). `code` is Some only for our own
+            // app.exit() after the guard already said yes.
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                if code.is_none() && !quit_guard::exit_confirmed() && quit_guard::is_busy() {
+                    api.prevent_exit();
+                    quit_guard::request_quit(app);
+                }
+            }
+        });
 }
 
 #[cfg(test)]

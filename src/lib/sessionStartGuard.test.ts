@@ -68,3 +68,12 @@ describe("periodic update check wiring", () => {
     expect(app).toMatch(/setDismissedSelfUpdateVersion\(null\);\s*checkSelfUpdateStatus\(kind\)/);
   });
 });
+
+describe("quit guard wiring", () => {
+  const app = readFileSync(join(__dirname, "..", "App.tsx"), "utf8");
+
+  it("reports session start, self-update, engine update and install as busy", () => {
+    expect(app).toMatch(/const quitGuardBusy = isStarting \|\| isSelfUpdating \|\| isUpdating \|\| isInstalling;/);
+    expect(app).toMatch(/invoke\("set_quit_guard_busy", \{ busy: quitGuardBusy \}\)/);
+  });
+});

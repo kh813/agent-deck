@@ -562,6 +562,15 @@ function App() {
     }
   }, [selectedAgentId, agentStatuses, appConfig]);
 
+  // Quit guard (src-tauri/src/quit_guard.rs): while any of these runs,
+  // Cmd/Ctrl+Q or closing the window asks before quitting. (A working
+  // agent/skill is detected on the Rust side from terminal output.)
+  const quitGuardBusy = isStarting || isSelfUpdating || isUpdating || isInstalling;
+  useEffect(() => {
+    if (!isTauri()) return;
+    invoke("set_quit_guard_busy", { busy: quitGuardBusy }).catch(() => {});
+  }, [quitGuardBusy]);
+
   checkUpdateStatusRef.current = checkUpdateStatus;
   engineInstalledRef.current = currentAgentStatus.installed;
 

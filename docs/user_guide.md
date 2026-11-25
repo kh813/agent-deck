@@ -150,6 +150,10 @@ Use the **Font** menu in the menu bar to change the terminal's font and size (ap
 ### ⚡ セッションの強制終了 (SIGKILL) / Force Kill Session
 エージェントの処理がフリーズしたり無限ループに陥った場合は、画面上部のメニューバーから「`Session` ➔ `Force Kill Session`」を選択することで、実行中のプロセスグループ（子プロセスや孫プロセスを含む）を完全に強制終了させ、即座にチャット入力を受け付ける状態に戻すことができます。
 
+### 終了時の確認 / Confirmation on Quit (v0.2.8+)
+スキルの実行中やエージェントの応答中（画面が動いている間）、またはアップデート・インストール中に `Cmd+Q`（Windows は `Ctrl+Q`）を押したりウィンドウを閉じたりすると、「本当に終了しますか？」と確認されます。入力待ちで止まっているときは確認なしで終了します。
+While a skill is running or the agent is responding (the screen is updating), or during an update/install, pressing `Cmd+Q` (`Ctrl+Q` on Windows) or closing the window asks "Quit anyway?" first. When the agent is idle at its prompt, it quits right away.
+
 ---
 
 ## 3. スキルの使い方 / How to Use Skills
