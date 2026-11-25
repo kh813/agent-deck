@@ -143,6 +143,41 @@ def _installed_tag(dest_name: str) -> str:
     return ""
 
 
+# ── Version ordering ──────────────────────────────────────────
+#
+# "Different from what's installed" is not "newer": on a 0.2.8-rc build,
+# the stable channel's 0.2.7 is older, yet an inequality check offered it as
+# an update and installed it (a downgrade -- confirmed for real 2026-11-25).
+# Updates are offered/applied only when strictly newer; a prerelease sorts
+# before the release of the same number (0.2.8-rc4 < 0.2.8).
+
+import re as _re
+
+_VERSION_RE = _re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$")
+
+
+def parse_version(s: str):
+    """Sort key for "v0.2.8", "0.2.8-rc4", "v1.0.0-test2"; None if unparseable."""
+    m = _VERSION_RE.match((s or "").strip())
+    if not m:
+        return None
+    major, minor, patch, pre = int(m[1]), int(m[2]), int(m[3]), m[4]
+    if pre is None:
+        return (major, minor, patch, 1, "", 0)
+    num = _re.search(r"(\d+)$", pre)
+    return (major, minor, patch, 0, pre[: num.start()] if num else pre, int(num[1]) if num else 0)
+
+
+def is_newer(latest: str, current: str) -> bool:
+    """True if `latest` is a newer version than `current`. When either isn't
+    a version string (e.g. an old Drive file known only by its timestamp),
+    falls back to the old "different means newer" rule."""
+    a, b = parse_version(latest), parse_version(current)
+    if a is None or b is None:
+        return bool(latest) and latest != current
+    return a > b
+
+
 def _fetch_latest_release() -> dict:
     req = urllib.request.Request(
         _API_LATEST, headers={"Accept": "application/vnd.github+json"}
@@ -171,13 +206,16 @@ def _fetch_release(channel: str) -> dict:
     return _fetch_latest_prerelease() if channel == "test" else _fetch_latest_release()
 
 
-def check(channel: str = "prod") -> tuple[bool, str, str]:
+def check(channel: str = "prod", current: str = "") -> tuple[bool, str, str]:
     """Return (update_available, installed_tag, latest_tag) for the given
-    channel ("prod" = latest stable release, "test" = latest pre-release)."""
+    channel ("prod" = latest stable release, "test" = latest pre-release).
+    `current` = the running app's version (the app passes it); without it,
+    the install's version marker is used."""
     release = _fetch_release(channel)
     latest_tag = release["tag_name"]
-    installed_tag = _installed_tag(_dest_name())
-    return (installed_tag != latest_tag, installed_tag, latest_tag)
+    installed_tag = current or _installed_tag(_dest_name())
+    available = is_newer(latest_tag, installed_tag) if installed_tag else True
+    return (available, installed_tag, latest_tag)
 
 
 def _normalize_sh_to_lf(target: Path) -> None:
@@ -299,14 +337,25 @@ def _atomic_swap(new_dest: Path, dest: Path) -> None:
     shutil.move(str(new_dest), str(dest))
 
 
-def apply(channel: str = "prod") -> None:
+def _refuse_downgrade(latest: str, current: str) -> bool:
+    """Print why and return True if installing `latest` would not move forward."""
+    if not current or not latest or is_newer(latest, current):
+        return False
+    if parse_version(latest) == parse_version(current) or latest == current:
+        print(f"  Already up to date: {current}")
+    else:
+        print(f"  [SKIP] お使いの {current} は配布版 {latest} より新しいため、更新しません。")
+        print(f"  [SKIP] The installed {current} is newer than {latest}; not downgrading.")
+    return True
+
+
+def apply(channel: str = "prod", current: str = "") -> None:
     release = _fetch_release(channel)
     latest_tag = release["tag_name"]
     dest_name = _dest_name()
-    installed_tag = _installed_tag(dest_name)
+    installed_tag = current or _installed_tag(dest_name)
 
-    if installed_tag == latest_tag:
-        print(f"  Already up to date: {dest_name} ({latest_tag})")
+    if _refuse_downgrade(latest_tag, installed_tag):
         return
 
     asset_name = _asset_name()
@@ -464,7 +513,10 @@ def _get_drive_service(interactive: bool = True):
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def check_drive(file_id: str, interactive: bool = True) -> tuple[bool, str, str]:
+DRIVE_VERSION_PROPERTY = "agentDeckVersion"
+
+
+def check_drive(file_id: str, interactive: bool = True, current: str = "") -> tuple[bool, str, str]:
     """Return (update_available, installed_marker, latest_marker) for the
     org's Drive-hosted, config-bundled distribution ZIP. Uses the Drive
     file's modifiedTime as the "version" -- there's no release tag for a
@@ -472,9 +524,14 @@ def check_drive(file_id: str, interactive: bool = True) -> tuple[bool, str, str]
     every --test/--prod run."""
     service = _get_drive_service(interactive=interactive)
     meta = service.files().get(
-        fileId=file_id, fields="modifiedTime", supportsAllDrives=True
+        fileId=file_id, fields="modifiedTime,appProperties", supportsAllDrives=True
     ).execute()
     latest_modified = meta["modifiedTime"]
+    # package_release.py records the release tag on the Drive file (since
+    # 2026-11-25); with it and the app's own version, compare versions.
+    latest_version = (meta.get("appProperties") or {}).get(DRIVE_VERSION_PROPERTY, "")
+    if latest_version and current:
+        return (is_newer(latest_version, current), current, latest_version)
 
     marker = _drive_marker_path(_dest_name())
     installed_modified = ""
@@ -499,12 +556,15 @@ def _download_drive_media(service, file_id: str, dest_path: Path) -> None:
             _, done = downloader.next_chunk()
 
 
-def apply_drive(file_id: str) -> None:
+def apply_drive(file_id: str, current: str = "") -> None:
     service = _get_drive_service()
     meta = service.files().get(
-        fileId=file_id, fields="modifiedTime", supportsAllDrives=True
+        fileId=file_id, fields="modifiedTime,appProperties", supportsAllDrives=True
     ).execute()
     latest_modified = meta["modifiedTime"]
+    latest_version = (meta.get("appProperties") or {}).get(DRIVE_VERSION_PROPERTY, "")
+    if latest_version and _refuse_downgrade(latest_version, current):
+        return
 
     dest_name = _dest_name()
     dest = PROJECT_ROOT / dest_name
@@ -551,7 +611,7 @@ def apply_drive(file_id: str) -> None:
 
 
 def _usage():
-    print("Usage: self_update.py [check|apply] [--test] [--json] [--background] [--drive-file-id ID]")
+    print("Usage: self_update.py [check|apply] [--test] [--json] [--background] [--drive-file-id ID] [--current-version V]")
     sys.exit(1)
 
 
@@ -570,6 +630,12 @@ if __name__ == "__main__":
         drive_file_id = rest[idx + 1]
 
     channel = "test" if "--test" in rest else "prod"
+    # The running app's own version (the app passes it): lets check/apply
+    # compare versions instead of trusting the install marker.
+    current_version = ""
+    if "--current-version" in rest:
+        idx = rest.index("--current-version")
+        current_version = rest[idx + 1] if idx + 1 < len(rest) else ""
     # --background: the app's periodic check. Never interactive (no browser
     # login), and any failure (offline, auth missing) is a quiet exit 3 --
     # the app treats it as "no update this time" and tries again later.
@@ -578,10 +644,10 @@ if __name__ == "__main__":
     if cmd == "check" and background:
         try:
             if drive_file_id:
-                available, installed, latest = check_drive(drive_file_id, interactive=False)
+                available, installed, latest = check_drive(drive_file_id, interactive=False, current=current_version)
                 label = "org"
             else:
-                available, installed, latest = check(channel)
+                available, installed, latest = check(channel, current=current_version)
                 label = channel
         except BaseException as e:  # incl. SystemExit from helpers
             if isinstance(e, KeyboardInterrupt):
@@ -596,10 +662,10 @@ if __name__ == "__main__":
         }))
     elif cmd == "check":
         if drive_file_id:
-            available, installed, latest = check_drive(drive_file_id)
+            available, installed, latest = check_drive(drive_file_id, current=current_version)
             label = "org"
         else:
-            available, installed, latest = check(channel)
+            available, installed, latest = check(channel, current=current_version)
             label = channel
         if "--json" in rest:
             print(json.dumps({
@@ -614,8 +680,8 @@ if __name__ == "__main__":
             print(f"Already up to date ({label}): {latest}")
     elif cmd == "apply":
         if drive_file_id:
-            apply_drive(drive_file_id)
+            apply_drive(drive_file_id, current=current_version)
         else:
-            apply(channel)
+            apply(channel, current=current_version)
     else:
         _usage()

@@ -725,7 +725,7 @@ def _background_cli(tmp_path, body: str):
 
 class TestBackgroundCli:
     def test_offline_is_quiet_exit_3_with_json(self, tmp_path):
-        script = _background_cli(tmp_path, "def check(channel='prod'):\n    raise OSError('offline')\n")
+        script = _background_cli(tmp_path, "def check(channel='prod', current=''):\n    raise OSError('offline')\n")
         r = subprocess.run([sys.executable, "-I", str(script), "check", "--json", "--background"],
                            capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert r.returncode == 3
@@ -736,7 +736,7 @@ class TestBackgroundCli:
         script = _background_cli(tmp_path, textwrap_dedent('''
             def _reexec_with_venv_for_drive_mode():
                 pass
-            def check_drive(file_id, interactive=True):
+            def check_drive(file_id, interactive=True, current=''):
                 assert interactive is False
                 raise AuthRequired("no saved Drive authorization")
         '''))
@@ -746,7 +746,7 @@ class TestBackgroundCli:
         assert json.loads(r.stdout.strip().splitlines()[-1])["error"] == "AuthRequired"
 
     def test_update_available_is_reported(self, tmp_path):
-        script = _background_cli(tmp_path, "def check(channel='prod'):\n    return (True, 'v0.2.6', 'v0.2.7')\n")
+        script = _background_cli(tmp_path, "def check(channel='prod', current=''):\n    return (True, 'v0.2.6', 'v0.2.7')\n")
         r = subprocess.run([sys.executable, "-I", str(script), "check", "--json", "--background"],
                            capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert r.returncode == 0, r.stderr
@@ -755,9 +755,9 @@ class TestBackgroundCli:
 
     def test_background_never_applies(self, tmp_path):
         script = _background_cli(tmp_path, textwrap_dedent('''
-            def check(channel='prod'):
+            def check(channel='prod', current=''):
                 return (True, 'v0.2.6', 'v0.2.7')
-            def apply(channel='prod'):
+            def apply(channel='prod', current=''):
                 raise SystemExit(99)
         '''))
         r = subprocess.run([sys.executable, "-I", str(script), "check", "--json", "--background"],
@@ -773,7 +773,7 @@ def textwrap_dedent(s):
 class TestBackgroundChannel:
     def test_background_test_flag_checks_the_test_channel(self, tmp_path):
         script = _background_cli(tmp_path, textwrap_dedent('''
-            def check(channel='prod'):
+            def check(channel='prod', current=''):
                 return (True, 'v0.2.8-rc1', 'v0.2.8-rc2' if channel == 'test' else 'v0.2.7')
         '''))
         r = subprocess.run([sys.executable, "-I", str(script), "check", "--json", "--background", "--test"],
@@ -784,10 +784,118 @@ class TestBackgroundChannel:
 
     def test_background_without_test_flag_checks_stable(self, tmp_path):
         script = _background_cli(tmp_path, textwrap_dedent('''
-            def check(channel='prod'):
+            def check(channel='prod', current=''):
                 return (True, 'v0.2.6', 'v0.2.8-rc2' if channel == 'test' else 'v0.2.7')
         '''))
         r = subprocess.run([sys.executable, "-I", str(script), "check", "--json", "--background"],
                            capture_output=True, text=True, encoding="utf-8", timeout=60)
         out = json.loads(r.stdout.strip().splitlines()[-1])
         assert out["channel"] == "prod" and out["latest_tag"] == "v0.2.7"
+
+
+# ── Version ordering: never offer/apply an older build (2026-11-25: a
+# 0.2.8-rc install "updated" to 0.2.7 because "different" counted as "newer").
+
+class TestVersionOrdering:
+    @pytest.mark.parametrize("newer,older", [
+        ("v0.2.8", "v0.2.7"),
+        ("v0.2.8", "0.2.8-rc4"),        # release > its own prerelease
+        ("v0.2.8-rc4", "v0.2.8-rc3"),
+        ("v0.2.8-rc10", "v0.2.8-rc9"),  # numeric, not lexical
+        ("v0.2.8-rc1", "v0.2.7"),
+        ("v0.10.0", "v0.9.9"),
+        ("v1.0.0", "v0.99.99"),
+    ])
+    def test_is_newer(self, newer, older):
+        assert su.is_newer(newer, older)
+        assert not su.is_newer(older, newer)
+
+    def test_same_version_is_not_newer(self):
+        assert not su.is_newer("v0.2.8-rc4", "0.2.8-rc4")  # v prefix doesn't matter
+        assert not su.is_newer("v0.2.7", "v0.2.7+rebrand.1")
+
+    def test_unparseable_falls_back_to_inequality(self):
+        assert su.is_newer("2026-11-25T00:00:00Z", "2026-11-24T00:00:00Z")
+        assert not su.is_newer("x", "x")
+        assert not su.is_newer("", "v0.2.7")
+
+    def test_stable_check_from_a_newer_rc_offers_nothing(self, project_root, monkeypatch):
+        monkeypatch.setattr(su, "_fetch_latest_release", lambda: _fake_release("v0.2.7"))
+        available, installed, latest = su.check("prod", current="0.2.8-rc4")
+        assert (available, installed, latest) == (False, "0.2.8-rc4", "v0.2.7")
+
+    def test_stable_release_after_rc_is_offered(self, project_root, monkeypatch):
+        monkeypatch.setattr(su, "_fetch_latest_release", lambda: _fake_release("v0.2.8"))
+        assert su.check("prod", current="0.2.8-rc4")[0] is True
+
+    def test_apply_refuses_a_downgrade(self, project_root, monkeypatch, capsys):
+        monkeypatch.setattr(su, "_fetch_latest_release", lambda: _fake_release("v0.2.7"))
+        monkeypatch.setattr(su, "_download", lambda *a, **k: pytest.fail("must not download"), raising=False)
+        monkeypatch.setattr(su, "_atomic_swap", lambda *a, **k: pytest.fail("must not swap"))
+        su.apply("prod", current="0.2.8-rc4")
+        out = capsys.readouterr().out
+        assert "not downgrading" in out and "0.2.8-rc4" in out
+
+    def test_apply_same_version_is_up_to_date(self, project_root, monkeypatch, capsys):
+        monkeypatch.setattr(su, "_fetch_latest_release", lambda: _fake_release("v0.2.7"))
+        monkeypatch.setattr(su, "_atomic_swap", lambda *a, **k: pytest.fail("must not swap"))
+        su.apply("prod", current="0.2.7")
+        assert "Already up to date" in capsys.readouterr().out
+
+
+class _VersionedDriveFiles:
+    def __init__(self, modified, version):
+        self.meta = {"modifiedTime": modified}
+        if version:
+            self.meta["appProperties"] = {su.DRIVE_VERSION_PROPERTY: version}
+        self.downloaded = False
+
+    def get(self, **kw):
+        meta = self.meta
+
+        class _Req:
+            def execute(self_inner):
+                return meta
+        return _Req()
+
+    def get_media(self, **kw):
+        self.downloaded = True
+        raise AssertionError("must not download")
+
+
+class _VersionedDrive:
+    def __init__(self, modified, version):
+        self._f = _VersionedDriveFiles(modified, version)
+
+    def files(self):
+        return self._f
+
+
+class TestDriveVersions:
+    def test_check_drive_compares_versions_when_recorded(self, project_root, monkeypatch):
+        monkeypatch.setattr(su, "_get_drive_service", lambda **kw: _VersionedDrive("2026-11-25T00:00:00Z", "v0.2.7"))
+        assert su.check_drive("F", current="0.2.8-rc4") == (False, "0.2.8-rc4", "v0.2.7")
+        assert su.check_drive("F", current="0.2.6")[0] is True
+
+    def test_check_drive_without_recorded_version_keeps_timestamp_rule(self, project_root, monkeypatch):
+        monkeypatch.setattr(su, "_get_drive_service", lambda **kw: _VersionedDrive("2026-11-25T00:00:00Z", ""))
+        available, _, latest = su.check_drive("F", current="0.2.8-rc4")
+        assert available is True and latest == "2026-11-25T00:00:00Z"
+
+    def test_apply_drive_refuses_a_downgrade(self, project_root, monkeypatch, capsys):
+        drive = _VersionedDrive("2026-11-25T00:00:00Z", "v0.2.7")
+        monkeypatch.setattr(su, "_get_drive_service", lambda **kw: drive)
+        su.apply_drive("F", current="0.2.8-rc4")
+        assert not drive._f.downloaded
+        assert "not downgrading" in capsys.readouterr().out
+
+    def test_cli_passes_current_version(self, tmp_path):
+        script = _background_cli(tmp_path, textwrap_dedent('''
+            def _fetch_latest_release():
+                return {"tag_name": "v0.2.7", "assets": []}
+        '''))
+        r = subprocess.run([sys.executable, "-I", str(script), "check", "--json", "--background",
+                            "--current-version", "0.2.8-rc4"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        assert out["update_available"] is False and out["installed_tag"] == "0.2.8-rc4"

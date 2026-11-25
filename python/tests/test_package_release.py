@@ -265,3 +265,29 @@ class TestBundleCatalogSkills:
         out_zip = pr.build_package("prod", tmp_path, config_toml=fake_org_config, bundle_skills=hook)
         with zipfile.ZipFile(out_zip) as zf:
             assert "python/skills-catalog/org-a/SKILL.md" in zf.namelist()
+
+
+def test_upload_records_the_release_tag_on_the_drive_file():
+    """Installs compare this recorded version with their own instead of only
+    the file's timestamp, so an older build is never offered as an update."""
+    meta = pr.version_metadata("v0.2.8-rc4")
+    assert meta["appProperties"] == {pr.su.DRIVE_VERSION_PROPERTY: "v0.2.8-rc4"}
+    assert "v0.2.8-rc4" in meta["description"]
+
+
+def test_main_uploads_with_the_built_release_tag(monkeypatch, tmp_path):
+    calls = {}
+    monkeypatch.setattr(pr, "ORG_RELEASE_PROD_FILE_ID", "PROD")
+    monkeypatch.setattr(pr.su, "_fetch_release", lambda ch: {"tag_name": "v9.9.9", "assets": []})
+
+    def fake_build(channel, staging, bundle_skills=None, release=None, **kw):
+        calls["release"] = release
+        z = tmp_path / "out.zip"
+        z.write_bytes(b"zip")
+        return z
+    monkeypatch.setattr(pr, "build_package", fake_build)
+    monkeypatch.setattr(pr, "upload", lambda z, fid, tag="": calls.update(fid=fid, tag=tag))
+    monkeypatch.setattr(pr.sys, "argv", ["package_release.py", "--prod", "--no-catalog-skills"])
+    pr.main()
+    assert calls["release"]["tag_name"] == "v9.9.9"
+    assert calls["fid"] == "PROD" and calls["tag"] == "v9.9.9"

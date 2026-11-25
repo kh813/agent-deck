@@ -161,7 +161,7 @@ def bundle_catalog_skills(merged: Path, service=None) -> list:
 
 
 def build_package(channel: str, staging: Path, config_toml: Path = None,
-                  bundle_skills=None) -> Path:
+                  bundle_skills=None, release: dict = None) -> Path:
     """Download both platform release ZIPs for `channel`, merge them into a
     single flat tree, drop in `config_toml` (defaults to this project's own
     config.toml), and zip it up. Returns the path to the built ZIP.
@@ -172,7 +172,7 @@ def build_package(channel: str, staging: Path, config_toml: Path = None,
     overwrite, not a real merge conflict -- only the platform-specific
     bundle/exe and preflight.sh/.bat actually differ between them.
     """
-    release = su._fetch_release(channel)
+    release = release or su._fetch_release(channel)
     tag = release["tag_name"]
     print(f"  Resolved {channel} tag: {tag}")
 
@@ -271,13 +271,22 @@ def _get_service():
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def upload(zip_path: Path, file_id: str) -> None:
+def version_metadata(tag: str) -> dict:
+    """Drive metadata recording which release a channel file holds, so
+    installs can compare versions instead of only timestamps (self_update.py
+    check_drive / apply_drive; prevents offering an older build as an
+    update)."""
+    return {"appProperties": {su.DRIVE_VERSION_PROPERTY: tag}, "description": f"agent-deck {tag}"}
+
+
+def upload(zip_path: Path, file_id: str, tag: str = "") -> None:
     from googleapiclient.http import MediaFileUpload
     size_kb = zip_path.stat().st_size / 1024
     print(f"  Uploading {zip_path.name} ({size_kb:.1f} KB) ...")
     service = _get_service()
     media = MediaFileUpload(str(zip_path), mimetype="application/zip", resumable=True)
-    service.files().update(fileId=file_id, media_body=media, supportsAllDrives=True).execute()
+    service.files().update(fileId=file_id, media_body=media, body=version_metadata(tag) if tag else None,
+                           supportsAllDrives=True).execute()
 
 
 def main():
@@ -298,11 +307,13 @@ def main():
         print(f"[ERROR] Set [drive] org_release_{channel}_file_id in config.toml.")
         sys.exit(1)
 
+    release = su._fetch_release(channel)
     with tempfile.TemporaryDirectory() as tmp:
         out_zip = build_package(
             channel, Path(tmp),
-            bundle_skills=None if args.no_catalog_skills else bundle_catalog_skills)
-        upload(out_zip, file_id)
+            bundle_skills=None if args.no_catalog_skills else bundle_catalog_skills,
+            release=release)
+        upload(out_zip, file_id, tag=release["tag_name"])
 
     print("✓ アップロード完了 / Upload complete")
     print(f"  https://drive.google.com/file/d/{file_id}/view")

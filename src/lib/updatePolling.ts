@@ -127,3 +127,11 @@ export function shouldApplyBackgroundResult(
 export function isUpdateBannerVisible(status: UpdateStatusLike, dismissedVersion: string | null): boolean {
   return status.update_available && (dismissedVersion === null || status.latest_version !== dismissedVersion);
 }
+
+/** A check that found no update because what's installed is newer than the
+ *  channel's latest (e.g. "Update to Latest..." on a test build). */
+export function isNewerInstalled(s: UpdateStatusLike): boolean {
+  const norm = (v: string | null) => (v ?? "").replace(/^v/, "").split("+")[0];
+  return !s.update_available && !!s.latest_version && !!s.current_version &&
+    /^v?\d+\.\d+\.\d+/.test(s.latest_version) && norm(s.latest_version) !== norm(s.current_version);
+}

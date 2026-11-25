@@ -117,7 +117,15 @@ pub(crate) fn check_args(kind: &str, drive_file_id: Option<&str>, background: bo
         args.push("--drive-file-id".to_string());
         args.push(drive_file_id?.to_string());
     }
+    args.extend(current_version_args());
     Some(args)
+}
+
+/// The running app's version, so self_update.py compares versions (never
+/// offering or installing an older build -- 2026-11-25 a 0.2.8-rc install
+/// "updated" to 0.2.7) instead of trusting only its install marker.
+pub(crate) fn current_version_args() -> [String; 2] {
+    ["--current-version".to_string(), env!("CARGO_PKG_VERSION").to_string()]
 }
 
 pub fn check_self_update_internal(kind: &str, background: bool) -> Result<UpdateStatus, String> {
@@ -191,6 +199,7 @@ pub fn get_self_update_command_internal(kind: &str) -> Result<InstallCommand, St
         args.push("--drive-file-id".to_string());
         args.push(file_id);
     }
+    args.extend(current_version_args());
     Ok(InstallCommand {
         command: python_bin().to_string(),
         args,
@@ -251,33 +260,39 @@ mod tests {
 
     #[test]
     fn test_check_args_github_test_and_none() {
-        assert_eq!(check_args("github-test", None, true).unwrap(), vec!["check", "--json", "--background", "--test"]);
+        assert_eq!(
+            check_args("github-test", None, true).unwrap(),
+            vec!["check", "--json", "--background", "--test", "--current-version", env!("CARGO_PKG_VERSION")]
+        );
         assert!(check_args("none", None, true).is_none());
     }
 
     #[test]
     fn test_apply_command_for_github_test() {
+        let v = env!("CARGO_PKG_VERSION");
         let c = get_self_update_command_internal("github-test").unwrap();
-        assert_eq!(&c.args[1..], ["apply", "--test"]);
+        assert_eq!(&c.args[1..], ["apply", "--test", "--current-version", v]);
         let c = get_self_update_command_internal("github").unwrap();
-        assert_eq!(&c.args[1..], ["apply"]);
+        assert_eq!(&c.args[1..], ["apply", "--current-version", v]);
     }
 
     #[test]
     fn test_check_args_github() {
-        assert_eq!(check_args("github", None, false).unwrap(), vec!["check", "--json"]);
-        assert_eq!(check_args("github", None, true).unwrap(), vec!["check", "--json", "--background"]);
+        let v = env!("CARGO_PKG_VERSION");
+        assert_eq!(check_args("github", None, false).unwrap(), vec!["check", "--json", "--current-version", v]);
+        assert_eq!(check_args("github", None, true).unwrap(), vec!["check", "--json", "--background", "--current-version", v]);
     }
 
     #[test]
     fn test_check_args_org_includes_file_id() {
+        let v = env!("CARGO_PKG_VERSION");
         assert_eq!(
             check_args("org-prod", Some("F1"), true).unwrap(),
-            vec!["check", "--json", "--background", "--drive-file-id", "F1"]
+            vec!["check", "--json", "--background", "--drive-file-id", "F1", "--current-version", v]
         );
         assert_eq!(
             check_args("org-test", Some("T1"), false).unwrap(),
-            vec!["check", "--json", "--drive-file-id", "T1"]
+            vec!["check", "--json", "--drive-file-id", "T1", "--current-version", v]
         );
     }
 

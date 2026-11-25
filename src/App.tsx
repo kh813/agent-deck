@@ -13,7 +13,7 @@ import { Lang, translations } from "./utils/i18n";
 import { isTauri, webClient } from "./lib/webClient";
 import "./App.css";
 import { loadSavedEngine, pickEngine, saveEngine } from "./lib/engineSelection";
-import { isTestKind, isUpdateBannerVisible, lastCheckStore, shouldApplyBackgroundResult, startUpdatePolling, type BackgroundKind, type SelfUpdateKind } from "./lib/updatePolling";
+import { isNewerInstalled, isTestKind, isUpdateBannerVisible, lastCheckStore, shouldApplyBackgroundResult, startUpdatePolling, type BackgroundKind, type SelfUpdateKind } from "./lib/updatePolling";
 import { baseName, pickImageFile, promptTextForPaths, saveClipboardImage, saveImageBlob } from "./lib/imageAttach";
 import { loadLangChoice, parseLangChoice, resolveLang, saveLangChoice, setCurrentLang, type LangChoice } from "./lib/language";
 import { stopAndWaitForExit } from "./lib/ptyHandover";
@@ -495,6 +495,12 @@ function App() {
         setDismissedSelfUpdateVersion(null);
         checkSelfUpdateStatus(kind).then((res) => {
           if (res && !res.update_available) {
+            // e.g. "Update to Latest..." on a newer test build: say so
+            // rather than a bare "up to date" (and never downgrade).
+            if (isNewerInstalled(res)) {
+              alert(t("selfUpdateNewerInstalled").replace("{current}", res.current_version || "").replace("{latest}", res.latest_version || ""));
+              return;
+            }
             alert(t("selfUpdateUpToDate"));
           }
         });

@@ -6,6 +6,7 @@ import {
   TICK_MS,
   isCheckDue,
   lastCheckStore,
+  isNewerInstalled,
   isTestKind,
   isUpdateBannerVisible,
   shouldApplyBackgroundResult,
@@ -202,5 +203,18 @@ describe("isUpdateBannerVisible", () => {
   it("'Later' hides that version only; a newer one shows again", () => {
     expect(isUpdateBannerVisible(avail("v0.2.7"), "v0.2.7")).toBe(false);
     expect(isUpdateBannerVisible(avail("v0.2.8"), "v0.2.7")).toBe(true);
+  });
+});
+
+describe("isNewerInstalled", () => {
+  const st = (c: string | null, l: string | null, a = false) => ({ current_version: c, latest_version: l, update_available: a });
+  it("a test build checking the stable channel", () => {
+    expect(isNewerInstalled(st("0.2.8-rc4", "v0.2.7"))).toBe(true);
+  });
+  it("not when up to date, when an update exists, or for timestamp-only answers", () => {
+    expect(isNewerInstalled(st("0.2.7", "v0.2.7"))).toBe(false);
+    expect(isNewerInstalled(st("0.2.7", "v0.2.8", true))).toBe(false);
+    expect(isNewerInstalled(st("", "2026-11-25T00:00:00Z"))).toBe(false);
+    expect(isNewerInstalled(st(null, null))).toBe(false);
   });
 });
