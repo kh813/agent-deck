@@ -37,3 +37,34 @@ describe("session start guard wiring", () => {
     expect(app).not.toMatch(/startSessionOnce/);
   });
 });
+
+describe("periodic update check wiring", () => {
+  const app = readFileSync(join(__dirname, "..", "App.tsx"), "utf8");
+
+  it("App starts the poller, gated on the auto-check setting", () => {
+    expect(app).toMatch(/if \(!isTauri\(\) \|\| !autoCheckUpdate\) return;\s*return startUpdatePolling\(/);
+  });
+
+  it("the background check asks self_update for a non-interactive check", () => {
+    expect(app).toMatch(/invoke<UpdateStatus>\("check_self_update", \{ kind, background: true \}\)/);
+    expect(app).toMatch(/invoke<[^>]*>\("default_self_update_kind"\)/);
+  });
+
+  it("the background check never starts an update by itself", () => {
+    const start = app.indexOf("return startUpdatePolling(");
+    const poll = app.slice(start, app.indexOf("}, [autoCheckUpdate]);", start));
+    expect(start).toBeGreaterThan(0);
+    expect(poll).not.toMatch(/handleUpdateSelf|get_self_update_command|start_pty/);
+    expect(poll).toMatch(/shouldApplyBackgroundResult\(/);
+  });
+
+  it("the banner uses the Later-aware visibility and has both buttons", () => {
+    expect(app).toMatch(/isUpdateBannerVisible\(selfUpdateStatus, dismissedSelfUpdateVersion\)/);
+    expect(app).toMatch(/onClick=\{handleUpdateSelf\}/);
+    expect(app).toMatch(/setDismissedSelfUpdateVersion\(selfUpdateStatus\.latest_version\)/);
+  });
+
+  it("an explicit menu check clears a previous Later", () => {
+    expect(app).toMatch(/setDismissedSelfUpdateVersion\(null\);\s*checkSelfUpdateStatus\(kind\)/);
+  });
+});

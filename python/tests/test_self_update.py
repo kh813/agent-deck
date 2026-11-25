@@ -513,14 +513,14 @@ class TestDriveChannel:
     since there's no release tag for a single mutable file."""
 
     def test_check_drive_reports_available_when_no_marker(self, project_root, monkeypatch):
-        monkeypatch.setattr(su, "_get_drive_service", lambda: _FakeDriveService("2026-07-23T00:00:00Z"))
+        monkeypatch.setattr(su, "_get_drive_service", lambda **kw: _FakeDriveService("2026-07-23T00:00:00Z"))
         available, installed, latest = su.check_drive("file-123")
         assert available is True
         assert installed == ""
         assert latest == "2026-07-23T00:00:00Z"
 
     def test_check_drive_reports_up_to_date_when_marker_matches(self, project_root, monkeypatch):
-        monkeypatch.setattr(su, "_get_drive_service", lambda: _FakeDriveService("2026-07-23T00:00:00Z"))
+        monkeypatch.setattr(su, "_get_drive_service", lambda **kw: _FakeDriveService("2026-07-23T00:00:00Z"))
         su._drive_marker_path(_dest_name()).write_text(
             '{"file_id": "file-123", "modifiedTime": "2026-07-23T00:00:00Z"}'
         )
@@ -531,7 +531,7 @@ class TestDriveChannel:
         """Switching from org-test to org-prod (different Drive file IDs)
         must not be mistaken for "already up to date" just because some
         other file's marker happens to be sitting there."""
-        monkeypatch.setattr(su, "_get_drive_service", lambda: _FakeDriveService("2026-07-23T00:00:00Z"))
+        monkeypatch.setattr(su, "_get_drive_service", lambda **kw: _FakeDriveService("2026-07-23T00:00:00Z"))
         su._drive_marker_path(_dest_name()).write_text(
             '{"file_id": "other-file-id", "modifiedTime": "2026-07-23T00:00:00Z"}'
         )
@@ -541,7 +541,7 @@ class TestDriveChannel:
 
     def test_apply_drive_installs_and_merges_config_toml(self, project_root, monkeypatch):
         monkeypatch.setattr(su.sys, "platform", "darwin")
-        monkeypatch.setattr(su, "_get_drive_service", lambda: _FakeDriveService("2026-07-23T00:00:00Z"))
+        monkeypatch.setattr(su, "_get_drive_service", lambda **kw: _FakeDriveService("2026-07-23T00:00:00Z"))
 
         def fake_download(service, file_id, dest_path):
             zf_path = _make_fake_zip_for_drive(dest_path)
@@ -629,3 +629,142 @@ def test_restart_notice_is_plain_when_not_a_terminal(monkeypatch, capsys):
     su._print_restart_notice()
     out = capsys.readouterr().out
     assert "\033[" not in out and "Close agent-deck" in out
+
+
+# ── background check (the app's periodic update check) ───────────────
+#
+# Must never open a browser login out of nowhere, and must never fail
+# loudly: offline / no auth / bad response -> quiet exit 3 + JSON.
+
+def _install_fake_google(monkeypatch, creds):
+    import types
+    mods = {}
+    cred_mod = types.ModuleType("google.oauth2.credentials")
+    cred_mod.Credentials = types.SimpleNamespace(from_authorized_user_file=lambda *a, **k: creds)
+    flow_mod = types.ModuleType("google_auth_oauthlib.flow")
+
+    class _Flow:
+        @staticmethod
+        def from_client_config(*a, **k):
+            raise AssertionError("interactive login flow must not start in background mode")
+    flow_mod.InstalledAppFlow = _Flow
+    req_mod = types.ModuleType("google.auth.transport.requests")
+    req_mod.Request = lambda: None
+    disc_mod = types.ModuleType("googleapiclient.discovery")
+    disc_mod.build = lambda *a, **k: "SERVICE"
+    cfg = types.ModuleType("config")
+    cfg.OAUTH_CLIENT_ID = cfg.OAUTH_CLIENT_SECRET = "x"
+    cfg.USER_EMAIL = ""
+    auth = types.ModuleType("scripts.auth")
+    auth.run_auth_flow = lambda *a, **k: (_ for _ in ()).throw(AssertionError("no login in background"))
+    for name, mod in {
+        "google": types.ModuleType("google"), "google.oauth2": types.ModuleType("google.oauth2"),
+        "google.oauth2.credentials": cred_mod, "google_auth_oauthlib": types.ModuleType("google_auth_oauthlib"),
+        "google_auth_oauthlib.flow": flow_mod, "google.auth": types.ModuleType("google.auth"),
+        "google.auth.transport": types.ModuleType("google.auth.transport"),
+        "google.auth.transport.requests": req_mod, "googleapiclient": types.ModuleType("googleapiclient"),
+        "googleapiclient.discovery": disc_mod, "config": cfg,
+        "scripts": types.ModuleType("scripts"), "scripts.auth": auth,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+
+
+class TestBackgroundCheck:
+    def test_no_saved_token_raises_auth_required_without_login(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(su.Path, "home", classmethod(lambda cls: tmp_path))
+        _install_fake_google(monkeypatch, creds=None)
+        with pytest.raises(su.AuthRequired):
+            su._get_drive_service(interactive=False)
+
+    def test_failed_refresh_raises_auth_required(self, monkeypatch, tmp_path):
+        import types
+        (tmp_path / ".gemini").mkdir()
+        (tmp_path / ".gemini" / "agent_ui_library_token.json").write_text("{}")
+        monkeypatch.setattr(su.Path, "home", classmethod(lambda cls: tmp_path))
+
+        def boom(_req):
+            raise RuntimeError("invalid_grant")
+        creds = types.SimpleNamespace(valid=False, expired=True, refresh_token="r", refresh=boom)
+        _install_fake_google(monkeypatch, creds=creds)
+        with pytest.raises(su.AuthRequired):
+            su._get_drive_service(interactive=False)
+
+    def test_valid_saved_token_works_in_background(self, monkeypatch, tmp_path):
+        import types
+        (tmp_path / ".gemini").mkdir()
+        (tmp_path / ".gemini" / "agent_ui_library_token.json").write_text("{}")
+        monkeypatch.setattr(su.Path, "home", classmethod(lambda cls: tmp_path))
+        creds = types.SimpleNamespace(valid=True, to_json=lambda: "{}")
+        _install_fake_google(monkeypatch, creds=creds)
+        assert su._get_drive_service(interactive=False) == "SERVICE"
+
+    def test_check_drive_passes_interactive_flag(self, project_root, monkeypatch):
+        seen = {}
+
+        def fake(interactive=True):
+            seen["interactive"] = interactive
+            return _FakeDriveService("2026-07-23T00:00:00Z")
+        monkeypatch.setattr(su, "_get_drive_service", fake)
+        su.check_drive("file-123", interactive=False)
+        assert seen == {"interactive": False}
+
+
+def _background_cli(tmp_path, body: str):
+    """Run the real CLI entry point with check()/check_drive() replaced, by
+    copying self_update.py into a scratch tree and appending overrides
+    right before its __main__ block."""
+    setup = tmp_path / "python" / "scripts" / "setup"
+    setup.mkdir(parents=True)
+    src = (ROOT / "python" / "scripts" / "setup" / "self_update.py").read_text(encoding="utf-8")
+    marker = 'if __name__ == "__main__":'
+    i = src.rindex(marker)
+    src = src[:i] + body + "\n\n" + src[i:]
+    (setup / "self_update.py").write_text(src, encoding="utf-8")
+    return setup / "self_update.py"
+
+
+class TestBackgroundCli:
+    def test_offline_is_quiet_exit_3_with_json(self, tmp_path):
+        script = _background_cli(tmp_path, "def check(channel='prod'):\n    raise OSError('offline')\n")
+        r = subprocess.run([sys.executable, "-I", str(script), "check", "--json", "--background"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        assert r.returncode == 3
+        assert "Traceback" not in r.stderr
+        assert json.loads(r.stdout.strip().splitlines()[-1]) == {"update_available": False, "error": "OSError"}
+
+    def test_auth_required_is_quiet_exit_3(self, tmp_path):
+        script = _background_cli(tmp_path, textwrap_dedent('''
+            def _reexec_with_venv_for_drive_mode():
+                pass
+            def check_drive(file_id, interactive=True):
+                assert interactive is False
+                raise AuthRequired("no saved Drive authorization")
+        '''))
+        r = subprocess.run([sys.executable, "-I", str(script), "check", "--json", "--background", "--drive-file-id", "F"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        assert r.returncode == 3
+        assert json.loads(r.stdout.strip().splitlines()[-1])["error"] == "AuthRequired"
+
+    def test_update_available_is_reported(self, tmp_path):
+        script = _background_cli(tmp_path, "def check(channel='prod'):\n    return (True, 'v0.2.6', 'v0.2.7')\n")
+        r = subprocess.run([sys.executable, "-I", str(script), "check", "--json", "--background"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        assert r.returncode == 0, r.stderr
+        assert json.loads(r.stdout.strip().splitlines()[-1]) == {
+            "update_available": True, "installed_tag": "v0.2.6", "latest_tag": "v0.2.7", "channel": "prod"}
+
+    def test_background_never_applies(self, tmp_path):
+        script = _background_cli(tmp_path, textwrap_dedent('''
+            def check(channel='prod'):
+                return (True, 'v0.2.6', 'v0.2.7')
+            def apply(channel='prod'):
+                raise SystemExit(99)
+        '''))
+        r = subprocess.run([sys.executable, "-I", str(script), "check", "--json", "--background"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        assert r.returncode == 0
+
+
+def textwrap_dedent(s):
+    import textwrap
+    return textwrap.dedent(s).strip("\n")

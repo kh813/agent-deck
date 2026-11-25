@@ -6,6 +6,10 @@ use crate::self_update::org_release_configured;
 
 const THEME_MENU_ID_PREFIX: &str = "theme:";
 const AUTO_CHECK_UPDATE_MENU_ID: &str = "settings:auto-check-update";
+// Covers both agent-deck itself and the selected engine: checked at launch
+// and then periodically (src/lib/updatePolling.ts). Never installs anything
+// by itself -- updates only run from the banner's button or the Update menu.
+const AUTO_CHECK_UPDATE_LABEL: &str = "Check for Updates Automatically";
 const UPDATE_GITHUB_MENU_ID: &str = "update:github";
 const UPDATE_ORG_PROD_MENU_ID: &str = "update:org-prod";
 const UPDATE_ORG_TEST_MENU_ID: &str = "update:org-test";
@@ -201,7 +205,7 @@ pub fn build_menu(
     let auto_check_update_item = CheckMenuItem::with_id(
         handle,
         AUTO_CHECK_UPDATE_MENU_ID,
-        "Check for Updates on Startup",
+        AUTO_CHECK_UPDATE_LABEL,
         true,
         initial_auto_check_update,
         None::<&str>,

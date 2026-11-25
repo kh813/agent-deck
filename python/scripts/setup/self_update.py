@@ -412,7 +412,11 @@ def _reexec_with_venv_for_drive_mode():
         os.execv(str(venv_python), [str(venv_python)] + sys.argv)
 
 
-def _get_drive_service():
+class AuthRequired(Exception):
+    """Drive needs an interactive login, but this run must not open one."""
+
+
+def _get_drive_service(interactive: bool = True):
     sys.path.insert(0, str(PROJECT_ROOT / "python"))
     from config import OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, USER_EMAIL  # noqa: E402
     from scripts.auth import run_auth_flow  # noqa: E402
@@ -440,7 +444,17 @@ def _get_drive_service():
         creds = Credentials.from_authorized_user_file(str(token_path), scopes)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except Exception:
+                if not interactive:
+                    raise AuthRequired("token refresh failed")
+                raise
+        elif not interactive:
+            # The app's periodic background check must never pop a browser
+            # login out of nowhere; it just skips until the user has
+            # authorized via any interactive Drive action.
+            raise AuthRequired("no saved Drive authorization")
         else:
             flow = InstalledAppFlow.from_client_config(client_config, scopes)
             creds = run_auth_flow(flow, login_hint=USER_EMAIL or None,
@@ -450,13 +464,13 @@ def _get_drive_service():
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def check_drive(file_id: str) -> tuple[bool, str, str]:
+def check_drive(file_id: str, interactive: bool = True) -> tuple[bool, str, str]:
     """Return (update_available, installed_marker, latest_marker) for the
     org's Drive-hosted, config-bundled distribution ZIP. Uses the Drive
     file's modifiedTime as the "version" -- there's no release tag for a
     single mutable file that package_release.py overwrites in place on
     every --test/--prod run."""
-    service = _get_drive_service()
+    service = _get_drive_service(interactive=interactive)
     meta = service.files().get(
         fileId=file_id, fields="modifiedTime", supportsAllDrives=True
     ).execute()
@@ -537,7 +551,7 @@ def apply_drive(file_id: str) -> None:
 
 
 def _usage():
-    print("Usage: self_update.py [check|apply] [--test] [--json] [--drive-file-id ID]")
+    print("Usage: self_update.py [check|apply] [--test] [--json] [--background] [--drive-file-id ID]")
     sys.exit(1)
 
 
@@ -556,8 +570,31 @@ if __name__ == "__main__":
         drive_file_id = rest[idx + 1]
 
     channel = "test" if "--test" in rest else "prod"
+    # --background: the app's periodic check. Never interactive (no browser
+    # login), and any failure (offline, auth missing) is a quiet exit 3 --
+    # the app treats it as "no update this time" and tries again later.
+    background = "--background" in rest
 
-    if cmd == "check":
+    if cmd == "check" and background:
+        try:
+            if drive_file_id:
+                available, installed, latest = check_drive(drive_file_id, interactive=False)
+                label = "org"
+            else:
+                available, installed, latest = check(channel)
+                label = channel
+        except BaseException as e:  # incl. SystemExit from helpers
+            if isinstance(e, KeyboardInterrupt):
+                raise
+            print(json.dumps({"update_available": False, "error": type(e).__name__}))
+            sys.exit(3)
+        print(json.dumps({
+            "update_available": available,
+            "installed_tag": installed,
+            "latest_tag": latest,
+            "channel": label,
+        }))
+    elif cmd == "check":
         if drive_file_id:
             available, installed, latest = check_drive(drive_file_id)
             label = "org"

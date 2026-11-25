@@ -11,6 +11,7 @@ import { Lang, translations } from "./utils/i18n";
 import { isTauri, webClient } from "./lib/webClient";
 import "./App.css";
 import { loadSavedEngine, pickEngine, saveEngine } from "./lib/engineSelection";
+import { isUpdateBannerVisible, shouldApplyBackgroundResult, startUpdatePolling } from "./lib/updatePolling";
 import { stopAndWaitForExit } from "./lib/ptyHandover";
 import {
   applyFontAction,
@@ -178,8 +179,9 @@ function App() {
     update_available: false,
   });
   // agent-deck's own update status, distinct from updateStatus above (which
-  // is about the agy engine). Triggered on demand from the native menu, not
-  // auto-checked on startup.
+  // is about the agy engine). Checked from the native menu on demand, and
+  // periodically in the background (lib/updatePolling.ts) -- which only
+  // shows the banner; nothing is installed until its button is clicked.
   const [selfUpdateStatus, setSelfUpdateStatus] = useState<UpdateStatus>({
     current_version: null,
     latest_version: null,
@@ -191,6 +193,10 @@ function App() {
   // when neither org Drive channel is configured in config.toml; otherwise
   // only "org-prod"/"org-test" are ever offered.
   const [selfUpdateKind, setSelfUpdateKind] = useState<"github" | "org-prod" | "org-test">("github");
+  // "Later" on the banner: hides it for that version until a newer one
+  // appears or the user checks explicitly from the menu (not persisted, so
+  // the reminder comes back on the next launch).
+  const [dismissedSelfUpdateVersion, setDismissedSelfUpdateVersion] = useState<string | null>(null);
   const [autoCheckUpdate, setAutoCheckUpdate] = useState(() => {
     const saved = localStorage.getItem("autoCheckUpdate");
     return saved !== "false"; // Default to true
@@ -458,6 +464,7 @@ function App() {
         const kind = event.payload === "org-prod" || event.payload === "org-test"
           ? event.payload
           : "github";
+        setDismissedSelfUpdateVersion(null);
         checkSelfUpdateStatus(kind).then((res) => {
           if (res && !res.update_available) {
             alert(t("selfUpdateUpToDate"));
@@ -468,6 +475,33 @@ function App() {
 
     return unsub;
   }, [checkSelfUpdateStatus]);
+
+  // Periodic background check (launch + every few hours + on focus after a
+  // long gap) for agent-deck itself and the selected engine, gated on the
+  // "Check for Updates Automatically" setting. Only ever shows the banners.
+  const selfUpdateShownRef = useRef({ status: selfUpdateStatus, kind: selfUpdateKind });
+  selfUpdateShownRef.current = { status: selfUpdateStatus, kind: selfUpdateKind };
+  const checkUpdateStatusRef = useRef<() => Promise<void>>(async () => {});
+  const engineInstalledRef = useRef(false);
+  useEffect(() => {
+    if (!isTauri() || !autoCheckUpdate) return;
+    return startUpdatePolling(async () => {
+      if (engineInstalledRef.current) void checkUpdateStatusRef.current();
+      if (selfUpdateActiveRef.current) return;
+      const kind = await invoke<"github" | "org-prod" | "org-test">("default_self_update_kind");
+      const res = await invoke<UpdateStatus>("check_self_update", { kind, background: true });
+      const shown = selfUpdateShownRef.current;
+      if (shouldApplyBackgroundResult(shown.status, shown.kind, res)) {
+        setSelfUpdateStatus(res);
+        setSelfUpdateKind(kind);
+      }
+    }, {
+      onFocus: (cb) => {
+        window.addEventListener("focus", cb);
+        return () => window.removeEventListener("focus", cb);
+      },
+    });
+  }, [autoCheckUpdate]);
 
   // 1. Load dynamic configuration
   useEffect(() => {
@@ -527,6 +561,9 @@ function App() {
       setShellArgs(args.join(" "));
     }
   }, [selectedAgentId, agentStatuses, appConfig]);
+
+  checkUpdateStatusRef.current = checkUpdateStatus;
+  engineInstalledRef.current = currentAgentStatus.installed;
 
   // Check updates if installed and enabled
   useEffect(() => {
@@ -1168,7 +1205,7 @@ function App() {
 
       {/* agent-deck Self-Update Alert Banner (distinct color from the agy
           banner above so the two are never mistaken for each other) */}
-      {selfUpdateStatus.update_available && (
+      {isUpdateBannerVisible(selfUpdateStatus, dismissedSelfUpdateVersion) && (
         <div className="update-banner" style={{
           background: "rgba(59, 130, 246, 0.15)",
           borderBottom: "1px solid rgba(59, 130, 246, 0.25)",
@@ -1188,6 +1225,7 @@ function App() {
               </span>
             )}
           </div>
+          <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
           <button
             className="primary"
             onClick={handleUpdateSelf}
@@ -1205,6 +1243,25 @@ function App() {
           >
             {isSelfUpdating ? t("updating") : t("updateNow")}
           </button>
+          {!isSelfUpdating && (
+            <button
+              className="update-later"
+              onClick={() => setDismissedSelfUpdateVersion(selfUpdateStatus.latest_version)}
+              style={{
+                background: "transparent",
+                border: "1px solid rgba(59, 130, 246, 0.4)",
+                color: "#3b82f6",
+                padding: "6px 12px",
+                borderRadius: "6px",
+                cursor: "pointer",
+                fontSize: "0.8rem",
+                marginLeft: "8px",
+              }}
+            >
+              {t("updateLater")}
+            </button>
+          )}
+          </div>
         </div>
       )}
 

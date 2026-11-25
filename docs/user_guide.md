@@ -651,6 +651,9 @@ When a new version is published, you can update to the latest from the menu bar 
 > すでに最新版の場合は、その旨を伝えるメッセージが表示されます。
 > If you already have the latest version, a message says so and no changes are made.
 
+**自動チェック / Automatic check (v0.2.7+):** メニューから操作しなくても、起動の約30秒後と、その後4時間ごと（スリープ明けにウィンドウを開いたときも）に新しいバージョンを確認し、あれば同じ通知バナーを表示します。**確認するだけで、「今すぐ更新」を押すまで更新は行いません。**「後で」を押すとそのバージョンの通知は次回起動まで表示されません。対象は通常の最新版のみです（テスト版は自動では案内されません）。この確認は Settings メニューの「Check for Updates Automatically」でオフにできます。
+Without using the menu, the app checks about 30 seconds after launch and then every 4 hours (and when you return to the window after sleep), showing the same banner when a new version exists. **It only checks — nothing is updated until you click Update Now.** "Later" hides the banner for that version until the next launch. Only the regular latest release is offered automatically (never the test edition). Turn this off with Settings → "Check for Updates Automatically".
+
 ### ツールが起動しないとき / If the Tool Won't Launch
 
 `agent-deck.app`/`agent-deck.exe` を一度終了し、フォルダの上に**最新の配布 ZIP を展開し直す**ことで多くの問題は解消します（`config.toml`・`files/` の内容は保持されます）。それでも解決しない場合は管理者に連絡してください。

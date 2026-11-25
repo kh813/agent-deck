@@ -73,21 +73,44 @@ pub fn org_release_configured() -> (bool, bool) {
     )
 }
 
-pub fn check_self_update_internal(kind: &str) -> Result<UpdateStatus, String> {
+// What the app's periodic background check looks at: the org's production
+// channel when this install has one, otherwise GitHub's latest release. Never
+// the test channel -- that's only ever an explicit menu choice.
+pub(crate) fn default_kind_for(org_prod_configured: bool) -> &'static str {
+    if org_prod_configured {
+        "org-prod"
+    } else {
+        "github"
+    }
+}
+
+// self_update.py arguments for a check. `background` adds --background:
+// never opens a browser login (Drive), and fails quietly (exit 3) instead.
+pub(crate) fn check_args(kind: &str, drive_file_id: Option<&str>, background: bool) -> Option<Vec<String>> {
+    let mut args = vec!["check".to_string(), "--json".to_string()];
+    if background {
+        args.push("--background".to_string());
+    }
+    if kind == "org-prod" || kind == "org-test" {
+        args.push("--drive-file-id".to_string());
+        args.push(drive_file_id?.to_string());
+    }
+    Some(args)
+}
+
+pub fn check_self_update_internal(kind: &str, background: bool) -> Result<UpdateStatus, String> {
     let no_update = UpdateStatus {
         current_version: None,
         latest_version: None,
         update_available: false,
     };
 
+    let file_id = org_release_file_id(kind);
+    let Some(args) = check_args(kind, file_id.as_deref(), background) else {
+        return Ok(no_update);
+    };
     let mut cmd = Command::new(python_bin());
-    cmd.arg(self_update_script_path()).arg("check").arg("--json");
-    if kind == "org-prod" || kind == "org-test" {
-        let Some(file_id) = org_release_file_id(kind) else {
-            return Ok(no_update);
-        };
-        cmd.arg("--drive-file-id").arg(file_id);
-    }
+    cmd.arg(self_update_script_path()).args(args);
     cmd.current_dir(get_default_cwd());
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
@@ -152,8 +175,16 @@ pub fn get_self_update_command_internal(kind: &str) -> Result<InstallCommand, St
 // --- Tauri Command Wrappers ---
 
 #[tauri::command]
-pub async fn check_self_update(kind: String) -> Result<UpdateStatus, String> {
-    check_self_update_internal(&kind)
+pub async fn check_self_update(kind: String, background: Option<bool>) -> Result<UpdateStatus, String> {
+    let background = background.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || check_self_update_internal(&kind, background))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn default_self_update_kind() -> String {
+    default_kind_for(org_release_configured().0).to_string()
 }
 
 #[tauri::command]
@@ -164,6 +195,35 @@ pub async fn get_self_update_command(kind: String) -> Result<InstallCommand, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_default_kind_prefers_org_prod() {
+        assert_eq!(default_kind_for(true), "org-prod");
+        assert_eq!(default_kind_for(false), "github");
+    }
+
+    #[test]
+    fn test_check_args_github() {
+        assert_eq!(check_args("github", None, false).unwrap(), vec!["check", "--json"]);
+        assert_eq!(check_args("github", None, true).unwrap(), vec!["check", "--json", "--background"]);
+    }
+
+    #[test]
+    fn test_check_args_org_includes_file_id() {
+        assert_eq!(
+            check_args("org-prod", Some("F1"), true).unwrap(),
+            vec!["check", "--json", "--background", "--drive-file-id", "F1"]
+        );
+        assert_eq!(
+            check_args("org-test", Some("T1"), false).unwrap(),
+            vec!["check", "--json", "--drive-file-id", "T1"]
+        );
+    }
+
+    #[test]
+    fn test_check_args_org_without_file_id_is_no_check() {
+        assert!(check_args("org-prod", None, true).is_none());
+    }
 
     #[test]
     fn test_reads_configured_prod_file_id() {

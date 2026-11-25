@@ -73,6 +73,7 @@ pub fn run() {
             agent::open_file_in_editor,
             agent::start_pre_launch_command,
             self_update::check_self_update,
+            self_update::default_self_update_kind,
             self_update::get_self_update_command,
             config::get_app_config,
             menu::set_theme,
