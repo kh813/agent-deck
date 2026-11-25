@@ -2,6 +2,7 @@
 
 Usage:
   python3 skills_catalog.py list
+  python3 skills_catalog.py search <keyword> [<keyword> ...]
   python3 skills_catalog.py update-index
   python3 skills_catalog.py list-local
   python3 skills_catalog.py info <name|owner/name>
@@ -776,7 +777,9 @@ def _print_skills_table(skills: list):
         print(f"{s['name']:<{w_name}}  {s['owner']:<{w_owner}}  {s['modified']:<10}  {desc}")
 
 
-def cmd_list():
+def _load_catalog_skills() -> list:
+    """Catalog entries for list/search: Drive's shared catalog file, or the
+    local index cache when Drive is unreachable."""
     try:
         service = _get_service()
         skills = _pull_catalog_from_drive(service)
@@ -792,7 +795,72 @@ def cmd_list():
             print("        ネットワーク接続を確認して再実行してください。")
             sys.exit(1)
         print("[INFO] Drive に接続できません。ローカルキャッシュを使用します。")
-    _print_skills_table(skills)
+    return skills
+
+
+def cmd_list():
+    _print_skills_table(_load_catalog_skills())
+
+
+def _normalize_for_search(text: str) -> str:
+    """Case-, width- and kana-insensitive form: NFKC folds full-width ASCII
+    and half-width katakana (ＰＤＦ / ｽｷﾙ), casefold handles case, and
+    hiragana is mapped to katakana so すけじゅーる matches スケジュール."""
+    import unicodedata
+    t = unicodedata.normalize("NFKC", text or "").casefold()
+    return "".join(chr(ord(c) + 0x60) if "\u3041" <= c <= "\u3096" else c for c in t)
+
+
+def search_skills(skills: list, query) -> list:
+    """Entries matching EVERY keyword (AND) in name, owner or description.
+
+    `query` is a string (split on whitespace, incl. the full-width space) or
+    a list of keywords. Ranked: keywords hitting the name first, then the
+    owner, then description only; ties by name."""
+    if isinstance(query, str):
+        query = [query]
+    keywords = [_normalize_for_search(k) for q in query
+                for k in q.replace("\u3000", " ").split() if k.strip()]
+    if not keywords:
+        return []
+    ranked = []
+    for s in skills:
+        name = _normalize_for_search(s.get("name", ""))
+        owner = _normalize_for_search(s.get("owner", ""))
+        desc = _normalize_for_search(s.get("description", ""))
+        score = 0
+        for k in keywords:
+            if k in name:
+                score += 100
+            elif k in owner:
+                score += 10
+            elif k in desc:
+                score += 1
+            else:
+                break
+        else:
+            ranked.append((-score, s.get("name", ""), s.get("owner", ""), s))
+    ranked.sort(key=lambda r: r[:3])
+    return [r[3] for r in ranked]
+
+
+def cmd_search(keywords: list) -> int:
+    """Prints matching catalog skills; returns 0 if any matched, 3 if none."""
+    query = " ".join(keywords)
+    hits = search_skills(_load_catalog_skills(), keywords)
+    if not hits:
+        print(f"「{query}」に一致するスキルはありません。/ No skills match \"{query}\".")
+        print("  別のキーワードを試すか、skill-catalog list で一覧を確認してください。")
+        print("  Try other keywords, or run skill-catalog list to see everything.")
+        return 3
+    print(f"「{query}」の検索結果: {len(hits)} 件 / {len(hits)} match(es) for \"{query}\"")
+    print()
+    for s in hits:
+        print(f"■ {s['name']}  ({s['owner']}, {s['modified']})")
+        if s.get("description"):
+            print(f"  {s['description']}")
+        print()
+    return 0
 
 
 def cmd_info(name_or_path: str):
@@ -1145,6 +1213,10 @@ if __name__ == "__main__":
     cmd = args[0]
     if cmd == "list":
         cmd_list()
+    elif cmd == "search":
+        if len(args) < 2:
+            print("[ERROR] Usage: skills_catalog.py search <keyword> [<keyword> ...]"); sys.exit(1)
+        sys.exit(cmd_search(args[1:]))
     elif cmd == "update-index":
         cmd_update_index()
     elif cmd == "list-local":

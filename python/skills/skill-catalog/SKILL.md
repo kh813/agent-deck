@@ -1,6 +1,6 @@
 ---
 name: skill-catalog
-description: 共有スキルカタログの操作。カタログ一覧・詳細・インポート・登録（共有）・取り下げ・オーナー変更。"skill-catalog list", "カタログを見たい", "スキルをインポート", "このスキルをカタログに登録して", "カタログから取り下げたい", "オーナーを変更して", "skill-catalog import/info/share/unshare/change-owner" などで起動。 / Browse, import, publish, unpublish, and transfer ownership of skills in the shared catalog.
+description: 共有スキルカタログの操作。カタログ一覧・キーワード検索・詳細・インポート・登録（共有）・取り下げ・オーナー変更。"skill-catalog list", "skill-catalog search <keyword>", "〇〇するスキルはある？", "カタログでスキルを検索", "カタログを見たい", "スキルをインポート", "このスキルをカタログに登録して", "カタログから取り下げたい", "オーナーを変更して", "skill-catalog import/info/share/unshare/change-owner" などで起動。 / Browse, search by keyword, import, publish, unpublish, and transfer ownership of skills in the shared catalog.
 ---
 
 # スキルカタログ / Skill Catalog
@@ -17,6 +17,7 @@ Browse and retrieve skills shared within the group from the Google Drive catalog
 | サブコマンド | 説明 |
 |---|---|
 | `skill-catalog list` | カタログのスキル一覧を表示（キャッシュ利用） |
+| `skill-catalog search <keyword>` | キーワードでスキルを検索（名前・オーナー・説明が対象） |
 | `skill-catalog info <name>` | スキルの詳細を表示 |
 | `skill-catalog import <name>` | スキルをインポート＆インストール |
 | `skill-catalog update-index` | カタログインデックスをDriveから再取得（管理者用） |
@@ -45,6 +46,7 @@ If the user types `/skill-catalog` or "skill-catalog" without specifying a subco
 
 使い方 / Usage:
   skill-catalog list                    スキル一覧を表示（キャッシュ） / List skills (cached)
+  skill-catalog search <keyword>        キーワードで検索 / Search skills by keyword
   skill-catalog info <name>             スキルの詳細を表示 / Show skill details
   skill-catalog import <name>           スキルをインポート / Import a skill
   skill-catalog share <name>            カタログに登録・更新 / Publish or update in the catalog
@@ -54,6 +56,7 @@ If the user types `/skill-catalog` or "skill-catalog" without specifying a subco
 
 例 / Examples:
   skill-catalog list
+  skill-catalog search 経費精算
   skill-catalog info downloads
   skill-catalog import user.name/downloads
   skill-catalog share my-automation
@@ -75,6 +78,25 @@ python3 python/scripts/setup/skills_catalog.py list
 
 他の人が新しくスキルを登録した場合など、最新の情報を取得したいときは `skill-catalog update-index` を実行してください。
 To fetch the latest list when others have added skills, run `skill-catalog update-index`.
+
+---
+
+## skill-catalog search <keyword>
+
+キーワードでカタログのスキルを検索します。スキル名・オーナー・説明文が対象で、説明は省略せずに表示します。
+Searches the catalog by keyword across skill name, owner and description, showing each description in full.
+
+```bash
+python3 python/scripts/setup/skills_catalog.py search <keyword> [<keyword> ...]
+```
+
+- 複数キーワードはすべてを含むもの（AND）に絞り込みます。 / Multiple keywords are ANDed.
+- 大文字・小文字、全角・半角、ひらがな・カタカナの違いは無視します。 / Case, full/half width and hiragana/katakana differences are ignored.
+- 名前に一致したスキルが先に表示されます。 / Skills whose name matches are listed first.
+- 終了コード `3` は一致なし。別のキーワード（日本語⇔英語の言い換え、短い語）で再検索するか、`skill-catalog list` を提案してください。 / Exit code `3` means no match: retry with other keywords (Japanese⇔English, shorter words) or suggest `skill-catalog list`.
+
+ユーザーが「〇〇できるスキルはある？」のように目的で尋ねた場合は、その目的を表す語（例: 「経費」「PDF」「slide」）で検索してください。結果を見せた後、インポートするか（`skill-catalog import <name>`）を確認してください。
+When the user asks by purpose ("is there a skill that does X?"), search with words describing X (e.g. "経費", "PDF", "slide"). After showing results, ask whether to import one (`skill-catalog import <name>`).
 
 ---
 

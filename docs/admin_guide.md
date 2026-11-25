@@ -311,6 +311,7 @@ python3 python/scripts/setup/skills_catalog.py <command>
 | `sync` | `_default/` フォルダを起動のたびに同期（manifest 方式、stale 削除あり）/ Auto-sync `_default/` on every launch |
 | `publish <name>` | スキルを `_default/` に配置し、全端末へ自動配布対象にする / Publish a skill to `_default/` — auto-distributed to everyone |
 | `list` / `list-local` | カタログ全体 / ローカル導入済みスキルの一覧 |
+| `search <keyword> ...` | 名前・オーナー・説明のキーワード検索（AND、大小・全半角・かな種別を無視、一致なしは終了コード 3）/ Keyword search over name, owner, description |
 | `info <name>` / `download <name>` / `upload <name>` / `delete <name>` / `change-owner <name> <email>` | 個人カタログ（`_default/` 以外）向けの手動操作 |
 | `whoami` | 現在の認証ユーザーを確認 |
 | `update-index`（管理者用） | Drive をフルスキャンしてキャッシュを再作成 |

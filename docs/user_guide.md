@@ -368,6 +368,20 @@ A list of available skills with their names, creators, and update dates will be 
 
 ---
 
+### キーワードでスキルを探す / Search by Keyword
+
+```
+経費精算に使えるスキルはある？
+```
+または / or:
+```
+/skill-catalog search 経費精算
+```
+スキル名・作成者・説明にキーワードを含むスキルが、説明つきで表示されます。スペース区切りで複数のキーワードを指定すると、すべてを含むものに絞り込みます。大文字・小文字、全角・半角、ひらがな・カタカナの違いは区別しません。
+Skills whose name, creator or description contains the keyword are shown with their descriptions. Several space-separated keywords narrow it to skills containing all of them. Case, full/half width and hiragana/katakana are not distinguished.
+
+---
+
 ### スキルの詳細を確認する / View Skill Details
 
 ダウンロードする前に、スキルの内容を確認できます。
