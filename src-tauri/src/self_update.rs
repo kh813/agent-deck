@@ -20,7 +20,7 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-fn python_bin() -> &'static str {
+pub(crate) fn python_bin() -> &'static str {
     if cfg!(target_os = "windows") {
         "python"
     } else {

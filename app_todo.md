@@ -270,9 +270,9 @@
 ### Phase 16: スキルカタログ画面（v0.2.8〜v0.2.9）
 *目標: skill-catalog の主要操作を GUI で行う（app_specs.md 5.7.3）。*
 
-- [ ] **タスク 16-1**: `skills_catalog.py` の `list` / `search` / `info` / `list-local` に `--json` 出力を追加（pytest）。
-- [ ] **タスク 16-2**: `download`（インポート）/ `upload`（共有）/ `delete`（取り下げ）と `setup.py skills enable|disable` に `--json` の結果出力を追加（pytest）。
-- [ ] **タスク 16-3**: Rust コマンド（Python 呼び出し・JSON 受け渡し・タイムアウト・未認証時の扱い）とテスト。
+- [x] **タスク 16-1**: `skills_catalog.py api <op>`（catalog / search / info / local）— 既存コマンドを再利用し、最終行に印付き JSON を 1 行出す（pytest）。
+- [x] **タスク 16-2**: `api import / share / unshare / enable / disable / rebuild`。sys.exit・Drive エラー・同名複数（候補一覧）を ok:false とコードで返す。config.toml が無い公開版は `no_catalog`（pytest）。
+- [x] **タスク 16-3**: Rust コマンド（Python 呼び出し・JSON 受け渡し・タイムアウト・未認証時の扱い）とテスト。
 - [ ] **タスク 16-4**: カタログ画面（カタログ / マイスキル タブ、検索、カード、操作ボタン、実行中表示）と、操作後の自動再ビルド。
 - [ ] **タスク 16-5**: ドキュメント更新・RC で確認。
 

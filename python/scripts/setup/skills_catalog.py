@@ -13,6 +13,7 @@ Usage:
   python3 skills_catalog.py delete <name|owner/name>
   python3 skills_catalog.py change-owner <name|owner/name> <new_email>
   python3 skills_catalog.py whoami
+  python3 skills_catalog.py api <op> [args...]   (JSON for agent-deck's catalog screen)
 
 Storage format on Drive (two kinds, per skill):
   <owner>/<skill-name>.md   — SKILL.md-only skill (previewable on Drive)
@@ -110,6 +111,15 @@ def _exit_if_no_org_config():
         return
     if sys.argv[1:2] == ["sync"]:
         sys.exit(0)
+    if sys.argv[1:2] == ["api"]:
+        # Same marker/shape as cmd_api (defined further down).
+        print("@@AGENT_DECK_JSON@@ " + json.dumps({
+            "ok": False, "log": "",
+            "error": {"code": "no_catalog",
+                      "message": "config.toml がないため、共有スキルカタログは使えません / "
+                                 "The shared skill catalog needs the org's config.toml"}},
+            ensure_ascii=False))
+        sys.exit(1)
     print("[INFO] config.toml がないため、共有スキルカタログは使えません（組織向け設定のない公開版です）。\n"
           "       The shared skill catalog needs the org's config.toml, which this install doesn't have.")
     sys.exit(1)
@@ -777,9 +787,14 @@ def _print_skills_table(skills: list):
         print(f"{s['name']:<{w_name}}  {s['owner']:<{w_owner}}  {s['modified']:<10}  {desc}")
 
 
+_LAST_LOAD_OFFLINE = False
+
+
 def _load_catalog_skills() -> list:
     """Catalog entries for list/search: Drive's shared catalog file, or the
     local index cache when Drive is unreachable."""
+    global _LAST_LOAD_OFFLINE
+    _LAST_LOAD_OFFLINE = False
     try:
         service = _get_service()
         skills = _pull_catalog_from_drive(service)
@@ -795,6 +810,7 @@ def _load_catalog_skills() -> list:
             print("        ネットワーク接続を確認して再実行してください。")
             sys.exit(1)
         print("[INFO] Drive に接続できません。ローカルキャッシュを使用します。")
+        _LAST_LOAD_OFFLINE = True
     return skills
 
 
@@ -1202,6 +1218,206 @@ def cmd_change_owner(name_or_path: str, new_email: str):
     _push_catalog_to_drive(service)
 
 
+# ── JSON API for agent-deck's catalog screen ──────────────────
+#
+# `skills_catalog.py api <op> [args]` runs one operation and prints exactly
+# one marker-prefixed JSON line last:
+#   {"ok": true,  "data": ..., "log": "<captured human output>"}
+#   {"ok": false, "error": {"code": ..., "message": ..., "candidates": [...]}, "log": ...}
+# The human-oriented commands above are reused unchanged; their prints are
+# captured into "log", and their sys.exit()s become ok:false results.
+
+API_MARKER = "@@AGENT_DECK_JSON@@ "
+
+
+class ApiError(Exception):
+    def __init__(self, code: str, message: str, **extra):
+        super().__init__(message)
+        self.code, self.message, self.extra = code, message, extra
+
+
+def _skill_dirs(root: Path):
+    """(dir, enabled) for every SKILL.md under root (disabled/ included)."""
+    if not root.exists():
+        return []
+    return [(md.parent, "disabled" not in md.relative_to(root).parts)
+            for md in sorted(root.rglob("SKILL.md"))]
+
+
+def _local_installed_index() -> dict:
+    """name -> where it's installed locally ("catalog" / "personal" / "common")."""
+    found = {}
+    for kind, roots in (("catalog", [CATALOG_SKILLS_DIR]), ("personal", [SKILLS_SRC]),
+                        ("common", COMMON_SKILL_ROOTS)):
+        for root in roots:
+            for d, _enabled in _skill_dirs(root):
+                found.setdefault(d.name, kind)
+    return found
+
+
+def _with_installed(skills: list) -> list:
+    installed = _local_installed_index()
+    return [{**s, "installed": installed.get(s["name"])} for s in skills]
+
+
+def _single_match(service, query: str) -> dict:
+    matches = _find_skill(service, query)
+    if not matches:
+        raise ApiError("not_found", f"スキルが見つかりません / Skill not found: {query}")
+    if len(matches) > 1:
+        raise ApiError("ambiguous", f"同名のスキルが複数あります / Multiple skills named {query}",
+                       candidates=[f"{m['owner']}/{m['name']}" for m in matches])
+    return matches[0]
+
+
+def _me() -> str:
+    if USER_EMAIL:
+        return _owner_prefix(USER_EMAIL)
+    return ""
+
+
+def api_catalog(args):
+    return {"skills": _with_installed(_load_catalog_skills()), "offline": _LAST_LOAD_OFFLINE}
+
+
+def api_search(args):
+    if not args:
+        raise ApiError("usage", "キーワードを指定してください / Give a keyword")
+    hits = search_skills(_load_catalog_skills(), args)
+    return {"skills": _with_installed(hits), "offline": _LAST_LOAD_OFFLINE}
+
+
+def api_info(args):
+    if not args:
+        raise ApiError("usage", "スキル名を指定してください / Give a skill name")
+    service = _get_service()
+    m = _single_match(service, args[0])
+    if m["format"] == "zip":
+        content = _read_skill_md_from_zip(_get_file_bytes(service, m["file_id"]))
+    else:
+        content = _get_file_content(service, m["file_id"])
+    meta = _parse_frontmatter(content)
+    return {"name": m["name"], "owner": m["owner"], "modified": m["modified"],
+            "format": m["format"], "author": meta.get("author", ""),
+            "description": meta.get("description", ""), "content": content,
+            "installed": _local_installed_index().get(m["name"])}
+
+
+def api_local(args):
+    """Every local skill, disabled ones included, with who owns it."""
+    me = _me()
+    shared = {s["name"] for s in (_read_index() or []) if me and s.get("owner") == me}
+    out = []
+    for kind, roots in (("common", COMMON_SKILL_ROOTS), ("catalog", [CATALOG_SKILLS_DIR]),
+                        ("personal", [SKILLS_SRC])):
+        for root in roots:
+            for d, enabled in _skill_dirs(root):
+                meta = _parse_frontmatter((d / "SKILL.md").read_text(encoding="utf-8"))
+                email = meta.get("email", "")
+                owner = _owner_prefix(email) if email else ""
+                mine = kind == "personal" and (not email or (me and owner == me))
+                out.append({
+                    "name": d.name, "description": meta.get("description", ""),
+                    "root": kind, "enabled": enabled, "owner": owner, "mine": bool(mine),
+                    "shared": bool(mine and d.name in shared),
+                })
+    return {"skills": out, "me": me}
+
+
+def api_import(args):
+    if not args:
+        raise ApiError("usage", "スキル名を指定してください / Give a skill name")
+    service = _get_service()
+    m = _single_match(service, args[0])
+    overwrote = (CATALOG_SKILLS_DIR / m["name"]).exists()
+    shadows_personal = (SKILLS_SRC / m["name"]).exists()
+    _install_skill_entry(service, m)
+    return {"name": m["name"], "owner": m["owner"], "overwrote": overwrote,
+            "shadows_personal": shadows_personal}
+
+
+def api_share(args):
+    if not args:
+        raise ApiError("usage", "スキル名を指定してください / Give a skill name")
+    cmd_upload(args[0])
+    return {"name": args[0]}
+
+
+def api_unshare(args):
+    if not args:
+        raise ApiError("usage", "スキル名を指定してください / Give a skill name")
+    cmd_delete(args[0])
+    return {"name": args[0]}
+
+
+def _run_setup(*setup_args) -> dict:
+    """setup.py skills enable|disable|rebuild, in a child process (it has its
+    own skills lock and exit-code conventions)."""
+    r = subprocess.run([sys.executable, str(SCRIPT_DIR / "setup.py"), "skills", *setup_args],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       stdin=subprocess.DEVNULL, cwd=str(PROJECT_ROOT))
+    print(r.stdout, end="")
+    print(r.stderr, end="")
+    if r.returncode != 0:
+        lines = [l for l in (r.stdout + r.stderr).splitlines() if l.strip()]
+        raise ApiError("failed", lines[-1] if lines else f"setup.py exited {r.returncode}")
+    return {}
+
+
+def api_enable(args):
+    if not args:
+        raise ApiError("usage", "スキル名を指定してください / Give a skill name")
+    _run_setup("enable", args[0])
+    return {"name": args[0]}
+
+
+def api_disable(args):
+    if not args:
+        raise ApiError("usage", "スキル名を指定してください / Give a skill name")
+    _run_setup("disable", args[0])
+    return {"name": args[0]}
+
+
+def api_rebuild(args):
+    _run_setup("rebuild")
+    return {}
+
+
+API_OPS = {
+    "catalog": api_catalog, "search": api_search, "info": api_info, "local": api_local,
+    "import": api_import, "share": api_share, "unshare": api_unshare,
+    "enable": api_enable, "disable": api_disable, "rebuild": api_rebuild,
+}
+
+
+def _api_emit(obj) -> None:
+    sys.stdout.write(API_MARKER + json.dumps(obj, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def cmd_api(args) -> int:
+    import contextlib
+    if not args or args[0] not in API_OPS:
+        _api_emit({"ok": False, "error": {"code": "usage", "message": f"unknown op: {args[:1]}"}, "log": ""})
+        return 1
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            data = API_OPS[args[0]](args[1:])
+        _api_emit({"ok": True, "data": data, "log": buf.getvalue()})
+        return 0
+    except ApiError as e:
+        _api_emit({"ok": False, "error": {"code": e.code, "message": e.message, **e.extra}, "log": buf.getvalue()})
+    except SystemExit as e:
+        lines = [l for l in buf.getvalue().splitlines() if l.strip()]
+        msg = next((l for l in reversed(lines) if "[ERROR]" in l), lines[-1] if lines else f"exit {e.code}")
+        _api_emit({"ok": False, "error": {"code": "failed", "message": msg.strip()}, "log": buf.getvalue()})
+    except Exception as e:  # Drive/auth/network errors
+        _api_emit({"ok": False, "error": {"code": "exception", "message": f"{type(e).__name__}: {e}"},
+                   "log": buf.getvalue()})
+    return 1
+
+
 # ── Entry point ───────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -1211,6 +1427,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     cmd = args[0]
+    if cmd == "api":
+        sys.exit(cmd_api(args[1:]))
     if cmd == "list":
         cmd_list()
     elif cmd == "search":
