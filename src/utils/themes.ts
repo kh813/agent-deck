@@ -43,7 +43,12 @@ export const themes: Record<string, ThemeConfig> = {
       blue: "#2563eb",
       magenta: "#9333ea",
       cyan: "#0891b2",
-      white: "#64748b", // Slate-500 for readable dim/secondary text on light backgrounds
+      // Neutral gray (not slate-500 #64748b): ANSI-palette CLIs (agy, Claude
+      // Code's *-ansi themes) draw unselected items in white and the
+      // selected one in bright blue; a blue-tinted gray made the two nearly
+      // indistinguishable. #737373 still meets 4.5:1 on the background, so
+      // xterm's minimumContrastRatio leaves it as is.
+      white: "#737373",
       brightBlack: "#1e293b", // Dark navy for high contrast on light backgrounds
       brightRed: "#ef4444",
       brightGreen: "#22c55e",

@@ -136,6 +136,9 @@ skills/<name>.skill   (ZIPアーカイブ / ZIP archive)
 
 `skills-catalog/` and `skills-personal/` are gitignored and preserved across self-updates (`self_update.py`'s `_PRESERVED_PYTHON_DIRS`). Older versions also put synced skills in `skills-personal/`, so `skills_catalog.py sync` checks for `skills-personal/.catalog-sync-manifest` on every launch and moves exactly the skills listed there into `skills-catalog/` (older manual `download`s can't be told apart from the user's own skills, so they stay in `skills-personal/` and keep working).
 
+起動時のカタログ同期は、`config.toml` が無いインストール（GitHub の公開版）と、agent-deck 自体の開発用 git チェックアウト（`tauri dev`）では行いません。開発中に同期を試すときは `AGENT_DECK_CATALOG_SYNC=1` を設定します。
+The launch-time catalog sync is skipped on installs without `config.toml` (the public GitHub ZIP) and in a development git checkout of agent-deck itself (`tauri dev`); set `AGENT_DECK_CATALOG_SYNC=1` to exercise it from a checkout.
+
 標準スキルをカタログに一元化しない理由 / Why the standard skills aren't moved into the catalog: (1) 標準スキルは同梱の `python/scripts/` を呼ぶため、アプリと同じ版で配る必要がある / they call the bundled `python/scripts/`, so they must ship with the matching app version; (2) カタログ未設定・未認証・オフラインの環境でもスキルが使える / they work without a configured catalog, Google auth or network; (3) リリースのテスト→本番昇格の流れに乗る（`publish` は即時に全端末へ配信される）/ they go through the release test-then-promote flow, whereas `publish` reaches every machine immediately.
 
 #### スキルの書き方（agy / Claude Code 共通）/ Authoring Skills for Both Engines

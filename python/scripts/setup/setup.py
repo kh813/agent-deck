@@ -368,6 +368,11 @@ def skills_list():
         for name in sorted(disabled):
             print(f"  ✗ {name}")
 
+def _is_dev_checkout():
+    """True when running from a git checkout of agent-deck itself. Release
+    ZIPs never contain .git, so installs are unaffected."""
+    return (CONFIG_PATH.parent / ".git").exists()
+
 def sync_catalog_skills():
     """Best-effort: pull auto-distributed skills (the catalog's _default/
     folder) into skills-catalog/ before building, so they're part of the
@@ -381,6 +386,14 @@ def sync_catalog_skills():
     reason in those cases)."""
     if not CONFIG_PATH.exists():
         return  # public-ZIP install: no org catalog to sync from
+    if _is_dev_checkout() and os.environ.get("AGENT_DECK_CATALOG_SYNC") != "1":
+        # Running from agent-deck's own git checkout (`tauri dev`): don't pull
+        # the org catalog into the working tree -- confirmed for real, it
+        # put _default/ skills into python/skills-catalog/ that clashed with
+        # python/skills-personal/ copies and broke test_skill_build. Set
+        # AGENT_DECK_CATALOG_SYNC=1 to test the sync from a checkout anyway.
+        print("  (development checkout: skipping catalog sync; AGENT_DECK_CATALOG_SYNC=1 to enable)")
+        return
     script = os.path.join(SCRIPT_DIR, "skills_catalog.py")
     try:
         result = subprocess.run([sys.executable, script, "sync"],

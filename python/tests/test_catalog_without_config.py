@@ -47,3 +47,50 @@ def test_setup_skips_catalog_sync_without_config(tmp_path, monkeypatch):
     monkeypatch.setattr(setup.subprocess, "run", lambda *a, **k: called.append(a))
     setup.sync_catalog_skills()
     assert called == []
+
+
+def _load_setup(name):
+    spec = importlib.util.spec_from_file_location(
+        name, ROOT / "python" / "scripts" / "setup" / "setup.py")
+    setup = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(setup)
+    return setup
+
+
+def _fake_root(tmp_path, git: bool):
+    (tmp_path / "config.toml").write_text("")
+    if git:
+        (tmp_path / ".git").mkdir()
+    return tmp_path / "config.toml"
+
+
+def test_dev_checkout_skips_catalog_sync(tmp_path, monkeypatch):
+    setup = _load_setup("agent_setup_devskip")
+    monkeypatch.setattr(setup, "CONFIG_PATH", _fake_root(tmp_path, git=True))
+    monkeypatch.delenv("AGENT_DECK_CATALOG_SYNC", raising=False)
+    called = []
+    monkeypatch.setattr(setup.subprocess, "run", lambda *a, **k: called.append(a))
+    setup.sync_catalog_skills()
+    assert called == []
+
+
+def test_dev_checkout_sync_can_be_forced(tmp_path, monkeypatch):
+    setup = _load_setup("agent_setup_devforce")
+    monkeypatch.setattr(setup, "CONFIG_PATH", _fake_root(tmp_path, git=True))
+    monkeypatch.setenv("AGENT_DECK_CATALOG_SYNC", "1")
+    called = []
+    monkeypatch.setattr(setup.subprocess, "run",
+                        lambda *a, **k: called.append(a) or type("R", (), {"returncode": 0})())
+    setup.sync_catalog_skills()
+    assert len(called) == 1
+
+
+def test_installed_copy_still_syncs(tmp_path, monkeypatch):
+    setup = _load_setup("agent_setup_installsync")
+    monkeypatch.setattr(setup, "CONFIG_PATH", _fake_root(tmp_path, git=False))
+    monkeypatch.delenv("AGENT_DECK_CATALOG_SYNC", raising=False)
+    called = []
+    monkeypatch.setattr(setup.subprocess, "run",
+                        lambda *a, **k: called.append(a) or type("R", (), {"returncode": 0})())
+    setup.sync_catalog_skills()
+    assert len(called) == 1
