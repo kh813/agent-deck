@@ -109,8 +109,8 @@ By default `agy` (Antigravity CLI) is used; if any of the agents below are insta
 The engine you picked last is used again on the next launch. If it's no longer installed, agent-deck switches to one that is.
 
 > [!NOTE]
-> Claude Code の初回起動時に表示される「このフォルダを信頼しますか？」や、コマンド実行・ファイル編集の許可確認（`1. Yes / 2. … / No` の番号付きメニュー）は、画面下部のボタンから選んで応答できます。Claude Code が未インストールの場合は、起動時の画面からインストールできます（管理者権限は不要です）。
-> Claude Code's first-run "trust this folder?" dialog and its command/edit permission menus (`1. Yes / 2. … / No`) can be answered with the buttons at the bottom of the screen. If Claude Code isn't installed yet, it can be installed from the startup screen (no admin rights needed).
+> Claude Code の初回起動時に表示される「このフォルダを信頼しますか？」や、コマンド実行・ファイル編集の許可確認（`1. Yes / 2. … / No` の番号付きメニュー）は、画面下部のボタンから選んで応答できます（ターミナル上で直接答えることもでき、どちらで答えても、もう一方の確認表示も消えます）。Claude Code が未インストールの場合は、起動時の画面からインストールできます（管理者権限は不要です）。
+> Claude Code's first-run "trust this folder?" dialog and its command/edit permission menus (`1. Yes / 2. … / No`) can be answered with the buttons at the bottom of the screen (or directly in the terminal -- answering in either place also clears the other). If Claude Code isn't installed yet, it can be installed from the startup screen (no admin rights needed).
 >
 > Claude Code の配色はアプリのテーマ（ライト／ダーク）に自動で合わせます（agent-deck 内でのみ。普段ターミナルで使う Claude Code のテーマ設定は変わりません）。テーマを切り替えたときは、セッションを開始し直すと反映されます。
 > Claude Code's colors follow the app's light/dark theme (inside agent-deck only -- your own Claude Code theme setting is untouched). After switching themes, restart the session to apply it.

@@ -278,7 +278,11 @@ function App() {
   }, []);
 
   // Forwards keys typed directly into the terminal to the PTY.
+  // (Assigned below, once useChatSession has run.) Lets a prompt answered
+  // in the terminal also dismiss the GUI's prompt panel.
+  const noteTerminalInputRef = useRef<(data: string) => void>(() => {});
   const handleTerminalInput = useCallback((data: string) => {
+    noteTerminalInputRef.current(data);
     invoke("write_to_pty", { input: data });
   }, []);
 
@@ -303,6 +307,7 @@ function App() {
     cwd,
     status,
     activePrompt,
+    noteTerminalInput,
     statusMessage,
     showStatusMessage,
     startSession,
@@ -320,6 +325,7 @@ function App() {
     preLaunchArgs: appConfig?.pre_launch_args,
     preLaunchRequired: appConfig?.pre_launch_required,
   });
+  noteTerminalInputRef.current = noteTerminalInput;
 
   // Load SKILL.md content when CWD changes
   useEffect(() => {

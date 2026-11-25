@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { resolvePromptResponseInput } from "../lib/promptResponse";
+import { answersPrompt, isEchoOfAnswered, promptKey } from "../lib/promptSync";
 import { subscribeToTauriEvent } from "../lib/tauriListener";
 import { isTauri, webClient } from "../lib/webClient";
 
@@ -44,7 +45,29 @@ export function useChatSession({
 }: UseChatSessionOptions) {
   const [cwd, setCwd] = useState(initialCwd);
   const [status, setStatus] = useState<"idle" | "running" | "error">("idle");
-  const [activePrompt, setActivePrompt] = useState<PtyPrompt | null>(null);
+  const [activePrompt, setActivePromptState] = useState<PtyPrompt | null>(null);
+  // Mirrors for event handlers (see lib/promptSync.ts).
+  const activePromptRef = useRef<PtyPrompt | null>(null);
+  const answeredPromptRef = useRef<{ key: string; at: number } | null>(null);
+  const setActivePrompt = useCallback((p: PtyPrompt | null) => {
+    activePromptRef.current = p;
+    setActivePromptState(p);
+  }, []);
+  // A prompt was answered (GUI button or terminal key): drop the panel and
+  // ignore the CLI re-reporting the same prompt while it redraws.
+  const markPromptAnswered = useCallback(() => {
+    const p = activePromptRef.current;
+    if (p) answeredPromptRef.current = { key: promptKey(p), at: Date.now() };
+    setActivePrompt(null);
+  }, [setActivePrompt]);
+  const showPromptUnlessEcho = useCallback((p: PtyPrompt) => {
+    if (isEchoOfAnswered(p, answeredPromptRef.current, Date.now())) return;
+    setActivePrompt(p);
+  }, [setActivePrompt]);
+  // Called with every keystroke typed into the terminal itself.
+  const noteTerminalInput = useCallback((data: string) => {
+    if (activePromptRef.current && answersPrompt(data)) markPromptAnswered();
+  }, [markPromptAnswered]);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const statusRef = useRef(status);
@@ -268,7 +291,7 @@ export function useChatSession({
   const respondToPrompt = useCallback(async (responseText: string, rawInput?: string) => {
     if (statusRef.current !== "running") return;
 
-    setActivePrompt(null);
+    markPromptAnswered();
     const inputToSend = rawInput ?? resolvePromptResponseInput(responseText);
 
     if (!isTauri()) {
@@ -281,7 +304,7 @@ export function useChatSession({
     } catch (e: any) {
       console.error("Failed to write response to PTY:", e);
     }
-  }, []);
+  }, [markPromptAnswered]);
 
   // Change working directory and restart PTY
   const changeCwd = useCallback(
@@ -302,7 +325,7 @@ export function useChatSession({
         onRawOutput?.(new Uint8Array(data));
       });
       const offPrompt = webClient.on("prompt", (prompt: PtyPrompt) => {
-        setActivePrompt(prompt);
+        showPromptUnlessEcho(prompt);
       });
       const offStatus = webClient.on("status", (s: string) => {
         if (s === "terminated" || s === "idle") {
@@ -333,7 +356,7 @@ export function useChatSession({
 
     const unsubPrompt = subscribeToTauriEvent(
       listen<PtyPrompt>("pty-prompt", (event) => {
-        setActivePrompt(event.payload);
+        showPromptUnlessEcho(event.payload);
       })
     );
 
@@ -350,12 +373,13 @@ export function useChatSession({
       unsubStatus();
       unsubPrompt();
     };
-  }, [onRawOutput]);
+  }, [onRawOutput, showPromptUnlessEcho]);
 
   return {
     cwd,
     status,
     activePrompt,
+    noteTerminalInput,
     statusMessage,
     showStatusMessage,
     startSession,
