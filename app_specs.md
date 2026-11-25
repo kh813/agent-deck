@@ -321,8 +321,9 @@
     * 「AI と相談して作る / 改善」: 実行中のセッションに `my-skills create` / `my-skills update <名前>` を送る（セッションがなければその旨を表示）。
     * インポートしたスキル（`skills-catalog/`）: 「中身を見る」（読み取り専用）、「有効/無効」、「アンインストール」（`uninstall`）。全員配布（`_default/`、同期マニフェストに記録）のスキルは次回起動で戻るためアンインストール不可（無効化のみ）。
     * 標準スキル: 「中身を見る」のみ。
+    * エクスポート / インポート（`export` / `import-file`、ローカルのみ・公開版でも可）: 自作・インポートしたスキルを ZIP に保存（1 件なら ZIP 直下に SKILL.md＝カタログの ZIP と同じ形、複数なら スキル名/ フォルダごと。「自作スキルをすべてエクスポート」は `skills-personal/` 全部）。読み込みは ZIP（直下 SKILL.md / フォルダ 1 段 / さらに 1 段包んだもの）か .md。名前は frontmatter の `name`、なければファイル名・フォルダ名。常に `skills-personal/` に入れ、同名の自作スキルは確認のうえ上書き（無効化中のコピーも置き換え）。frontmatter の email は保持するので他人のスキルは「自作」扱いにならない。安全策: パスのはみ出し（`..`・絶対パス・ドライブ名）を拒否、合計 50MB・2000 ファイルまで、名前規則と description 必須を検査し、問題があれば何も書き込まない。パスは標準入力の JSON で渡す（長いパス・Windows パス対応）。
   * `create` / `save` は本文を argv ではなく標準入力の JSON（`{name, description, body}`、UTF-8）で渡す（Rust `catalog_api` の `input`、上限 1MB）。書き込むのは `skills-personal/` だけ。
-  * 公開版（config.toml なし）でも、ローカルだけで完結する操作（`local` / `read` / `create` / `save` / `delete` / `uninstall` / `enable` / `disable` / `rebuild`）は使える。画面はカタログタブと共有系ボタンを隠し、マイスキルだけを表示する。
+  * 公開版（config.toml なし）でも、ローカルだけで完結する操作（`local` / `read` / `create` / `save` / `delete` / `uninstall` / `enable` / `disable` / `rebuild` / `export` / `import-file`）は使える。画面はカタログタブと共有系ボタンを隠し、マイスキルだけを表示する。
   * 操作後は `skills rebuild` を自動実行（`_skills_lock` で既存の再ビルドと衝突しない）。必要ならエージェントへのスキル再読み込みを案内する。
 * **認証**: Google 認証が必要な操作で未認証なら、ブラウザのログインを開くことを画面に表示する（定期更新チェックと違い、利用者の操作なので対話認証してよい）。
 * **範囲外**: 管理者操作（`publish`、`update-index`、`change-owner`）は初版では画面に出さず、従来どおり skill-catalog スキル / コマンドで行う。

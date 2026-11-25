@@ -25,37 +25,38 @@ describe("catalogCardAction", () => {
 
 describe("localActions", () => {
   it("your enabled skill: edit, share, disable, delete", () => {
-    expect(m.localActions(loc({}))).toEqual(["edit", "share", "disable", "delete"]);
+    expect(m.localActions(loc({}))).toEqual(["edit", "share", "disable", "export", "delete"]);
   });
   it("your shared skill: update the shared copy or unshare", () => {
-    expect(m.localActions(loc({ shared: true }))).toEqual(["edit", "reshare", "unshare", "disable", "delete"]);
+    expect(m.localActions(loc({ shared: true }))).toEqual(["edit", "reshare", "unshare", "disable", "export", "delete"]);
     // still shared while disabled: unsharing stays possible
-    expect(m.localActions(loc({ shared: true, enabled: false }))).toEqual(["edit", "reshare", "unshare", "enable", "delete"]);
+    expect(m.localActions(loc({ shared: true, enabled: false }))).toEqual(["edit", "reshare", "unshare", "enable", "export", "delete"]);
   });
   it("disabled unshared skill: no share", () => {
-    expect(m.localActions(loc({ enabled: false }))).toEqual(["edit", "enable", "delete"]);
+    expect(m.localActions(loc({ enabled: false }))).toEqual(["edit", "enable", "export", "delete"]);
   });
   it("a personal skill someone else owns: edit/toggle/delete but never share", () => {
-    expect(m.localActions(loc({ mine: false }))).toEqual(["edit", "disable", "delete"]);
+    expect(m.localActions(loc({ mine: false }))).toEqual(["edit", "disable", "export", "delete"]);
   });
   it("imported skills: view, toggle, uninstall (never share/edit someone else's)", () => {
-    expect(m.localActions(loc({ root: "catalog", mine: false }))).toEqual(["view", "disable", "uninstall"]);
-    expect(m.localActions(loc({ root: "catalog", mine: false, enabled: false }))).toEqual(["view", "enable", "uninstall"]);
+    expect(m.localActions(loc({ root: "catalog", mine: false }))).toEqual(["view", "disable", "export", "uninstall"]);
+    expect(m.localActions(loc({ root: "catalog", mine: false, enabled: false }))).toEqual(["view", "enable", "export", "uninstall"]);
   });
   it("org auto-installed skills can't be uninstalled (they'd come back)", () => {
-    expect(m.localActions(loc({ root: "catalog", mine: false, auto_sync: true }))).toEqual(["view", "disable"]);
+    expect(m.localActions(loc({ root: "catalog", mine: false, auto_sync: true }))).toEqual(["view", "disable", "export"]);
   });
   it("built-in skills: view only", () => {
     expect(m.localActions(loc({ root: "common", mine: false }))).toEqual(["view"]);
   });
   it("every action has a label in both languages and a known op", () => {
-    const all: m.LocalAction[] = ["view", "edit", "share", "reshare", "unshare", "enable", "disable", "delete", "uninstall"];
+    const all: m.LocalAction[] = ["view", "edit", "share", "reshare", "unshare", "enable", "disable", "export", "delete", "uninstall"];
     for (const a of all) {
       expect(m.catalogText("ja", a)).not.toBe(a);
       expect(m.catalogText("en", a)).not.toBe("");
     }
     expect(m.opForAction("view")).toBeNull();
     expect(m.opForAction("edit")).toBeNull();
+    expect(m.opForAction("export")).toBeNull();
     expect(m.opForAction("reshare")).toBe("share");
     expect(m.opForAction("delete")).toBe("delete");
     expect(m.opForAction("uninstall")).toBe("uninstall");
@@ -146,8 +147,8 @@ describe("sortLocal", () => {
 describe("op sets", () => {
   it("Drive ops warn about the browser login; install-changing ops rebuild", () => {
     expect(m.DRIVE_OPS.has("import") && m.DRIVE_OPS.has("share") && !m.DRIVE_OPS.has("local")).toBe(true);
-    expect([...m.NEEDS_REBUILD].sort()).toEqual(["create", "delete", "disable", "enable", "import", "save", "uninstall"]);
-    for (const op of ["read", "create", "save", "delete", "uninstall", "local"] as const) expect(m.DRIVE_OPS.has(op)).toBe(false);
+    expect([...m.NEEDS_REBUILD].sort()).toEqual(["create", "delete", "disable", "enable", "import", "import-file", "save", "uninstall"]);
+    for (const op of ["read", "create", "save", "delete", "uninstall", "local", "export", "import-file"] as const) expect(m.DRIVE_OPS.has(op)).toBe(false);
   });
 });
 
@@ -192,5 +193,19 @@ describe("callCatalog", () => {
     await m.callCatalog("create", [], { name: "x", description: "説明", body: "1行目\n2行目" });
     const sent = invoke.mock.lastCall![1] as { input: string };
     expect(JSON.parse(sent.input)).toEqual({ name: "x", description: "説明", body: "1行目\n2行目" });
+  });
+});
+
+describe("export / import helpers", () => {
+  it("file name: the skill, or a dated bundle", () => {
+    expect(m.exportFileName(["weekly-report"])).toBe("weekly-report.zip");
+    expect(m.exportFileName(["a", "b"], new Date(2026, 0, 5))).toBe("agent-deck-skills-20260105.zip");
+  });
+  it("export all = your own skills only, disabled included", () => {
+    const t = m.exportAllTargets([
+      loc({ name: "a" }), loc({ name: "b", enabled: false }),
+      loc({ name: "c", root: "catalog", mine: false }), loc({ name: "d", root: "common", mine: false }),
+    ]);
+    expect(t).toEqual([{ name: "a", root: "personal" }, { name: "b", root: "personal" }]);
   });
 });

@@ -25,11 +25,15 @@ import {
   catalogText,
   confirmDialog,
   describeError,
+  exportAllTargets,
+  exportFileName,
   filterByOwner,
   filterSkills,
   importTarget,
   localActions,
   opForAction,
+  pickExportPath,
+  pickImportFile,
   sortLocal,
 } from "../lib/skillCatalog";
 import { EditorMode, SkillEditor } from "./SkillEditor";
@@ -153,7 +157,59 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
     }
   };
 
+  const exportSkills = async (targets: { name: string; root: string }[]) => {
+    if (!targets.length) {
+      setNotice({ kind: "info", text: T("nothingToExport") });
+      return;
+    }
+    const path = await pickExportPath(exportFileName(targets.map((t) => t.name)), lang);
+    if (!path) return;
+    const r = await run<{ path: string }>("export", [], { skills: targets, path });
+    if (r) setNotice({ kind: "ok", text: T("exported", { path: r.path }) });
+  };
+
+  const importFromFile = async () => {
+    const path = await pickImportFile(lang);
+    if (!path) return;
+    let r = await callImport(path, false);
+    if (r && "exists" in r) {
+      if (!(await confirmDialog(T("confirmImportOverwrite", { names: r.exists.join(", ") }), lang))) {
+        setNotice(null);
+        return;
+      }
+      r = await callImport(path, true);
+    }
+    if (!r || "exists" in r) return;
+    if (!(await finish("import-file"))) return;
+    const shadowed = r.shadowed.length ? T("importShadowed", { names: r.shadowed.join(", ") }) : "";
+    setNotice({ kind: "ok", text: T("importedFiles", { names: r.names.join(", ") }) + shadowed });
+    refresh();
+  };
+
+  // import-file, with "already have it" turned into a question instead of an error.
+  const callImport = async (path: string, overwrite: boolean)
+    : Promise<{ names: string[]; shadowed: string[] } | { exists: string[] } | null> => {
+    setBusy("import-file");
+    setNotice({ kind: "info", text: T("working") });
+    try {
+      const r = await callCatalog<{ names: string[]; shadowed: string[] }>("import-file", [], { path, overwrite });
+      if (r.ok) return r.data;
+      if (r.error.code === "exists" && !overwrite) return { exists: (r.error as { names?: string[] }).names ?? [] };
+      setNotice({ kind: "error", text: describeError(lang, r.error) });
+      return null;
+    } catch (e) {
+      setNotice({ kind: "error", text: describeError(lang, { code: "exception", message: String(e) }) });
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const onLocalAction = async (s: LocalSkill, a: LocalAction) => {
+    if (a === "export") {
+      await exportSkills([{ name: s.name, root: s.root }]);
+      return;
+    }
     if (a === "view" || a === "edit") {
       const doc = await run<SkillDoc>("read", [s.name, s.root]);
       if (doc) setEditor({ mode: a === "edit" && doc.editable ? "edit" : "view", doc });
@@ -252,7 +308,7 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
                 </button>
               ))}
               {tab === "mine" && (
-                <div style={{ marginLeft: "auto", display: "flex", gap: "8px" }}>
+                <div style={{ marginLeft: "auto", display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
                   <button className="primary" disabled={disabled} onClick={() => setEditor({ mode: "new" })} style={{ padding: "6px 12px" }}>
                     {T("newSkill")}
                   </button>
@@ -261,6 +317,13 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
                       {T("createWithAi")}
                     </button>
                   )}
+                  <button className="secondary" disabled={disabled} onClick={() => void importFromFile()} style={{ padding: "6px 12px" }}>
+                    {T("importFile")}
+                  </button>
+                  <button className="secondary" disabled={disabled || !local}
+                    onClick={() => void exportSkills(exportAllTargets(local ?? []))} style={{ padding: "6px 12px" }}>
+                    {T("exportAll")}
+                  </button>
                 </div>
               )}
             </div>

@@ -57,7 +57,7 @@ export type ApiResult<T> = { ok: true; data: T; log: string } | { ok: false; err
 
 export type CatalogOp =
   | "catalog" | "search" | "info" | "local" | "import" | "share" | "unshare" | "enable" | "disable" | "rebuild"
-  | "read" | "create" | "save" | "delete" | "uninstall";
+  | "read" | "create" | "save" | "delete" | "uninstall" | "export" | "import-file";
 
 /** `input` goes to the script's stdin (create/save: a SkillDraft). */
 export function callCatalog<T>(op: CatalogOp, args: string[] = [], input?: unknown): Promise<ApiResult<T>> {
@@ -68,7 +68,7 @@ export function callCatalog<T>(op: CatalogOp, args: string[] = [], input?: unkno
 export const DRIVE_OPS: ReadonlySet<CatalogOp> = new Set(["catalog", "search", "info", "import", "share", "unshare"]);
 
 /** Ops that change installed skills -> run `rebuild` afterwards. */
-export const NEEDS_REBUILD: ReadonlySet<CatalogOp> = new Set(["import", "enable", "disable", "create", "save", "delete", "uninstall"]);
+export const NEEDS_REBUILD: ReadonlySet<CatalogOp> = new Set(["import", "enable", "disable", "create", "save", "delete", "uninstall", "import-file"]);
 
 export type CardAction = { kind: "import" | "reimport" } | { kind: "none"; label: "builtin" | "yours" };
 
@@ -87,7 +87,7 @@ export function catalogCardAction(s: CatalogSkill): CardAction {
 }
 
 export type LocalAction =
-  | "view" | "edit" | "share" | "reshare" | "unshare" | "enable" | "disable" | "delete" | "uninstall";
+  | "view" | "edit" | "share" | "reshare" | "unshare" | "enable" | "disable" | "export" | "delete" | "uninstall";
 
 /**
  * Buttons for a skill on the "My skills" tab.
@@ -100,12 +100,12 @@ export type LocalAction =
 export function localActions(s: LocalSkill): LocalAction[] {
   if (s.root === "common") return ["view"];
   if (s.root === "catalog") {
-    return ["view", s.enabled ? "disable" : "enable", ...(s.auto_sync ? [] : (["uninstall"] as const))];
+    return ["view", s.enabled ? "disable" : "enable", "export", ...(s.auto_sync ? [] : (["uninstall"] as const))];
   }
   const out: LocalAction[] = ["edit"];
   if (s.mine && s.shared) out.push("reshare", "unshare");
   else if (s.mine && s.enabled) out.push("share");
-  out.push(s.enabled ? "disable" : "enable", "delete");
+  out.push(s.enabled ? "disable" : "enable", "export", "delete");
   return out;
 }
 
@@ -114,6 +114,7 @@ export function opForAction(a: LocalAction): CatalogOp | null {
   switch (a) {
     case "view":
     case "edit":
+    case "export": // asks for a file first
       return null;
     case "reshare":
       return "share";
@@ -227,6 +228,15 @@ const TEXT = {
     delete: "削除",
     uninstall: "アンインストール",
     newSkill: "＋ 新しいスキル",
+    export: "エクスポート",
+    exportAll: "📤 自作スキルをすべてエクスポート",
+    importFile: "📥 ファイルから読み込む",
+    exported: "{path} に保存しました。",
+    importedFiles: "読み込みました: {names}。新しいセッションから使えます。",
+    importShadowed: "（{names} は同名の標準/インポート済みスキルが優先されます）",
+    confirmImportOverwrite: "同じ名前の自作スキルがあります: {names}。上書きしますか？",
+    nothingToExport: "エクスポートできる自作スキルがありません。",
+    zipFilter: "スキル（ZIP / SKILL.md）",
     noCatalogNote: "この環境には共有スキルカタログがありません。自分のスキルの作成・編集と、インストール済みスキルの管理ができます。",
     createWithAi: "🤖 AI と相談して作る",
     improveWithAi: "🤖 AI と相談して改善",
@@ -304,6 +314,15 @@ const TEXT = {
     delete: "Delete",
     uninstall: "Uninstall",
     newSkill: "+ New skill",
+    export: "Export",
+    exportAll: "📤 Export all my skills",
+    importFile: "📥 Import from file",
+    exported: "Saved to {path}.",
+    importedFiles: "Imported: {names}. Available in new sessions.",
+    importShadowed: " ({names}: a built-in or imported skill of the same name takes precedence)",
+    confirmImportOverwrite: "You already have: {names}. Overwrite?",
+    nothingToExport: "You have no skills of your own to export.",
+    zipFilter: "Skill (ZIP / SKILL.md)",
     noCatalogNote: "No shared skill catalog here. You can still create and edit your own skills and manage installed ones.",
     createWithAi: "🤖 Create with AI",
     improveWithAi: "🤖 Improve with AI",
@@ -431,4 +450,32 @@ export async function confirmDialog(message: string, lang: Lang): Promise<boolea
   } catch {
     return typeof window !== "undefined" && window.confirm(message);
   }
+}
+
+// ── Export / import as files ──
+
+/** Default file name: the skill's name, or a dated bundle for several. */
+export function exportFileName(names: readonly string[], now = new Date()): string {
+  if (names.length === 1) return `${names[0]}.zip`;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `agent-deck-skills-${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}.zip`;
+}
+
+/** "Export all": your own skills (skills-personal/), disabled ones included. */
+export function exportAllTargets(skills: readonly LocalSkill[]): { name: string; root: LocalSkill["root"] }[] {
+  return skills.filter((s) => s.root === "personal").map((s) => ({ name: s.name, root: s.root }));
+}
+
+/** Save dialog for the ZIP; null if cancelled. */
+export async function pickExportPath(defaultName: string, lang: Lang): Promise<string | null> {
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const p = await save({ defaultPath: defaultName, filters: [{ name: catalogText(lang, "zipFilter"), extensions: ["zip"] }] });
+  return typeof p === "string" && p ? p : null;
+}
+
+/** Open dialog for a skill file; null if cancelled. */
+export async function pickImportFile(lang: Lang): Promise<string | null> {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const p = await open({ multiple: false, directory: false, filters: [{ name: catalogText(lang, "zipFilter"), extensions: ["zip", "md"] }] });
+  return typeof p === "string" && p ? p : null;
 }

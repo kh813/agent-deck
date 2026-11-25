@@ -50,6 +50,19 @@ function fake(op: string, args: string[], input: unknown) {
     case "delete": case "uninstall":
       local = local.filter((s) => s.name !== args[0]);
       return ok({ name: args[0] });
+    case "export": {
+      const d = input as { skills: { name: string }[]; path: string };
+      return ok({ path: d.path, names: d.skills.map((x) => x.name) });
+    }
+    case "import-file": {
+      const d = input as { path: string; overwrite: boolean };
+      if (local.some((x) => x.name === "from-file") && !d.overwrite) {
+        return { ok: false, error: { code: "exists", message: "x / x", names: ["from-file"] }, log: "" };
+      }
+      local = local.filter((x) => x.name !== "from-file");
+      local.push({ name: "from-file", description: "imported file", root: "personal", enabled: true, owner: "", mine: true, shared: false });
+      return ok({ names: ["from-file"], overwrote: [], shadowed: [] });
+    }
     case "share": find(args[0]).shared = true; return ok({ name: args[0] });
     case "unshare": find(args[0]).shared = false; return ok({ name: args[0] });
     case "disable": find(args[0]).enabled = false; return ok({ name: args[0] });
@@ -65,8 +78,13 @@ vi.mock("@tauri-apps/api/core", () => ({
     return fake(a.op, a.args, input);
   },
 }));
+let savePath: string | null = "/out/x.zip";
+let openPath: string | null = "/in/skill.zip";
+const dialogCalls: { kind: string; opts: unknown }[] = [];
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: async () => (answers.length ? answers.shift()! : true),
+  save: async (opts: unknown) => { dialogCalls.push({ kind: "save", opts }); return savePath; },
+  open: async (opts: unknown) => { dialogCalls.push({ kind: "open", opts }); return openPath; },
 }));
 
 const { SkillCatalogPanel } = await import("./SkillCatalogPanel");
@@ -88,6 +106,9 @@ async function openMine() {
 
 beforeEach(() => {
   calls.length = 0;
+  dialogCalls.length = 0;
+  savePath = "/out/x.zip";
+  openPath = "/in/skill.zip";
   answers = [];
   failNext = {};
   local = [
@@ -152,10 +173,10 @@ describe("my skills tab: buttons per kind", () => {
     render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
     await openMine();
     const labels = (n: string) => [...card(n).querySelectorAll("button")].map((b) => b.textContent);
-    expect(labels("my-skill")).toEqual(["編集", "カタログに共有", "無効にする", "削除"]);
-    expect(labels("my-shared")).toEqual(["編集", "カタログの版を更新", "共有を取り下げ", "無効にする", "削除"]);
-    expect(labels("expense-check")).toEqual(["中身を見る", "無効にする", "アンインストール"]);
-    expect(labels("slide-generator")).toEqual(["中身を見る", "無効にする"]);
+    expect(labels("my-skill")).toEqual(["編集", "カタログに共有", "無効にする", "エクスポート", "削除"]);
+    expect(labels("my-shared")).toEqual(["編集", "カタログの版を更新", "共有を取り下げ", "無効にする", "エクスポート", "削除"]);
+    expect(labels("expense-check")).toEqual(["中身を見る", "無効にする", "エクスポート", "アンインストール"]);
+    expect(labels("slide-generator")).toEqual(["中身を見る", "無効にする", "エクスポート"]);
     expect(labels("setup")).toEqual(["中身を見る"]);
     expect(card("slide-generator").textContent).toContain("全員に配布");
   });
@@ -383,11 +404,81 @@ describe("public install (no org catalog)", () => {
     expect(screen.queryByRole("button", { name: "カタログ" })).toBeNull();
     expect(screen.getByText(/共有スキルカタログがありません/)).toBeTruthy();
     const labels = (n: string) => [...card(n).querySelectorAll("button")].map((b) => b.textContent);
-    expect(labels("my-skill")).toEqual(["編集", "無効にする", "削除"]);
-    expect(labels("my-shared")).toEqual(["編集", "無効にする", "削除"]);
+    expect(labels("my-skill")).toEqual(["編集", "無効にする", "エクスポート", "削除"]);
+    expect(labels("my-shared")).toEqual(["編集", "無効にする", "エクスポート", "削除"]);
     expect(ops()).toEqual(["catalog", "local"]);
     const n = calls.length;
     fireEvent.click(btnIn(card("my-skill"), "無効にする"));
     await waitFor(() => expect(opsSince(n)).toEqual(["disable", "rebuild", "local"]));
+  });
+});
+
+describe("export / import files", () => {
+  it("exports one skill to the chosen file (name suggested)", async () => {
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openMine();
+    const n = calls.length;
+    fireEvent.click(btnIn(card("my-skill"), "エクスポート"));
+    await screen.findByText(/\/out\/x\.zip に保存しました/);
+    expect((dialogCalls[0].opts as { defaultPath: string }).defaultPath).toBe("my-skill.zip");
+    expect(opsSince(n)).toEqual(["export"]);
+    expect(calls[n].input).toEqual({ skills: [{ name: "my-skill", root: "personal" }], path: "/out/x.zip" });
+  });
+
+  it("export all = your own skills in one file", async () => {
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openMine();
+    fireEvent.click(screen.getByRole("button", { name: "📤 自作スキルをすべてエクスポート" }));
+    await screen.findByText(/保存しました/);
+    const exp = calls.find((c) => c.op === "export")!;
+    expect((exp.input as { skills: { name: string }[] }).skills.map((x) => x.name)).toEqual(["my-shared", "my-skill"]);
+    expect((dialogCalls[0].opts as { defaultPath: string }).defaultPath).toMatch(/^agent-deck-skills-\d{8}\.zip$/);
+  });
+
+  it("cancelling the save dialog does nothing", async () => {
+    savePath = null;
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openMine();
+    const n = calls.length;
+    await act(async () => fireEvent.click(btnIn(card("my-skill"), "エクスポート")));
+    expect(opsSince(n)).toEqual([]);
+  });
+
+  it("imports a file, rebuilds, shows it", async () => {
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openMine();
+    const n = calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "📥 ファイルから読み込む" }));
+    await screen.findByText("from-file", { selector: "strong" });
+    await idle();
+    expect(opsSince(n)).toEqual(["import-file", "rebuild", "local"]);
+    expect(calls[n].input).toEqual({ path: "/in/skill.zip", overwrite: false });
+    expect(screen.getByText(/読み込みました: from-file/)).toBeTruthy();
+    expect((dialogCalls[0].opts as { filters: { extensions: string[] }[] }).filters[0].extensions).toEqual(["zip", "md"]);
+  });
+
+  it("same name: asks, then overwrites; 'no' changes nothing", async () => {
+    local.push({ name: "from-file", description: "old", root: "personal", enabled: true, owner: "", mine: true, shared: false });
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openMine();
+    let n = calls.length;
+    answers = [false];
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "📥 ファイルから読み込む" })));
+    await idle();
+    expect(opsSince(n)).toEqual(["import-file"]);
+    n = calls.length;
+    answers = [true];
+    fireEvent.click(screen.getByRole("button", { name: "📥 ファイルから読み込む" }));
+    await waitFor(() => expect(opsSince(n)).toEqual(["import-file", "import-file", "rebuild", "local"]));
+    expect(calls[n + 1].input).toEqual({ path: "/in/skill.zip", overwrite: true });
+  });
+
+  it("cancelling the open dialog does nothing", async () => {
+    openPath = null;
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openMine();
+    const n = calls.length;
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "📥 ファイルから読み込む" })));
+    expect(opsSince(n)).toEqual([]);
   });
 });

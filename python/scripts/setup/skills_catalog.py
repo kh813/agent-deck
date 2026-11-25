@@ -101,7 +101,7 @@ def _reexec_with_venv():
 # api ops that only touch skills on this PC: they work on a public install
 # too (no config.toml, no Google libraries needed).
 LOCAL_API_OPS = frozenset({"local", "read", "create", "save", "delete", "uninstall",
-                           "enable", "disable", "rebuild"})
+                           "enable", "disable", "rebuild", "export", "import-file"})
 
 
 def _is_local_api_call() -> bool:
@@ -1617,12 +1617,160 @@ def api_uninstall(args):
     raise ApiError("not_found", f"インポートしたスキルが見つかりません / No imported skill named {name}")
 
 
+# ── Export / import skills as files (moving PCs, backups, handing a skill
+# to someone outside the catalog) ──
+#
+# One skill -> a ZIP with SKILL.md at its root (the same layout the catalog
+# uses for multi-file skills, so either kind of ZIP imports). Several ->
+# one folder per skill. Import also takes a bare SKILL.md / .md file.
+# Imported skills always land in skills-personal/ (the frontmatter email is
+# kept, so a colleague's skill stays "theirs": you can't share it as yours).
+
+EXPORT_MAX_FILES = 2000
+IMPORT_MAX_BYTES = 50 * 1024 * 1024
+IMPORT_MAX_FILES = 2000
+
+
+def _export_source(item) -> Path:
+    if isinstance(item, str):
+        item = {"name": item}
+    name, root = str(item.get("name", "")), str(item.get("root", "") or "")
+    found = _find_local_skill(name, root if root in ("catalog", "personal") else "")
+    if not found or found[0] == "common":
+        raise ApiError("not_found", f"エクスポートできるスキルが見つかりません / No exportable skill named {name}")
+    return found[1]
+
+
+def api_export(args):
+    data = _read_stdin_json()
+    items = data.get("skills") or []
+    path = str(data.get("path", "")).strip()
+    if not items or not isinstance(items, list):
+        raise ApiError("usage", "エクスポートするスキルを指定してください / Choose skills to export")
+    if not path:
+        raise ApiError("usage", "保存先を指定してください / Choose where to save")
+    dest = Path(path)
+    if dest.suffix.lower() != ".zip":
+        dest = dest.with_name(dest.name + ".zip")
+    dirs = [_export_source(i) for i in items]
+    names = [d.name for d in dirs]
+    if len(set(names)) != len(names):
+        raise ApiError("usage", "同じ名前のスキルが重複しています / The same skill is listed twice")
+    single = len(dirs) == 1
+    count = 0
+    tmp = dest.with_name(dest.name + ".tmp")
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+            for d in dirs:
+                prefix = "" if single else d.name + "/"
+                for p in [d / "SKILL.md", *_skill_extra_files(d)]:
+                    count += 1
+                    if count > EXPORT_MAX_FILES:
+                        raise ApiError("too_large", "ファイルが多すぎます / Too many files")
+                    zf.write(p, prefix + p.relative_to(d).as_posix())
+        os.replace(tmp, dest)
+    except OSError as e:
+        raise ApiError("failed", f"保存できませんでした / Couldn't save: {e}")
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    return {"path": str(dest), "names": names}
+
+
+def _name_from_skill_md(text: str, fallback: str) -> str:
+    name = (_parse_frontmatter(text).get("name") or fallback or "").strip().strip("'\"")
+    return name
+
+
+def _skills_in_zip(zf: zipfile.ZipFile, stem: str) -> dict:
+    """name -> {relative path: member name} for each skill in the archive.
+    Root SKILL.md = one skill; otherwise each top folder holding a
+    SKILL.md (one wrapping folder, as Finder/Explorer zips make, is fine)."""
+    infos = [i for i in zf.infolist() if not i.is_dir()
+             and "__MACOSX" not in i.filename.split("/") and not i.filename.endswith(".DS_Store")]
+    if len(infos) > IMPORT_MAX_FILES or sum(i.file_size for i in infos) > IMPORT_MAX_BYTES:
+        raise ApiError("too_large", "ファイルが大きすぎます / The file is too large")
+    paths = {i.filename.replace("\\", "/"): i.filename for i in infos}
+    for p in paths:
+        parts = p.split("/")
+        if p.startswith("/") or ".." in parts or (parts and ":" in parts[0]):
+            raise ApiError("invalid_file", f"安全でないパスが含まれています / Unsafe path in archive: {p}")
+
+    def group(base: str) -> dict:
+        return {p[len(base):]: m for p, m in paths.items() if p.startswith(base)}
+
+    if "SKILL.md" in paths:
+        md = zf.read(paths["SKILL.md"]).decode("utf-8", errors="replace")
+        return {_name_from_skill_md(md, stem): group("")}
+    tops = sorted({p.split("/")[0] for p in paths if "/" in p})
+    found = {}
+    for t in tops:
+        if f"{t}/SKILL.md" in paths:
+            md = zf.read(paths[f"{t}/SKILL.md"]).decode("utf-8", errors="replace")
+            found[_name_from_skill_md(md, t)] = group(t + "/")
+    if not found and len(tops) == 1:  # one wrapping folder around several skills
+        for p in paths:
+            parts = p.split("/")
+            if len(parts) == 3 and parts[2] == "SKILL.md":
+                md = zf.read(paths[p]).decode("utf-8", errors="replace")
+                found[_name_from_skill_md(md, parts[1])] = group(f"{parts[0]}/{parts[1]}/")
+    return found
+
+
+def api_import_file(args):
+    data = _read_stdin_json()
+    src = Path(str(data.get("path", "")).strip())
+    overwrite = bool(data.get("overwrite"))
+    if not src.is_file():
+        raise ApiError("not_found", f"ファイルが見つかりません / File not found: {src}")
+    stem = src.stem.lower()
+    skills = {}  # name -> {rel: bytes}
+    if src.suffix.lower() == ".zip":
+        try:
+            with zipfile.ZipFile(src) as zf:
+                for name, members in _skills_in_zip(zf, stem).items():
+                    skills[name] = {rel: zf.read(m) for rel, m in members.items()}
+        except zipfile.BadZipFile:
+            raise ApiError("invalid_file", "ZIP ファイルとして読めません / Not a valid ZIP file")
+    elif src.suffix.lower() == ".md":
+        raw = src.read_bytes()
+        if len(raw) > MAX_SKILL_MD_BYTES:
+            raise ApiError("too_large", "ファイルが大きすぎます / The file is too large")
+        text = raw.decode("utf-8-sig", errors="replace")
+        fallback = src.parent.name.lower() if src.name == "SKILL.md" else stem
+        skills[_name_from_skill_md(text, fallback)] = {"SKILL.md": text.encode("utf-8")}
+    else:
+        raise ApiError("invalid_file", "ZIP か SKILL.md（.md）を選んでください / Choose a .zip or a SKILL.md (.md) file")
+    if not skills:
+        raise ApiError("invalid_file", "スキル（SKILL.md）が見つかりません / No skill (SKILL.md) in the file")
+    for name, files in skills.items():
+        if not SKILL_NAME_RE.match(name) or name == "disabled":
+            raise ApiError("invalid_name", f"スキル名が不正です: {name} / Invalid skill name: {name}")
+        if not _parse_frontmatter(files["SKILL.md"].decode("utf-8", errors="replace")).get("description"):
+            raise ApiError("invalid_file", f"{name}: SKILL.md に description がありません / {name}: SKILL.md has no description")
+    existing = [n for n in skills if any((SKILLS_SRC / sub / n).exists() for sub in ("", "disabled"))]
+    if existing and not overwrite:
+        raise ApiError("exists", "同じ名前の自作スキルがあります: " + ", ".join(existing)
+                       + " / You already have: " + ", ".join(existing), names=existing)
+    shadowed = [n for n in skills if (_find_local_skill(n, "common") or _find_local_skill(n, "catalog"))]
+    for name, files in sorted(skills.items()):
+        for sub in ("", "disabled"):
+            if (SKILLS_SRC / sub / name).exists():
+                shutil.rmtree(SKILLS_SRC / sub / name)
+        dest = SKILLS_SRC / name
+        for rel, content in files.items():
+            target = dest / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+    return {"names": sorted(skills), "overwrote": existing, "shadowed": shadowed}
+
+
 API_OPS = {
     "catalog": api_catalog, "search": api_search, "info": api_info, "local": api_local,
     "import": api_import, "share": api_share, "unshare": api_unshare,
     "enable": api_enable, "disable": api_disable, "rebuild": api_rebuild,
     "read": api_read, "create": api_create, "save": api_save, "delete": api_delete,
-    "uninstall": api_uninstall,
+    "uninstall": api_uninstall, "export": api_export, "import-file": api_import_file,
 }
 
 

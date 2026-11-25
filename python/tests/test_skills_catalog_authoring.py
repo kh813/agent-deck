@@ -361,3 +361,20 @@ def test_local_ops_list_matches_what_needs_no_drive():
     assert sc.LOCAL_API_OPS <= set(sc.API_OPS)
     for op in ("catalog", "search", "info", "import", "share", "unshare"):
         assert op not in sc.LOCAL_API_OPS
+
+
+def test_public_install_export_import_round_trip_japanese_path(public_install, tmp_path):
+    draft = {"name": "weekly-report", "description": "週報", "body": "手順\n"}
+    run_script(public_install, "create", stdin=json.dumps(draft, ensure_ascii=False))
+    out_dir = tmp_path / "書き出し フォルダ"
+    out_dir.mkdir()
+    code, r = run_script(public_install, "export", stdin=json.dumps(
+        {"skills": [{"name": "weekly-report", "root": "personal"}], "path": str(out_dir / "週報スキル")}, ensure_ascii=False))
+    assert r["ok"], r
+    zip_path = Path(r["data"]["path"])
+    assert zip_path.name == "週報スキル.zip" and zip_path.is_file()
+    run_script(public_install, "delete", "weekly-report")
+    code, r = run_script(public_install, "import-file", stdin=json.dumps({"path": str(zip_path)}, ensure_ascii=False))
+    assert r["ok"] and r["data"]["names"] == ["weekly-report"], r
+    md = public_install / "python" / "skills-personal" / "weekly-report" / "SKILL.md"
+    assert md.read_text(encoding="utf-8").endswith("手順\n")

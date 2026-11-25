@@ -22,10 +22,12 @@ pub const API_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// Ops the screen may call (mirrors skills_catalog.py API_OPS).
 pub(crate) const ALLOWED_OPS: &[&str] = &[
     "catalog", "search", "info", "local", "import", "share", "unshare", "enable", "disable", "rebuild",
-    "read", "create", "save", "delete", "uninstall",
+    "read", "create", "save", "delete", "uninstall", "export", "import-file",
 ];
 /// Ops that read a JSON document on stdin (a skill's multi-line text).
-pub(crate) const STDIN_OPS: &[&str] = &["create", "save"];
+/// (export/import-file: file paths go there too -- they can be long or
+/// start with anything, which argv validation would refuse.)
+pub(crate) const STDIN_OPS: &[&str] = &["create", "save", "export", "import-file"];
 pub const MAX_INPUT_BYTES: usize = 1_000_000;
 
 /// The last marker line's JSON, if any.
@@ -197,7 +199,7 @@ mod tests {
 
     #[test]
     fn authoring_ops_are_allowed_but_not_admin_ones() {
-        for op in ["read", "create", "save", "delete", "uninstall"] {
+        for op in ["read", "create", "save", "delete", "uninstall", "export", "import-file"] {
             assert!(validate_args(op, &[]).is_ok(), "{op}");
         }
         for op in ["publish", "upload", "download", "sync", "change-owner", "update-index"] {
@@ -209,7 +211,7 @@ mod tests {
     fn stdin_ops_read_stdin_in_python() {
         let py = include_str!("../../python/scripts/setup/skills_catalog.py");
         for op in STDIN_OPS {
-            let f = format!("def api_{op}(args):");
+            let f = format!("def api_{}(args):", op.replace('-', "_"));
             let start = py.find(&f).unwrap_or_else(|| panic!("{f}"));
             let body = &py[start..start + 400.min(py.len() - start)];
             assert!(body.contains("_read_stdin_json()"), "{op} must read stdin");

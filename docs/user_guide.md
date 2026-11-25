@@ -402,6 +402,8 @@ Click "📚 Skills" at the top right to open the Skill Catalog screen, where you
   - **インポートしたスキル / Imported**: 「中身を見る」「無効にする / 有効にする」「アンインストール」。全員に自動配布されるスキル（「全員に配布」）は次回起動時に戻るため、アンインストールではなく無効化で止めます。
     "View", "Disable / Enable", "Uninstall". Skills installed for everyone ("For everyone") come back on the next launch, so turn them off with Disable instead.
   - **標準スキル / Built-in**: 「中身を見る」のみ。 / "View" only.
+  - **エクスポート / インポート / Export & import**: 各スキルの「エクスポート」、または「📤 自作スキルをすべてエクスポート」で ZIP ファイルに保存できます（PC の移行やバックアップ、カタログを通さずに同僚へ渡すときに）。「📥 ファイルから読み込む」で ZIP または SKILL.md を読み込むと、自作スキルとして追加されます。同じ名前の自作スキルがあるときは上書きするか確認されます。他の人が作ったスキルを読み込んだ場合、作成者はその人のままなので、自分のものとしてカタログに共有することはできません。
+    "Export" on a skill, or "📤 Export all my skills", saves a ZIP (moving to a new PC, backups, handing a skill to a colleague outside the catalog). "📥 Import from file" adds a ZIP or SKILL.md as one of your skills, asking before overwriting one with the same name. A skill someone else made keeps them as its author, so you can't share it to the catalog as yours.
 - 共有スキルカタログのない環境（組織向け設定のない公開版）では「マイスキル」だけが表示され、自作スキルの作成・編集とインストール済みスキルの管理ができます。
   Without a shared catalog (the public edition without the org's settings), only "My Skills" is shown: you can still create and edit your own skills and manage installed ones.
 
