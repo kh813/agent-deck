@@ -193,11 +193,13 @@ def _normalize_sh_to_lf(target: Path) -> None:
 # wiped them: ChromeUserData/ = the saved browser login that ask-portal and
 # the other Chrome-driven skills reuse (lost -> re-login after each update),
 # scheduled/ = the per-task sidecar files of registered scheduled prompts,
-# logs/ = their run logs.
+# logs/ = their run logs. ChromeUserData-bundled/ = the same login for
+# Playwright's bundled Chromium (used when macOS won't launch Chrome).
 _PRESERVED_PYTHON_DIRS = (
     "skills-personal",
     "skills-catalog",
     "scripts/automation/ChromeUserData",
+    "scripts/automation/ChromeUserData-bundled",
     "scripts/automation/scheduled",
     "scripts/automation/logs",
 )

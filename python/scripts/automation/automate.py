@@ -48,7 +48,7 @@ ACTIONS = {
     "actionpassport":   "download.py",
     "sansan":           "download.py",
     "ext-devices":      "download.py",
-    "update-user-data": "download.py",
+    "update-user-data": "chrome_login.py",  # ships with agent-deck (no longer needs the download-* skills)
     "portal":           "portal_search.py",
     "calendar":         "gcalendar.py",
 }

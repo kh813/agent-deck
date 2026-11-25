@@ -53,6 +53,7 @@ python/**/__pycache__/
 /skills/*.skill
 python/scripts/automation/logs/
 python/scripts/automation/ChromeUserData/
+python/scripts/automation/ChromeUserData-bundled/
 python/scripts/automation/scheduled/
 
 # Personal skill layer — per-installation, never committed

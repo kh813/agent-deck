@@ -123,30 +123,100 @@ def _find_chrome_windows() -> str | None:
     return None
 
 
-def get_chrome_executable():
-    """OSに応じたChromeの実行パスを返す。見つからなければ終了する。"""
+_BUNDLED_NOTICE_SHOWN = False
+_BUNDLED_CHECKED = False
+_CHROME_PROBE_CACHE: dict = {}
+
+
+def _find_system_chrome():
+    """普段使いの Google Chrome の実行ファイル。見つからなければ None。"""
     if pf == 'Windows':
-        path = _find_chrome_windows()
-        if path:
-            return path
-        print("Google Chrome が見つかりません")
-        sys.exit(1)
-    elif pf == 'Darwin':
+        return _find_chrome_windows()
+    if pf == 'Darwin':
         for app_dir in ('/Applications', os.path.expanduser('~/Applications')):
             app = os.path.join(app_dir, 'Google Chrome.app')
             if os.path.isdir(app):
                 return os.path.join(app, 'Contents/MacOS/Google Chrome')
-        print("Google Chrome が見つかりません (/Applications または ~/Applications を確認してください)")
-        sys.exit(1)
-    else:
-        print("未対応のOSです")
-        sys.exit(1)
+    return None
+
+
+def _system_chrome_launchable(path: str) -> bool:
+    """macOS: Chrome を実際に起動できるかを `--version` で確かめる（結果はキャッシュ）。
+
+    Confirmed for real (2026-11-25, macOS 27 + Chrome 158): every NEW launch of
+    the system Chrome was SIGKILLed by the kernel ("Taskgated Invalid
+    Signature", exit 137) -- even via `open -a` -- while the copy started
+    earlier from the Dock kept running and `codesign --verify` passed.
+    Playwright only saw "TargetClosedError", so ask-portal and every other
+    Chrome-driven script failed. Windows has no such failure mode, so the
+    probe is skipped there."""
+    if pf != 'Darwin':
+        return True
+    if path in _CHROME_PROBE_CACHE:
+        return _CHROME_PROBE_CACHE[path]
+    try:
+        r = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=20)
+        ok = r.returncode == 0 and 'Chrome' in (r.stdout or '')
+    except Exception:
+        ok = False
+    _CHROME_PROBE_CACHE[path] = ok
+    return ok
+
+
+def _ensure_bundled_chromium() -> None:
+    """Playwright 内蔵 Chromium が未インストールなら入れる（通常は setup 済み）。
+
+    Checked in a child process: this is called while the caller's own
+    sync_playwright() is already running, and a nested sync_playwright()
+    raises -- which made every call look like "not installed"."""
+    global _BUNDLED_CHECKED
+    if _BUNDLED_CHECKED:
+        return
+    _BUNDLED_CHECKED = True
+    probe = ("import os; from playwright.sync_api import sync_playwright\n"
+             "with sync_playwright() as p: print(os.path.exists(p.chromium.executable_path))")
+    try:
+        r = subprocess.run([sys.executable, '-c', probe], capture_output=True, text=True, timeout=60)
+        if r.stdout.strip() == 'True':
+            return
+    except Exception:
+        pass
+    print("[INFO] Playwright の Chromium をインストールしています... / Installing Playwright's Chromium...")
+    subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'], check=False)
+
+
+def use_bundled_chromium() -> bool:
+    """True = 普段の Chrome が無い／起動できないので、Playwright 内蔵の Chromium を使う。"""
+    path = _find_system_chrome()
+    return not (path and _system_chrome_launchable(path))
+
+
+def get_chrome_executable():
+    """Playwright の executable_path に渡す値を返す。
+
+    普段の Google Chrome が起動できればそのパス。見つからない／macOS に起動を
+    止められる場合は None（= Playwright 内蔵の Chromium）を返す。どちらを使う
+    かに応じて get_user_data_dir() のプロファイルも切り替わる。"""
+    global _BUNDLED_NOTICE_SHOWN
+    if not use_bundled_chromium():
+        return _find_system_chrome()
+    if not _BUNDLED_NOTICE_SHOWN:
+        _BUNDLED_NOTICE_SHOWN = True
+        print("[INFO] Google Chrome を起動できないため、Playwright 内蔵の Chromium を使います。\n"
+              "       Google Chrome can't be launched here, so Playwright's bundled Chromium is used instead.")
+    _ensure_bundled_chromium()
+    return None
 
 
 def get_user_data_dir():
-    """ChromeUserDataディレクトリのパスを返す。存在しなければ作成する。"""
+    """ログイン状態を保存するプロファイルのパスを返す。存在しなければ作成する。
+
+    内蔵 Chromium を使うときは別フォルダ（ChromeUserData-bundled）にする:
+    Chrome とバージョンが違うブラウザで同じプロファイルを開くと、新しい版で
+    書かれたプロファイルを古い版が開けず失敗するため。"""
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    user_data_dir = os.path.join(script_dir, 'ChromeUserData')
+    name = 'ChromeUserData-bundled' if use_bundled_chromium() else 'ChromeUserData'
+    user_data_dir = os.path.join(script_dir, name)
     os.makedirs(user_data_dir, exist_ok=True)
     return user_data_dir
 
@@ -167,6 +237,10 @@ def sync_from_system_chrome(quiet: bool = False) -> bool:
     """
     src_root = _get_system_chrome_dir()
     if not src_root or not os.path.exists(src_root):
+        return False
+    if use_bundled_chromium():
+        # The system Chrome's cookies are encrypted with its own Keychain key;
+        # the bundled Chromium (mock keychain) can't read them.
         return False
 
     dst_root = get_user_data_dir()
@@ -220,17 +294,28 @@ def get_chrome_context(p, lang='ja-JP', headless=False):
         # Must set headless=False here and control via the flag instead.
         args.append('--headless=new')
 
-    context = p.chromium.launch_persistent_context(
-        get_user_data_dir(),
+    executable = get_chrome_executable()
+    launch = dict(
         headless=False,
-        executable_path=get_chrome_executable(),
+        executable_path=executable,
         args=args,
         # --use-mock-keychain は除外しない（Playwright デフォルトの mock keychain を使用）。
         # update-user-data も同じ mock keychain でクッキーを書き込むため、両者で
         # 暗号化鍵が一致し、セッションクッキーが正しく読み書きできる。
         ignore_default_args=['--enable-automation'],
     )
+    context = p.chromium.launch_persistent_context(get_user_data_dir(), **launch)
     page = context.pages[0] if context.pages else context.new_page()
+    if headless and executable is None:
+        # The bundled Chromium's headless UA says "HeadlessChrome", which
+        # Google services may treat as a bot. Relaunch with the same UA
+        # minus that marker (version etc. stay accurate).
+        ua = page.evaluate("navigator.userAgent")
+        if 'HeadlessChrome' in ua:
+            context.close()
+            context = p.chromium.launch_persistent_context(
+                get_user_data_dir(), user_agent=ua.replace('HeadlessChrome', 'Chrome'), **launch)
+            page = context.pages[0] if context.pages else context.new_page()
     return context, page
 
 
