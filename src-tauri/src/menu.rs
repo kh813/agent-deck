@@ -9,6 +9,10 @@ const AUTO_CHECK_UPDATE_MENU_ID: &str = "settings:auto-check-update";
 const UPDATE_GITHUB_MENU_ID: &str = "update:github";
 const UPDATE_ORG_PROD_MENU_ID: &str = "update:org-prod";
 const UPDATE_ORG_TEST_MENU_ID: &str = "update:org-test";
+// Labels say what you get, not where it comes from: whether the stable build
+// is the org's Drive copy or the public GitHub release is an install detail.
+const UPDATE_STABLE_LABEL: &str = "Update to Latest Stable...";
+const UPDATE_TEST_LABEL: &str = "Update to Test Edition...";
 const FORCE_KILL_SESSION_MENU_ID: &str = "session:force-kill";
 const VERSION_MENU_ID: &str = "app:version";
 const FONT_FAMILY_MENU_ID_PREFIX: &str = "font-family:";
@@ -213,23 +217,33 @@ pub fn build_menu(
     // works even fresh out of a ZIP with no config.toml present yet.
     let (org_prod_configured, org_test_configured) = org_release_configured();
     let update_submenu = if org_prod_configured || org_test_configured {
-        let mut items: Vec<MenuItem<tauri::Wry>> = Vec::new();
-        if org_prod_configured {
-            items.push(MenuItem::with_id(
-                handle, UPDATE_ORG_PROD_MENU_ID, "Update to Org Latest...", true, None::<&str>,
-            )?);
+        // Most people should just take the stable build; the test edition
+        // is for developers/testers, so it sits below a separator.
+        let prod_item = if org_prod_configured {
+            Some(MenuItem::with_id(handle, UPDATE_ORG_PROD_MENU_ID, UPDATE_STABLE_LABEL, true, None::<&str>)?)
+        } else {
+            None
+        };
+        let test_item = if org_test_configured {
+            Some(MenuItem::with_id(handle, UPDATE_ORG_TEST_MENU_ID, UPDATE_TEST_LABEL, true, None::<&str>)?)
+        } else {
+            None
+        };
+        let sep = PredefinedMenuItem::separator(handle)?;
+        let mut refs: Vec<&dyn IsMenuItem<tauri::Wry>> = Vec::new();
+        if let Some(i) = &prod_item {
+            refs.push(i);
         }
-        if org_test_configured {
-            items.push(MenuItem::with_id(
-                handle, UPDATE_ORG_TEST_MENU_ID, "Update to Org Test...", true, None::<&str>,
-            )?);
+        if let Some(i) = &test_item {
+            if !refs.is_empty() {
+                refs.push(&sep);
+            }
+            refs.push(i);
         }
-        let refs: Vec<&dyn IsMenuItem<tauri::Wry>> =
-            items.iter().map(|i| i as &dyn IsMenuItem<tauri::Wry>).collect();
         Submenu::with_items(handle, "Update", true, &refs)?
     } else {
         let github_item = MenuItem::with_id(
-            handle, UPDATE_GITHUB_MENU_ID, "Update to GitHub Latest...", true, None::<&str>,
+            handle, UPDATE_GITHUB_MENU_ID, UPDATE_STABLE_LABEL, true, None::<&str>,
         )?;
         Submenu::with_items(handle, "Update", true, &[&github_item])?
     };

@@ -627,8 +627,8 @@ When a new version is published, you can update to the latest from the menu bar 
 
 **アップデートの流れ / What happens:**
 
-1. メニューバーの「**Update**」を開きます。表示される項目は組織の設定によって異なります — 「Update to GitHub Latest...」の場合も、「Update to Org Latest...」（＋設定によっては「Update to Org Test...」）の場合もあります。いずれか表示されている項目をクリックしてください。
-   Open the **Update** menu. Which item appears depends on your organization's setup — it may be "Update to GitHub Latest..." or "Update to Org Latest..." (plus "Update to Org Test..." if configured). Click whichever is shown.
+1. メニューバーの「**Update**」を開きます。通常は「**Update to Latest Stable...**」（最新の正式版）をクリックしてください。「Update to Test Edition...」（テスト版）は、開発・テストに参加している人向けです（組織の設定によっては表示されません）。
+   Open the **Update** menu. Normally click "**Update to Latest Stable...**" (the latest official release). "Update to Test Edition..." is for people taking part in development/testing (it may not appear, depending on your organization's setup).
 2. 更新がある場合、画面上部に通知バナーが表示されます。「**Update Now**」をクリックすると、ダウンロード・適用が自動で行われます（進行状況はターミナル画面に表示されます）。
    If an update is available, a notification banner appears at the top of the window. Click **Update Now** to download and apply it automatically (progress is shown in the terminal view).
 3. 完了後に再起動を案内するメッセージが表示されます。ウィンドウを閉じて `agent-deck.app`/`agent-deck.exe` を起動し直してください。
