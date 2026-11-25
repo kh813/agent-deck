@@ -49,7 +49,10 @@ export const themes: Record<string, ThemeConfig> = {
       // indistinguishable. #737373 still meets 4.5:1 on the background, so
       // xterm's minimumContrastRatio leaves it as is.
       white: "#737373",
-      brightBlack: "#1e293b", // Dark navy for high contrast on light backgrounds
+      // Secondary-text gray. agy draws its thinking summary, hints and
+      // status lines in ANSI bright black; this used to be near-black navy,
+      // which made the AI's thinking look exactly like its answer.
+      brightBlack: "#868d95",
       brightRed: "#ef4444",
       brightGreen: "#22c55e",
       brightYellow: "#eab308",
@@ -100,8 +103,11 @@ export const themes: Record<string, ThemeConfig> = {
       blue: "#268bd2",
       magenta: "#d33682",
       cyan: "#2aa198",
-      white: "#eee8d5",
-      brightBlack: "#073642", // base02 - Thought logs dark navy-green for high contrast
+      // On a light background ANSI white is secondary text (agy's
+      // "Thought for Ns", Claude Code's dim notes) -- base0 gray, not the
+      // near-invisible base2.
+      white: "#839496",
+      brightBlack: "#93a1a1", // base1: Solarized's own secondary/comment tone
       brightRed: "#cb4b16",
       brightGreen: "#586e75",
       brightYellow: "#93a1a1",
@@ -190,3 +196,10 @@ export const themes: Record<string, ThemeConfig> = {
     }
   }
 };
+
+// xterm.js minimumContrastRatio (TerminalView). 3:1 keeps any CLI's
+// hard-coded truecolor grays readable on every theme, while leaving room for
+// secondary text (thinking, hints) to stay visibly lighter than the answer
+// -- at 4.5 xterm pushed those grays up to near the foreground on
+// low-contrast themes like Solarized (confirmed 2026-11-25).
+export const MIN_CONTRAST_RATIO = 3;

@@ -12,6 +12,7 @@ import { isTauri, webClient } from "./lib/webClient";
 import "./App.css";
 import { loadSavedEngine, pickEngine, saveEngine } from "./lib/engineSelection";
 import { isUpdateBannerVisible, shouldApplyBackgroundResult, startUpdatePolling } from "./lib/updatePolling";
+import { loadLangChoice, parseLangChoice, resolveLang, saveLangChoice, setCurrentLang, type LangChoice } from "./lib/language";
 import { stopAndWaitForExit } from "./lib/ptyHandover";
 import {
   applyFontAction,
@@ -116,8 +117,32 @@ function App() {
     return unsub;
   }, []);
 
-  // OS locale auto detection (JA if OS language starts with 'ja', otherwise EN)
-  const lang: Lang = navigator.language.startsWith("ja") ? "ja" : "en";
+  // UI language: Settings -> Language choice, or the OS (lib/language.ts --
+  // the Rust side reports the OS settings, since Windows' WebView2 can say
+  // en-US on a Japanese setup).
+  const [langChoice, setLangChoice] = useState<LangChoice>(loadLangChoice);
+  const [osLocales, setOsLocales] = useState<string[]>([]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    invoke<string[]>("get_os_locales").then(setOsLocales).catch(() => {});
+  }, []);
+  const lang: Lang = resolveLang(langChoice, osLocales, navigator.language);
+  setCurrentLang(lang);
+  useEffect(() => {
+    if (!isTauri()) return;
+    invoke("set_language_menu_state", { choice: langChoice }).catch(() => {});
+  }, [langChoice]);
+  useEffect(() => {
+    const unsub = subscribeToTauriEvent(
+      listen<string>("language-menu", (event) => {
+        const choice = parseLangChoice(event.payload);
+        if (!choice) return;
+        saveLangChoice(choice);
+        setLangChoice(choice);
+      })
+    );
+    return unsub;
+  }, []);
 
   // Translation helper
   const t = (key: keyof typeof translations['ja']) => {

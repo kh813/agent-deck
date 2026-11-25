@@ -18,6 +18,14 @@ const UPDATE_ORG_TEST_MENU_ID: &str = "update:org-test";
 const UPDATE_STABLE_LABEL: &str = "Update to Latest...";
 const UPDATE_TEST_LABEL: &str = "Update to Test Edition...";
 const FORCE_KILL_SESSION_MENU_ID: &str = "session:force-kill";
+const LANGUAGE_MENU_ID_PREFIX: &str = "language:";
+/// Settings -> Language choices: (id, label). "auto" follows the OS
+/// (src/lib/language.ts resolves it); the frontend stores the choice.
+pub(crate) const LANGUAGES: &[(&str, &str)] = &[
+    ("auto", "Automatic (OS) / 自動"),
+    ("ja", "日本語"),
+    ("en", "English"),
+];
 const VERSION_MENU_ID: &str = "app:version";
 const FONT_FAMILY_MENU_ID_PREFIX: &str = "font-family:";
 const FONT_SIZE_MENU_ID_PREFIX: &str = "font-size:";
@@ -120,6 +128,13 @@ struct FontMenuState {
     sizes: Vec<(u32, CheckMenuItem<tauri::Wry>)>,
 }
 struct AutoCheckUpdateMenuState(CheckMenuItem<tauri::Wry>);
+struct LanguageMenuState(Vec<(String, CheckMenuItem<tauri::Wry>)>);
+
+/// Menu id -> language choice ("auto" / "ja" / "en").
+pub(crate) fn language_menu_choice(id: &str) -> Option<&'static str> {
+    let choice = id.strip_prefix(LANGUAGE_MENU_ID_PREFIX)?;
+    LANGUAGES.iter().find(|(c, _)| *c == choice).map(|(c, _)| *c)
+}
 
 // Tauri only builds its default Edit/Window/Help menu automatically on macOS,
 // so build it explicitly (Windows/Linux get a menu bar too) and add a Theme
@@ -214,7 +229,20 @@ pub fn build_menu(
         initial_auto_check_update,
         None::<&str>,
     )?;
-    let settings_submenu = Submenu::with_items(handle, "Settings", true, &[&auto_check_update_item])?;
+    let language_items: Vec<(String, CheckMenuItem<tauri::Wry>)> = LANGUAGES
+        .iter()
+        .map(|(id, label)| {
+            Ok((
+                id.to_string(),
+                CheckMenuItem::with_id(handle, format!("{LANGUAGE_MENU_ID_PREFIX}{id}"), *label, true, *id == "auto", None::<&str>)?,
+            ))
+        })
+        .collect::<tauri::Result<_>>()?;
+    let language_refs: Vec<&dyn IsMenuItem<tauri::Wry>> =
+        language_items.iter().map(|(_, i)| i as &dyn IsMenuItem<tauri::Wry>).collect();
+    let language_submenu = Submenu::with_items(handle, "Language / 言語", true, &language_refs)?;
+    let settings_submenu =
+        Submenu::with_items(handle, "Settings", true, &[&auto_check_update_item, &language_submenu])?;
 
     // Update submenu: an org-managed install (config.toml's [drive]
     // org_release_prod_file_id / org_release_test_file_id set -- see
@@ -304,6 +332,7 @@ pub fn build_menu(
     handle.manage(ThemeMenuState(Mutex::new(items)));
     handle.manage(FontMenuState { families: family_items, sizes: size_items });
     handle.manage(AutoCheckUpdateMenuState(auto_check_update_item));
+    handle.manage(LanguageMenuState(language_items));
 
     Ok(menu)
 }
@@ -341,6 +370,13 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
 
     if id == crate::quit_guard::QUIT_MENU_ID {
         crate::quit_guard::request_quit(app);
+        return;
+    }
+
+    if let Some(choice) = language_menu_choice(id) {
+        // Like the font items: the frontend stores the choice and answers
+        // with set_language_menu_state to put the checkmarks right.
+        let _ = app.emit("language-menu", choice);
         return;
     }
 
@@ -392,6 +428,18 @@ pub fn set_auto_check_update(app: AppHandle, enabled: bool) {
     set_checked_auto_update(&app, enabled);
 }
 
+// Invoked by the frontend whenever the language choice changes (and on
+// load) so Settings -> Language shows the right checkmark.
+#[tauri::command]
+pub fn set_language_menu_state(app: AppHandle, choice: String) {
+    if let Some(state) = app.try_state::<LanguageMenuState>() {
+        let choice = language_menu_choice(&format!("{LANGUAGE_MENU_ID_PREFIX}{choice}")).unwrap_or("auto");
+        for (id, item) in state.0.iter() {
+            let _ = item.set_checked(id == choice);
+        }
+    }
+}
+
 // Invoked by the frontend whenever the terminal font setting changes (and
 // on load) so the Font menu's checkmarks match. family = the user's override
 // CSS stack, or None for the agent_config.json default; size = the
@@ -411,6 +459,18 @@ pub fn set_font_menu_state(app: AppHandle, family: Option<String>, size: u32) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn language_menu_ids_map_to_choices() {
+        assert_eq!(language_menu_choice("language:auto"), Some("auto"));
+        assert_eq!(language_menu_choice("language:ja"), Some("ja"));
+        assert_eq!(language_menu_choice("language:en"), Some("en"));
+        assert_eq!(language_menu_choice("language:fr"), None);
+        assert_eq!(language_menu_choice("theme:ja"), None);
+        let ids: Vec<&str> = LANGUAGES.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, vec!["auto", "ja", "en"]);
+    }
+
     use super::*;
 
     #[test]

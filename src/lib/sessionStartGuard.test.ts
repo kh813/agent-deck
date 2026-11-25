@@ -77,3 +77,32 @@ describe("quit guard wiring", () => {
     expect(app).toMatch(/invoke\("set_quit_guard_busy", \{ busy: quitGuardBusy \}\)/);
   });
 });
+
+describe("language wiring", () => {
+  const app = readFileSync(join(__dirname, "..", "App.tsx"), "utf8");
+  const hook = readFileSync(join(__dirname, "..", "hooks", "useChatSession.ts"), "utf8");
+
+  it("App resolves the language from the choice, OS locales and navigator", () => {
+    expect(app).toMatch(/resolveLang\(langChoice, osLocales, navigator\.language\)/);
+    expect(app).toMatch(/invoke<string\[\]>\("get_os_locales"\)/);
+    expect(app).toMatch(/setCurrentLang\(lang\)/);
+  });
+
+  it("the Settings -> Language menu is wired both ways", () => {
+    expect(app).toMatch(/listen<string>\("language-menu"/);
+    expect(app).toMatch(/invoke\("set_language_menu_state", \{ choice: langChoice \}\)/);
+  });
+
+  it("nothing decides the language from navigator.language alone any more", () => {
+    expect(app).not.toMatch(/navigator\.language\.startsWith/);
+    expect(hook).not.toMatch(/navigator\.language/);
+    expect(hook).toMatch(/getLang\(\) === "ja"/);
+  });
+});
+
+describe("terminal contrast wiring", () => {
+  const tv = readFileSync(join(__dirname, "..", "components", "TerminalView.tsx"), "utf8");
+  it("TerminalView uses the shared MIN_CONTRAST_RATIO", () => {
+    expect(tv).toMatch(/minimumContrastRatio: MIN_CONTRAST_RATIO/);
+  });
+});

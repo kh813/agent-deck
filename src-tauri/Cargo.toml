@@ -42,5 +42,8 @@ futures-util = "0.3"
 rustls-pki-types = "1.15"
 rustls-pemfile = "2.2"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Globalization"] }
+
 
 

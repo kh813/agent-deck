@@ -133,6 +133,14 @@ Up to 5 recently used folders are remembered; the `▼` button next to the field
 > [!NOTE]
 > `agy` 以外のエンジン（Claude Code等）を使用している場合、セッション開始時にこの `SKILL.md` の記述が**最初のメタプロンプトとして自動的に注入**され、エージェントへタスク指示が送られます。
 
+### 🌐 表示言語 / Display Language
+画面の表示は日本語と英語に対応しています。通常は OS の言語設定（Windows では表示言語または地域設定のどちらかが日本語なら日本語）に合わせて自動で切り替わります。メニューの「`Settings` ➔ `Language / 言語`」で「日本語」「English」を固定することもできます（「Automatic (OS) / 自動」で元に戻ります）。
+The UI is available in Japanese and English. By default it follows the OS (on Windows, Japanese if either the display language or the regional format is Japanese). Pin it with `Settings` ➔ `Language / 言語` ("日本語" / "English"; "Automatic (OS) / 自動" goes back to following the OS).
+
+### 💭 AI の思考過程の表示 / How AI Thinking Is Shown
+AI の思考過程（agy の考え中の要約や「Thought for …」、Claude Code の補足表示）は、回答本文より淡いグレーで表示され、目立たないようになっています。思考の詳細はどちらのエンジンも折りたたまれており、回答だけを読めば済むようになっています。
+The AI's thinking (agy's live summary and "Thought for …", Claude Code's side notes) is shown in a lighter gray than the answer, so it stays in the background. Both engines keep the detailed thinking collapsed, so you only need to read the answer.
+
 ### 🔤 ターミナルのフォントと文字サイズ / Terminal Font & Size
 
 メニューバーの **Font** から、ターミナルの表示フォントと文字サイズを変更できます（すぐに反映され、次回起動時も保持されます）。

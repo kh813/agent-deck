@@ -5,7 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
 import { computeFitSize } from "../lib/terminalFit";
 import { registerWrappedUrlLinkProvider } from "../lib/wrappedUrlLinkProvider";
-import { TerminalTheme } from "../utils/themes";
+import { MIN_CONTRAST_RATIO, TerminalTheme } from "../utils/themes";
 
 interface TerminalViewProps {
   onData?: (data: string) => void;
@@ -33,9 +33,10 @@ export function TerminalView({ onData, terminalRef, onResize, theme, fontFamily,
       // truecolor grays for dim/secondary text, assuming a dark terminal
       // background. That bypasses the 16-color theme palette entirely, so
       // on light themes those grays can end up nearly invisible. This
-      // forces xterm to adjust any foreground color to meet WCAG AA
-      // contrast against the actual background, regardless of theme.
-      minimumContrastRatio: 4.5,
+      // forces xterm to adjust any foreground color to a minimum contrast
+      // against the actual background, regardless of theme (see
+      // MIN_CONTRAST_RATIO for why it's 3, not 4.5).
+      minimumContrastRatio: MIN_CONTRAST_RATIO,
     });
 
     // Custom link provider instead of the stock WebLinksAddon: it also

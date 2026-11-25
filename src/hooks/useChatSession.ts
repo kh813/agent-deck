@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { resolvePromptResponseInput } from "../lib/promptResponse";
 import { answersPrompt, isEchoOfAnswered, promptKey } from "../lib/promptSync";
 import { createSingleFlight } from "../lib/singleFlight";
+import { getLang } from "../lib/language";
 import { subscribeToTauriEvent } from "../lib/tauriListener";
 import { isTauri, webClient } from "../lib/webClient";
 
@@ -105,7 +106,7 @@ export function useChatSession({
   // `defaultArgs` props yet
   const startSessionOnce = useCallback(
     async (targetCwd: string = cwdRef.current, overrideCommand?: string, overrideArgs?: string[]) => {
-      const isJa = navigator.language.startsWith("ja");
+      const isJa = getLang() === "ja";
       setStatus("idle");
       setActivePrompt(null);
       showStatusMessage(
@@ -280,7 +281,7 @@ export function useChatSession({
 
   // Stop PTY Session
   const stopSession = useCallback(async () => {
-    const isJa = navigator.language.startsWith("ja");
+    const isJa = getLang() === "ja";
     if (!isTauri()) {
       webClient.sendAction("stop_session");
       setStatus("idle");

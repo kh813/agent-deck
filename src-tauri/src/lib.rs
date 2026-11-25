@@ -6,6 +6,7 @@ mod self_update;
 mod root_files;
 mod cert;
 mod quit_guard;
+mod locale;
 pub mod web_server;
 
 use pty::PtyState;
@@ -92,6 +93,8 @@ pub fn run() {
             menu::set_auto_check_update,
             menu::set_font_menu_state,
             quit_guard::set_quit_guard_busy,
+            locale::get_os_locales,
+            menu::set_language_menu_state,
             pty::force_kill_pty,
             web_server::start_web_server,
             web_server::stop_web_server,
