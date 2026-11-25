@@ -53,3 +53,10 @@ def test_rebuild_and_init_install_claude_settings():
     assert "install_claude_settings()" in rebuild
     init = src[src.index('if cmd == "init":'):]
     assert "install_claude_settings()" in init[: init.index("elif")]
+
+
+def test_theme_follows_the_terminal(tmp_path):
+    # Claude Code defaults to its dark palette; on agent-deck's light themes
+    # the selected slash-command suggestion then became indistinguishable.
+    data = json.loads(agent_setup.install_claude_settings(tmp_path).read_text(encoding="utf-8"))
+    assert data["theme"] == "auto"

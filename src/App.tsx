@@ -89,8 +89,10 @@ function App() {
     const isDark = themes[currentThemeId]?.isDark ?? false;
     document.body.classList.toggle("theme-dark", isDark);
 
-    // Keep the native app menu's Theme checkmarks in sync
-    invoke("set_theme", { themeId: currentThemeId }).catch(() => {});
+    // Keep the native app menu's Theme checkmarks in sync, and tell the
+    // backend whether the terminal is dark (passed to sessions as COLORFGBG
+    // so Claude Code's "auto" theme matches; takes effect on the next start).
+    invoke("set_theme", { themeId: currentThemeId, isDark }).catch(() => {});
   }, [currentThemeId]);
 
   // Apply theme changes made from the native app menu

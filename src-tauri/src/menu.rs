@@ -208,8 +208,11 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
 // Invoked by the frontend when the theme changes via the in-app selector,
 // so the menu checkmarks stay in sync.
 #[tauri::command]
-pub fn set_theme(app: AppHandle, theme_id: String) {
+pub fn set_theme(app: AppHandle, theme_id: String, is_dark: Option<bool>) {
     set_checked_theme(&app, &theme_id);
+    if let Some(dark) = is_dark {
+        crate::pty::set_terminal_is_dark(dark);
+    }
 }
 
 // Invoked by the frontend on load (and whenever the setting changes some

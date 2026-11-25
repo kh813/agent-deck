@@ -1,5 +1,6 @@
 {
-  "$comment": "Claude Code permission rules for agent-deck sessions -- the Claude counterpart of python/config/gemini/policies/agent-ui.toml. setup.py renders this to <project>/.claude/agent-deck-settings.json (replacing ${PROJECT_ROOT_RULE} with the install's absolute path in Claude's //abs/path rule form) and agent_config.json passes it via `claude --settings`. Deliberately NOT named .claude/settings.json so it never applies to someone developing agent-deck itself with Claude Code.",
+  "$comment": "Claude Code permission rules for agent-deck sessions -- the Claude counterpart of python/config/gemini/policies/agent-ui.toml. setup.py renders this to <project>/.claude/agent-deck-settings.json (replacing ${PROJECT_ROOT_RULE} with the install's absolute path in Claude's //abs/path rule form) and agent_config.json passes it via `claude --settings`. `theme: auto` makes Claude Code pick its light/dark palette from the terminal (xterm.js answers the background-color query; the app also sets COLORFGBG from its current theme) instead of defaulting to dark, which made the selected slash-command suggestion indistinguishable on light themes. Deliberately NOT named .claude/settings.json so it never applies to someone developing agent-deck itself with Claude Code.",
+  "theme": "auto",
   "permissions": {
     "allow": [
       "Skill",

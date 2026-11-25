@@ -10,6 +10,26 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::Mutex;
 
+// Whether the app's current terminal theme has a dark background. The
+// frontend reports it through menu::set_theme; start_pty_internal passes it
+// on as COLORFGBG so CLIs that pick their palette from the terminal's
+// light/dark-ness (Claude Code's `"theme": "auto"`) match what xterm.js
+// actually renders. Without this Claude Code defaults to its dark palette,
+// and on the default light theme xterm's minimumContrastRatio then darkens
+// the selected and unselected slash-command suggestions to nearly the same
+// color.
+static TERMINAL_IS_DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_terminal_is_dark(dark: bool) {
+    TERMINAL_IS_DARK.store(dark, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// COLORFGBG value ("<fg>;<bg>" as ANSI color indices) for the given
+/// background: bg 0 = dark, bg 15 = light.
+pub(crate) fn colorfgbg(dark: bool) -> &'static str {
+    if dark { "15;0" } else { "0;15" }
+}
+
 #[derive(Clone)]
 pub struct PtyState {
     pub session: Arc<Mutex<Option<Box<dyn portable_pty::MasterPty + Send>>>>,
@@ -563,6 +583,7 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
     // (like progress spinners) as raw escape sequences like \xxxx.
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    cmd.env("COLORFGBG", colorfgbg(TERMINAL_IS_DARK.load(std::sync::atomic::Ordering::Relaxed)));
     cmd.env("PYTHONIOENCODING", "utf-8");
     cmd.env("PYTHONUTF8", "1");
 
@@ -1288,5 +1309,12 @@ mod tests {
         
         let stop_res = stop_pty_internal(&state).await;
         assert!(stop_res.is_ok());
+    }
+
+    #[test]
+    fn colorfgbg_reports_background_brightness() {
+        // Claude Code's "auto" theme: last field <= 6 or == 8 means dark.
+        assert_eq!(colorfgbg(true), "15;0");
+        assert_eq!(colorfgbg(false), "0;15");
     }
 }
