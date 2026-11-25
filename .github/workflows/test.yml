@@ -51,4 +51,7 @@ jobs:
 
       - name: rust tests (cargo)
         working-directory: src-tauri
+        env:
+          # Windows only has an effect there: see src-tauri/build.rs.
+          AGENT_DECK_EMBED_TEST_MANIFEST: "1"
         run: cargo test --lib
