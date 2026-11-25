@@ -406,6 +406,38 @@ class TestPythonPayloadRefresh:
             "user-created and catalog-synced skills must survive the refresh."
         )
 
+    def test_apply_preserves_automation_user_data(self, project_root, monkeypatch):
+        """Confirmed for real (2026-11-25): every update wiped the saved
+        Chrome login (ask-portal etc.), scheduled-task sidecars and logs."""
+        monkeypatch.setattr(su.sys, "platform", "darwin")
+        auto = project_root / "python" / "scripts" / "automation"
+        for sub, name in (("ChromeUserData/Default", "Cookies"),
+                          ("scheduled", "morning.json"),
+                          ("logs", "run.log")):
+            (auto / sub).mkdir(parents=True, exist_ok=True)
+            (auto / sub / name).write_text("keep")
+        monkeypatch.setattr(su, "_fetch_latest_release", lambda: _fake_release("v0.2.0"))
+
+        def fake_run(cmd, *a, **kw):
+            if cmd[0] == "curl":
+                _make_org_rebranded_zip(Path(cmd[-1]))
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(su.subprocess, "run", fake_run)
+
+        su.apply()
+
+        assert (auto / "ChromeUserData" / "Default" / "Cookies").read_text() == "keep"
+        assert (auto / "scheduled" / "morning.json").read_text() == "keep"
+        assert (auto / "logs" / "run.log").read_text() == "keep"
+        # the rest of python/ was still refreshed from the zip
+        assert (project_root / "python" / "skills" / "translator" / "SKILL.md").exists()
+
+    def test_preserved_paths_are_all_gitignored(self):
+        ignore = (Path(__file__).resolve().parents[2] / ".gitignore").read_text()
+        for keep in su._PRESERVED_PYTHON_DIRS:
+            assert f"python/{keep}" in ignore, f"{keep} must never ship in a release"
+
     def test_apply_preserves_skills_catalog(self, project_root, monkeypatch):
         """Catalog-installed skills (incl. manual downloads, which `sync`
         can't restore) live in skills-catalog/ and must survive too."""

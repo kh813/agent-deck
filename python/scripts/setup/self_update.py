@@ -187,13 +187,26 @@ def _normalize_sh_to_lf(target: Path) -> None:
             sh.write_bytes(data.replace(b"\r\n", b"\n"))
 
 
-_PRESERVED_PYTHON_DIRS = ("skills-personal", "skills-catalog")
+# Per-install data that lives under python/ and must survive the python/
+# refresh (paths relative to python/; all gitignored, never in a release).
+# The automation entries were added 2026-11-25 after confirming every update
+# wiped them: ChromeUserData/ = the saved browser login that ask-portal and
+# the other Chrome-driven skills reuse (lost -> re-login after each update),
+# scheduled/ = the per-task sidecar files of registered scheduled prompts,
+# logs/ = their run logs.
+_PRESERVED_PYTHON_DIRS = (
+    "skills-personal",
+    "skills-catalog",
+    "scripts/automation/ChromeUserData",
+    "scripts/automation/scheduled",
+    "scripts/automation/logs",
+)
 
 
 def _install_python_payload(staging: Path) -> None:
-    """Refresh <root>/python/ from the zip, preserving the per-install skill
-    roots (skills-personal/: the user's own; skills-catalog/: installed from
-    the Drive catalog, incl. manual downloads that sync can't restore)."""
+    """Refresh <root>/python/ from the zip, preserving the per-install data
+    listed in _PRESERVED_PYTHON_DIRS (skill roots, saved browser login,
+    scheduled-task sidecars and logs)."""
     new_python = staging / "python"
     if not new_python.exists():
         return
@@ -202,8 +215,8 @@ def _install_python_payload(staging: Path) -> None:
     backups = []
     for keep in _PRESERVED_PYTHON_DIRS:
         existing = dest_python / keep
-        backup = staging / f"_preserve_{keep}"
-        if existing.exists():
+        backup = staging / f"_preserve_{keep.replace('/', '__')}"
+        if existing.exists() and not existing.is_symlink():
             shutil.move(str(existing), str(backup))
             backups.append((keep, backup))
 
@@ -216,6 +229,7 @@ def _install_python_payload(staging: Path) -> None:
 
     for keep, backup in backups:
         shutil.rmtree(dest_python / keep, ignore_errors=True)
+        (dest_python / keep).parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(backup), str(dest_python / keep))
 
 
