@@ -133,6 +133,20 @@ Up to 5 recently used folders are remembered; the `▼` button next to the field
 > [!NOTE]
 > `agy` 以外のエンジン（Claude Code等）を使用している場合、セッション開始時にこの `SKILL.md` の記述が**最初のメタプロンプトとして自動的に注入**され、エージェントへタスク指示が送られます。
 
+### 🔤 ターミナルのフォントと文字サイズ / Terminal Font & Size
+
+メニューバーの **Font** から、ターミナルの表示フォントと文字サイズを変更できます（すぐに反映され、次回起動時も保持されます）。
+Use the **Font** menu in the menu bar to change the terminal's font and size (applied immediately and remembered across launches).
+
+| メニュー / Menu | 内容 / What it does |
+| :--- | :--- |
+| **Font Family** | フォントを選択（Mac: Menlo / Monaco / SF Mono / Osaka 等幅 など、Windows: Consolas / Cascadia Mono / MS ゴシック / BIZ UDゴシック など）。**Default** は管理者が設定した標準フォント / Pick a font; **Default** = the font set by your administrator |
+| **Font Size** | 文字サイズを選択、または **Increase / Decrease**（`⌘` / `Ctrl` + `=` / `-`）で 1 ずつ変更（8〜32） / Pick a size, or step it with Increase/Decrease (8–32) |
+| **Reset Font to Default** | フォントと文字サイズを標準に戻す（`⌘` / `Ctrl` + `0`） / Back to the standard font and size |
+
+> PC にインストールされていないフォントを選んだ場合は、標準の等幅フォントで表示されます。
+> If the chosen font isn't installed on this PC, a standard monospace font is used instead.
+
 ### ⚡ セッションの強制終了 (SIGKILL) / Force Kill Session
 エージェントの処理がフリーズしたり無限ループに陥った場合は、画面上部のメニューバーから「`Session` ➔ `Force Kill Session`」を選択することで、実行中のプロセスグループ（子プロセスや孫プロセスを含む）を完全に強制終了させ、即座にチャット入力を受け付ける状態に戻すことができます。
 

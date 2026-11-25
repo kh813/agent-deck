@@ -77,6 +77,7 @@ pub fn run() {
             config::get_app_config,
             menu::set_theme,
             menu::set_auto_check_update,
+            menu::set_font_menu_state,
             pty::force_kill_pty,
             web_server::start_web_server,
             web_server::stop_web_server,

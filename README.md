@@ -41,6 +41,8 @@ Tauri、Rust、および React を使用して構築されており、軽量で�
 * **リアルタイム・テーマ切り替え**
   * UI全体の配色およびターミナル背景色を瞬時に切り替え可能。
   * `Light (Default)`, `Dark`, `Solarized Light`, `Solarized Dark`, `Dracula`, `One Dark` の6種類のカラースキームを内蔵。
+* **ターミナルのフォント・文字サイズ変更**
+  * メニューの **Font** から、フォント（OSごとのプリセット）と文字サイズ（8〜32、`⌘`/`Ctrl` + `=`/`-` で増減）を選択。**Reset Font to Default**（`⌘`/`Ctrl` + `0`）で `agent_config.json` の `font_family` / `font_size` に戻ります。選択は利用者ごとに保存されます。
 * **自動多言語対応 (Bilingual)**
   * OSのシステム言語設定を自動で判別し、日本語環境なら日本語、それ以外のロケール環境では英語表示に自動的に切り替わります。
 * **Windowsバックグラウンド起動の最適化**
@@ -216,8 +218,8 @@ OS ごとに異なるコマンドを実行したい場合は、`pre_launch_macos
 | :--- | :--- | :--- | :--- |
 | `app_name` | `string` | アプリケーション名（現在の UI では表示していません。ウィンドウのタイトルは `tauri.conf.json` の `title`）。 | `"agent-deck Chat Console"` |
 | `default_theme` | `string` | 初期起動時のカラーテーマ (`light`, `dark`, `solarizedLight`, `solarizedDark`, `dracula`, `oneDark`)。 | `"light"` |
-| `font_family` | `string` | ターミナルで適用されるフォントファミリー。 | `"Menlo, Monaco, 'Courier New', monospace"` |
-| `font_size` | `number` | ターミナルの文字サイズ (px)。 | `13` |
+| `font_family` | `string` | ターミナルで適用される標準のフォントファミリー（利用者がメニューの Font で変更した場合はそちらが優先。Reset で戻る）。 | `"Menlo, Monaco, 'Courier New', monospace"` |
+| `font_size` | `number` | ターミナルの標準の文字サイズ (px)（同上）。 | `13` |
 | `engines` | `array` | サイドバーに表示し、対話に使用するCLIエンジンのリスト。 | (上記構成例の通り、デフォルトは `agy`) |
 | `pre_launch_command` | `string` | セッション開始前に作業ディレクトリ（CWD）で実行するコマンド。未指定なら`skill`フォルダ自動リビルド（5.7節）にフォールバック。 | (未指定) |
 | `pre_launch_args` | `array` | `pre_launch_command`に渡す引数リスト。 | `[]` |

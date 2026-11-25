@@ -12,6 +12,14 @@ import { isTauri, webClient } from "./lib/webClient";
 import "./App.css";
 import { loadSavedEngine, pickEngine, saveEngine } from "./lib/engineSelection";
 import { stopAndWaitForExit } from "./lib/ptyHandover";
+import {
+  applyFontAction,
+  effectiveFont,
+  FALLBACK_DEFAULTS,
+  loadFontOverride,
+  saveFontOverride,
+  type FontMenuAction,
+} from "./lib/terminalFont";
 
 interface AgentStatus {
   installed: boolean;
@@ -123,6 +131,34 @@ function App() {
   // "X is required / Install X" panel during that window made it look like
   // agy/Claude Code was missing on every launch.
   const [agentStatusChecked, setAgentStatusChecked] = useState(false);
+
+  // Terminal font: agent_config.json's font_family/font_size are the
+  // defaults; the native Font menu stores a per-user override on top
+  // (lib/terminalFont.ts).
+  const [fontOverride, setFontOverride] = useState(loadFontOverride);
+  const fontDefaults = {
+    family: appConfig?.font_family || FALLBACK_DEFAULTS.family,
+    size: appConfig?.font_size || FALLBACK_DEFAULTS.size,
+  };
+  const terminalFont = effectiveFont(fontOverride, fontDefaults);
+  const fontDefaultsRef = useRef(fontDefaults);
+  fontDefaultsRef.current = fontDefaults;
+
+  useEffect(() => {
+    saveFontOverride(fontOverride);
+    if (isTauri()) {
+      invoke("set_font_menu_state", { family: fontOverride.family, size: terminalFont.size }).catch(() => {});
+    }
+  }, [fontOverride, terminalFont.size]);
+
+  useEffect(() => {
+    const unsub = subscribeToTauriEvent(
+      listen<FontMenuAction>("font-menu", (event) => {
+        setFontOverride((cur) => applyFontAction(cur, event.payload, fontDefaultsRef.current));
+      })
+    );
+    return unsub;
+  }, []);
   const [selectedAgentId, setSelectedAgentId] = useState(() => loadSavedEngine() ?? "agy");
 
   const currentAgentStatus = agentStatuses[selectedAgentId] || {
@@ -1236,8 +1272,8 @@ function App() {
                     onData={handleTerminalInput}
                     onResize={handleTerminalResize}
                     theme={themes[currentThemeId].terminal}
-                    fontFamily={appConfig?.font_family}
-                    fontSize={appConfig?.font_size}
+                    fontFamily={terminalFont.family}
+                    fontSize={terminalFont.size}
                   />
                 </div>
               </div>
@@ -1260,8 +1296,8 @@ function App() {
                     onData={handleTerminalInput}
                     onResize={handleTerminalResize}
                     theme={themes[currentThemeId].terminal}
-                    fontFamily={appConfig?.font_family}
-                    fontSize={appConfig?.font_size}
+                    fontFamily={terminalFont.family}
+                    fontSize={terminalFont.size}
                   />
                 </div>
               </div>
