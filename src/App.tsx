@@ -6,6 +6,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Terminal } from "@xterm/xterm";
 import { useChatSession } from "./hooks/useChatSession";
 import { TerminalView } from "./components/TerminalView";
+import { SkillCatalogPanel } from "./components/SkillCatalogPanel";
 import { subscribeToTauriEvent } from "./lib/tauriListener";
 import { themes } from "./utils/themes";
 import { Lang, translations } from "./utils/i18n";
@@ -592,7 +593,9 @@ function App() {
   // Quit guard (src-tauri/src/quit_guard.rs): while any of these runs,
   // Cmd/Ctrl+Q or closing the window asks before quitting. (A working
   // agent/skill is detected on the Rust side from terminal output.)
-  const quitGuardBusy = isStarting || isSelfUpdating || isUpdating || isInstalling;
+  const [isCatalogOpen, setIsCatalogOpen] = useState(false);
+  const [catalogBusy, setCatalogBusy] = useState(false);
+  const quitGuardBusy = isStarting || isSelfUpdating || isUpdating || isInstalling || catalogBusy;
   useEffect(() => {
     if (!isTauri()) return;
     invoke("set_quit_guard_busy", { busy: quitGuardBusy }).catch(() => {});
@@ -1261,6 +1264,14 @@ function App() {
                 <div className="header-aside">
                 <button
                   className="secondary"
+                  onClick={() => setIsCatalogOpen(true)}
+                  style={{ display: "flex", alignItems: "center", gap: "6px", marginRight: "8px" }}
+                  title={lang === "ja" ? "スキルカタログ" : "Skill Catalog"}
+                >
+                  📚 {lang === "ja" ? "スキル" : "Skills"}
+                </button>
+                <button
+                  className="secondary"
                   onClick={() => {
                     refreshWebServerStatus();
                     setIsWebUiModalOpen(true);
@@ -1679,6 +1690,10 @@ function App() {
         )}
 
         {/* Web UI Management Modal (Desktop) */}
+        {isCatalogOpen && isTauri() && (
+          <SkillCatalogPanel lang={lang} onClose={() => setIsCatalogOpen(false)} onBusyChange={setCatalogBusy} />
+        )}
+
         {isWebUiModalOpen && isTauri() && (
           <div style={{
             position: "fixed",

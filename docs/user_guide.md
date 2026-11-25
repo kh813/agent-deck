@@ -373,6 +373,18 @@ The group has a shared "skill catalog" where employees can share their original 
 
 ---
 
+### 画面でカタログを使う / Use the Catalog Screen (v0.2.8+)
+画面右上の「📚 スキル」ボタンでスキルカタログ画面が開きます。チャットでコマンドを打たなくても、次の操作ができます。
+Click "📚 Skills" at the top right to open the Skill Catalog screen, where you can do the following without typing commands.
+
+- **カタログ / Catalog**: スキルの一覧とキーワード検索。「インポート」で自分の PC に取り込みます（取り込み済みなら「更新を取り込む」）。「詳細」で説明全文を表示。
+  List and search skills. "Import" installs one ("Get update" if already imported). "Details" shows the full description.
+- **マイスキル / My Skills**: 自分の PC のスキル一覧。自作スキルは「カタログに共有」「共有を取り下げ」、どのスキルも「無効にする / 有効にする」を切り替えられます（標準搭載のスキルは除く）。
+  Your local skills. Share/unshare your own skills, and enable/disable any non-built-in skill.
+
+> インポートや有効・無効の変更は自動で反映され、新しく始めたセッションから使えます。実行中のセッションで使うには「停止」→「セッション開始」してください。初回の Drive 操作では、ブラウザで Google のログイン画面が開きます。
+> Imports and enable/disable changes are applied automatically and are available in new sessions (Stop, then Start Session for the current one). The first Drive operation opens a Google sign-in page in your browser.
+
 ### カタログを見る / Browse the Catalog
 
 ```

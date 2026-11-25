@@ -73,7 +73,7 @@ describe("quit guard wiring", () => {
   const app = readFileSync(join(__dirname, "..", "App.tsx"), "utf8");
 
   it("reports session start, self-update, engine update and install as busy", () => {
-    expect(app).toMatch(/const quitGuardBusy = isStarting \|\| isSelfUpdating \|\| isUpdating \|\| isInstalling;/);
+    expect(app).toMatch(/const quitGuardBusy = isStarting \|\| isSelfUpdating \|\| isUpdating \|\| isInstalling \|\| catalogBusy;/);
     expect(app).toMatch(/invoke\("set_quit_guard_busy", \{ busy: quitGuardBusy \}\)/);
   });
 });
@@ -132,5 +132,13 @@ describe("image attach wiring", () => {
     expect(tv).toMatch(/addEventListener\("paste", onPasteEvent, true\)/);
     expect(tv).toMatch(/removeEventListener\("paste", onPasteEvent, true\)/);
     expect(tv).toMatch(/term\.paste\(text\)/);
+  });
+});
+
+describe("skill catalog wiring", () => {
+  const app = readFileSync(join(__dirname, "..", "App.tsx"), "utf8");
+  it("header button opens the panel; the panel reports busy to the quit guard", () => {
+    expect(app).toMatch(/onClick=\{\(\) => setIsCatalogOpen\(true\)\}/);
+    expect(app).toMatch(/<SkillCatalogPanel lang=\{lang\} onClose=\{\(\) => setIsCatalogOpen\(false\)\} onBusyChange=\{setCatalogBusy\} \/>/);
   });
 });
