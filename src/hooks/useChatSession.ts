@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { resolvePromptResponseInput } from "../lib/promptResponse";
 import { answersPrompt, isEchoOfAnswered, promptKey } from "../lib/promptSync";
 import { createSingleFlight } from "../lib/singleFlight";
+import { preflightOnce } from "../lib/preflightOnce";
 import { getLang } from "../lib/language";
 import { subscribeToTauriEvent } from "../lib/tauriListener";
 import { isTauri, webClient } from "../lib/webClient";
@@ -136,83 +137,91 @@ export function useChatSession({
 
       try {
         if (preLaunchCommand) {
-          // Config-driven pre-launch check (AppConfig.pre_launch_command)
-          showStatusMessage(
-            isJa ? "起動前処理を実行しています..." : "Running pre-launch checks...",
-            false
-          );
-
-          const unlistenOutput = subscribeToTauriEvent(
-            listen<{ data: number[] }>("pre-launch-output", (event) => {
-              onRawOutput?.(new Uint8Array(event.payload.data));
-            })
-          );
-
-          let resolveStatus: (success: boolean) => void = () => {};
-          const statusPromise = new Promise<boolean>((resolve) => {
-            resolveStatus = resolve;
-          });
-          const unlistenStatus = subscribeToTauriEvent(
-            listen<{ success: boolean }>("pre-launch-status", (event) => {
-              resolveStatus(event.payload.success);
-            })
-          );
-
-          try {
-            await invoke("start_pre_launch_command", {
-              cwd: targetCwd || "",
-              command: preLaunchCommand,
-              args: preLaunchArgs,
-            });
-
-            const timeoutMs = 10 * 60 * 1000;
-            const timeoutPromise = new Promise<boolean>((resolve) =>
-              setTimeout(() => resolve(false), timeoutMs)
+          // Config-driven pre-launch check (AppConfig.pre_launch_command):
+          // once per app launch, shared by every tab (lib/preflightOnce.ts).
+          const runPreLaunch = async (): Promise<boolean> => {
+            showStatusMessage(
+              isJa ? "起動前処理を実行しています..." : "Running pre-launch checks...",
+              false
             );
-            const success = await Promise.race([statusPromise, timeoutPromise]);
-
-            if (!success) {
-              if (preLaunchRequired) {
-                setStatus("error");
-                showStatusMessage(
-                  isJa
-                    ? "起動前処理に失敗しました。セッションを開始できません（詳細は上のログを参照）。"
-                    : "Pre-launch check failed. Session was not started (see the log above for details).",
-                  false
-                );
-                return;
-              }
-              showStatusMessage(
-                isJa
-                  ? "⚠️ 起動前処理に失敗しましたが、セッションをそのまま開始します（詳細は上のログを参照）。"
-                  : "⚠️ Pre-launch check failed. Starting session anyway (see the log above for details).",
-                false
+            const unlistenOutput = subscribeToTauriEvent(
+              listen<{ data: number[] }>("pre-launch-output", (event) => {
+                onRawOutput?.(new Uint8Array(event.payload.data));
+              })
+            );
+            let resolveStatus: (success: boolean) => void = () => {};
+            const statusPromise = new Promise<boolean>((resolve) => {
+              resolveStatus = resolve;
+            });
+            const unlistenStatus = subscribeToTauriEvent(
+              listen<{ success: boolean }>("pre-launch-status", (event) => {
+                resolveStatus(event.payload.success);
+              })
+            );
+            try {
+              await invoke("start_pre_launch_command", {
+                cwd: targetCwd || "",
+                command: preLaunchCommand,
+                args: preLaunchArgs,
+              });
+              const timeoutMs = 10 * 60 * 1000;
+              const timeoutPromise = new Promise<boolean>((resolve) =>
+                setTimeout(() => resolve(false), timeoutMs)
               );
-            } else {
-              showStatusMessage(
-                isJa ? "✓ 起動前処理が完了しました" : "✓ Pre-launch checks complete"
-              );
+              return await Promise.race([statusPromise, timeoutPromise]);
+            } finally {
+              unlistenOutput();
+              unlistenStatus();
             }
-          } catch (preLaunchErr: any) {
+          };
+
+          if (preflightOnce.running) {
+            showStatusMessage(
+              isJa ? "別のタブの起動前処理が終わるのを待っています..." : "Waiting for another tab's pre-launch checks...",
+              false
+            );
+          }
+          const outcome = await preflightOnce.run(runPreLaunch);
+
+          if (outcome.error !== undefined) {
+            const errText = String(outcome.error);
             if (preLaunchRequired) {
               setStatus("error");
               showStatusMessage(
                 isJa
-                  ? `起動前処理を実行できませんでした。セッションを開始できません。\n${preLaunchErr.toString()}`
-                  : `Failed to run pre-launch command. Session was not started.\n${preLaunchErr.toString()}`,
+                  ? `起動前処理を実行できませんでした。セッションを開始できません。\n${errText}`
+                  : `Failed to run pre-launch command. Session was not started.\n${errText}`,
                 false
               );
               return;
             }
             showStatusMessage(
               isJa
-                ? `⚠️ 起動前処理を実行できませんでした。セッションをそのまま開始します。\n${preLaunchErr.toString()}`
-                : `⚠️ Failed to run pre-launch command. Starting session anyway.\n${preLaunchErr.toString()}`,
+                ? `⚠️ 起動前処理を実行できませんでした。セッションをそのまま開始します。\n${errText}`
+                : `⚠️ Failed to run pre-launch command. Starting session anyway.\n${errText}`,
               false
             );
-          } finally {
-            unlistenOutput();
-            unlistenStatus();
+          } else if (!outcome.success) {
+            if (preLaunchRequired) {
+              setStatus("error");
+              showStatusMessage(
+                isJa
+                  ? "起動前処理に失敗しました。セッションを開始できません（詳細は上のログを参照）。"
+                  : "Pre-launch check failed. Session was not started (see the log above for details).",
+                false
+              );
+              return;
+            }
+            showStatusMessage(
+              isJa
+                ? "⚠️ 起動前処理に失敗しましたが、セッションをそのまま開始します（詳細は上のログを参照）。"
+                : "⚠️ Pre-launch check failed. Starting session anyway (see the log above for details).",
+              false
+            );
+          } else if (outcome.ran) {
+            showStatusMessage(
+              isJa ? "✓ 起動前処理が完了しました" : "✓ Pre-launch checks complete"
+            );
           }
         } else {
           // Fallback (Task 9-5 & 9-6): check and auto-rebuild a `skill` folder

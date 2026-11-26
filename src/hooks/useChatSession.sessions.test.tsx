@@ -74,3 +74,32 @@ describe("useChatSession with session ids", () => {
     expect(m.result.current.sessionId).toBe("main");
   });
 });
+
+describe("pre-launch once across tabs", () => {
+  it("two tabs starting together run preflight once; a later start skips it", async () => {
+    const { preflightOnce } = await import("../lib/preflightOnce");
+    preflightOnce.reset();
+    const opts = (id: string) => ({ sessionId: id, command: "agy", preLaunchCommand: "bash", preLaunchArgs: ["preflight.sh"] });
+    const a = renderHook(() => useChatSession(opts("tab-a")));
+    const b = renderHook(() => useChatSession(opts("tab-b")));
+    await act(async () => {});
+    let pa!: Promise<void>, pb!: Promise<void>;
+    await act(async () => {
+      pa = a.result.current.startSession("/p/a");
+      pb = b.result.current.startSession("/p/b");
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // preflight reports success
+    await emit("pre-launch-status", { success: true });
+    await act(async () => { await pa; await pb; });
+    expect(invokes.filter((i) => i.cmd === "start_pre_launch_command")).toHaveLength(1);
+    expect(invokes.filter((i) => i.cmd === "start_pty").map((i) => i.args.sessionId).sort()).toEqual(["tab-a", "tab-b"]);
+    expect(a.result.current.status).toBe("running");
+    expect(b.result.current.status).toBe("running");
+
+    const c = renderHook(() => useChatSession(opts("tab-c")));
+    await act(async () => { await c.result.current.startSession("/p/c"); });
+    expect(invokes.filter((i) => i.cmd === "start_pre_launch_command")).toHaveLength(1);
+    expect(c.result.current.status).toBe("running");
+  });
+});
