@@ -16,7 +16,7 @@ const UPDATE_ORG_TEST_MENU_ID: &str = "update:org-test";
 // Labels say what you get, not where it comes from: whether the stable build
 // is the org's Drive copy or the public GitHub release is an install detail.
 const UPDATE_STABLE_LABEL: &str = "Update to Latest...";
-const UPDATE_TEST_LABEL: &str = "Update to Test Edition...";
+const UPDATE_TEST_LABEL: &str = "Update to Test Release...";
 const FORCE_KILL_SESSION_MENU_ID: &str = "session:force-kill";
 const LANGUAGE_MENU_ID_PREFIX: &str = "language:";
 const SETTINGS_MENU_LABEL: &str = "Settings";

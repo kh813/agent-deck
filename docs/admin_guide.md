@@ -357,7 +357,7 @@ Node.js and Python are self-contained inside the project folder, so agent-deck i
 | `config.toml` の状態 | 表示される項目 | 取得元 |
 |---|---|---|
 | `[drive] org_release_prod_file_id` / `org_release_test_file_id` が**どちらも未設定**（プレーンなOSS導入。`config.toml` 自体が無くても可） | 「Update to Latest...」のみ（GitHub の最新正式版） | `kh813/agent-deck` の GitHub Releases（`/releases/latest`） |
-| **どちらか一方でも設定済み**（組織管理下の導入） | 「Update to Latest...」「Update to Test Edition...」（設定されている方だけ。テスト版は区切り線の下） | 組織のGoogle Drive上の設定済みファイル（`python/scripts/tools/package_release.py` がアップロードしたもの。§7c参照） |
+| **どちらか一方でも設定済み**（組織管理下の導入） | 「Update to Latest...」「Update to Test Release...」（設定されている方だけ。テスト版は区切り線の下） | 組織のGoogle Drive上の設定済みファイル（`python/scripts/tools/package_release.py` がアップロードしたもの。§7c参照） |
 
 組織側が設定済みの場合にGitHub直取得の項目を隠すのは、組織管理下の導入は自組織の管理されたDriveチャネルを経由すべきで、GitHubから直接取得してバイパスすべきではないという方針のためです。この判定はメニュー構築時（アプリ起動時）に一度だけ行われます（`src-tauri/src/menu.rs` の `build_menu` → `self_update::org_release_configured()` が `config.toml` を直接読みます — Rust側が `config.toml` に触れる唯一の箇所です）。
 
@@ -368,7 +368,7 @@ Depending on `config.toml`, the update items at the top of the **Settings** menu
 | `config.toml` state | Items shown | Source |
 |---|---|---|
 | Neither `[drive] org_release_prod_file_id` nor `org_release_test_file_id` set (a plain OSS install — works even with no `config.toml` at all) | "Update to Latest..." only (the latest GitHub release) | `kh813/agent-deck`'s GitHub Releases (`/releases/latest`) |
-| **Either** is set (an org-managed install) | "Update to Latest..."/"Update to Test Edition..." (whichever is configured; the test edition below a separator) | This org's own Google Drive file (uploaded by `python/scripts/tools/package_release.py` — see §7c) |
+| **Either** is set (an org-managed install) | "Update to Latest..."/"Update to Test Release..." (whichever is configured; the test edition below a separator) | This org's own Google Drive file (uploaded by `python/scripts/tools/package_release.py` — see §7c) |
 
 The GitHub item is hidden once an org channel is configured because an org-managed install should go through its own controlled Drive channel rather than bypass it by hitting GitHub directly. This decision is made once, at menu-build time (on launch) — `src-tauri/src/menu.rs`'s `build_menu` calls `self_update::org_release_configured()`, which reads `config.toml` directly (the one place Rust ever touches it).
 
@@ -414,7 +414,7 @@ python3 python/scripts/setup/self_update.py apply
 ### 組織Driveチャネル / Org Drive Channel
 
 ```
-Update to Latest... / Update to Test Edition...（メニュー、組織 Drive チャネル）
+Update to Latest... / Update to Test Release...（メニュー、組織 Drive チャネル）
         ↓
 Rust側が config.toml から org_release_prod_file_id / org_release_test_file_id を読み取り、
 self_update.py check/apply --drive-file-id <ID> として渡す
@@ -469,12 +469,12 @@ For a full manual repair, re-extract the GitHub Releases ZIP over the existing f
 
 Since this directory is itself the `kh813/agent-deck` development environment, there's no separate "track/pin to upstream" concept. Regular development proceeds via commits/pushes to `main`; a release is cut by pushing a `vX.Y.Z` tag, which `.github/workflows/release.yml` builds, signs, and publishes automatically (see CLAUDE.md). Keep version numbers in sync across `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
 
-> **タグを打つだけでは終わりません（実際に見落とされたことあり、2026-08-14）/ Tagging alone is not the whole job (confirmed missed for real, 2026-08-14):** タグのpushが動かすのは**公開GitHubリリースのみ**です。組織Driveチャネル（`config.toml` の `[drive] org_release_test_file_id`/`org_release_prod_file_id`）を使っている場合、そのDrive上のZIPは**別途** `python3 python/scripts/tools/package_release.py --test`（または `--prod`）を実行するまで更新されません — アプリの「Update to Test Edition... / Update to Latest...」メニューや同僚が実際に取得するのはこちらのZIPです。手順は必ず次の2段階セットで行ってください：
+> **タグを打つだけでは終わりません（実際に見落とされたことあり、2026-08-14）/ Tagging alone is not the whole job (confirmed missed for real, 2026-08-14):** タグのpushが動かすのは**公開GitHubリリースのみ**です。組織Driveチャネル（`config.toml` の `[drive] org_release_test_file_id`/`org_release_prod_file_id`）を使っている場合、そのDrive上のZIPは**別途** `python3 python/scripts/tools/package_release.py --test`（または `--prod`）を実行するまで更新されません — アプリの「Update to Test Release... / Update to Latest...」メニューや同僚が実際に取得するのはこちらのZIPです。手順は必ず次の2段階セットで行ってください：
 >
 > 1. `git tag vX.Y.Z[-rcN] && git push origin vX.Y.Z[-rcN]` — 公開GitHubリリースを作成
 > 2. `python3 python/scripts/tools/package_release.py --test`（または `--prod`）— 同じリリースを組織のDriveファイルへ反映
 >
-> Pushing the tag only triggers the **public** GitHub release. If an org Drive channel is configured, that Drive-hosted ZIP is **not** updated until you separately run `python3 python/scripts/tools/package_release.py --test` (or `--prod`) — that's what the app's "Update to Test Edition..." / "Update to Latest..." menu items and colleagues actually pull from. Always do both steps together:
+> Pushing the tag only triggers the **public** GitHub release. If an org Drive channel is configured, that Drive-hosted ZIP is **not** updated until you separately run `python3 python/scripts/tools/package_release.py --test` (or `--prod`) — that's what the app's "Update to Test Release..." / "Update to Latest..." menu items and colleagues actually pull from. Always do both steps together:
 >
 > 1. `git tag vX.Y.Z[-rcN] && git push origin vX.Y.Z[-rcN]` — publishes the public GitHub release
 > 2. `python3 python/scripts/tools/package_release.py --test` (or `--prod`) — syncs that same release to the org's Drive file
@@ -490,7 +490,7 @@ git push origin v0.0.22-rc1
 
 `release.yml` はタグが `vX.Y.Z-なにか` の形（例: `-rc1`・`-test1`・`-beta.2`）にマッチする場合、そのリリースを GitHub 上で **pre-release** としてマークします。`self_update.py` のGitHubプロダクションチャネルは `/releases/latest` API だけを見ますが、これは仕様上「pre-releaseでもdraftでもない最新リリース」しか返しません。つまり pre-release は「Update to Latest...」メニューにも既存インストールの自動チェックにも一切現れず、通常ユーザーへは配信されません。
 
-**テストする側 / For testers:** 組織Driveチャネルを設定済みなら、`package_release.py --test`（§7c）でこの pre-release を組織の `config.toml` と一緒にパッケージし、メニューの「Update to Test Edition...」から取得させるのが簡単です。組織Driveを使わない場合は、GitHub の Releases ページから該当バージョンの ZIP を手動でダウンロードし、既存インストールの上に展開してください（§7a・修復手順と同じ要領）。
+**テストする側 / For testers:** 組織Driveチャネルを設定済みなら、`package_release.py --test`（§7c）でこの pre-release を組織の `config.toml` と一緒にパッケージし、メニューの「Update to Test Release...」から取得させるのが簡単です。組織Driveを使わない場合は、GitHub の Releases ページから該当バージョンの ZIP を手動でダウンロードし、既存インストールの上に展開してください（§7a・修復手順と同じ要領）。
 
 **本番への昇格 / Promoting to production:** 検証OKになったら、GitHub の当該リリースを編集し、「Set as a pre-release」のチェックを外して保存するだけです。**再ビルド・再タグは不要** — 検証したのと全く同じバイナリがそのまま本番配信されます。以降 `/releases/latest` はこのタグを返すようになるので、「Update to Latest...」で確認したユーザー・`package_release.py --prod` を実行した組織へ、そのまま配信されます。
 

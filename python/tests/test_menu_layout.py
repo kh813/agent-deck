@@ -75,7 +75,7 @@ def test_settings_is_only_updates_and_settings(menu):
     s = [l for l in menu["Settings"] if l != "---"]
     assert s[0] == "Update to Latest..."
     assert s[-1] == "Check for Updates Automatically"
-    assert set(s) <= {"Update to Latest...", "Update to Test Edition...", "Check for Updates Automatically"}, s
+    assert set(s) <= {"Update to Latest...", "Update to Test Release...", "Check for Updates Automatically"}, s
 
 
 def test_quit_is_our_guarded_item(menu):
