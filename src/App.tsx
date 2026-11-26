@@ -18,10 +18,12 @@ import { Attachment, AttachmentKind, MAX_ATTACHMENTS, addAttachments, canSend, c
 import { AttachmentChips, ImageAttachButton } from "./components/ImageAttachButton";
 import { RESTART_DELAY_MS, decideAfterSelfUpdate } from "./lib/selfUpdateRestart";
 import {
-  DEFAULT_SESSION_ID, MAX_TABS, SessionOutputEvent, SessionStatusEvent, Tab, addTab, canAddTab,
+  MAX_TABS, SessionOutputEvent, SessionStatusEvent, Tab, addTab, canAddTab,
   findFolderConflict, isForSession, newSessionId, nextActiveAfterClose, removeTab, renameTab, tabLabel,
 } from "./lib/sessions";
 import { sameSet, tabShortcutTarget } from "./lib/tabShortcuts";
+import { defaultTabs, loadSavedTabs, saveTabs } from "./lib/tabPersistence";
+import { promptNotifications } from "./lib/sessionNotify";
 import { workingSessions } from "./lib/sessionLights";
 import { TabSidebar } from "./components/TabSidebar";
 import { NewTabDialog } from "./components/NewTabDialog";
@@ -197,7 +199,12 @@ function App() {
     );
     return unsub;
   }, []);
-  const [selectedAgentId, setSelectedAgentId] = useState(() => loadSavedEngine() ?? "agy");
+  // Tabs from the last run (5.7.4: restored, not auto-started -- only the
+  // visible tab starts, as a single session always did).
+  const [restoredTabs] = useState(() => loadSavedTabs(loadSavedEngine() ?? "agy"));
+  const [selectedAgentId, setSelectedAgentId] = useState(
+    () => restoredTabs?.tabs.find((t) => t.id === restoredTabs.activeId)?.engineId ?? loadSavedEngine() ?? "agy",
+  );
 
   const currentAgentStatus = agentStatuses[selectedAgentId] || {
     installed: false,
@@ -343,10 +350,12 @@ function App() {
   // install/update flows act on the active tab. Each tab's live session is a
   // SessionRuntime (always mounted); its state is reported into
   // runtimeStates and its controls registered in runtimesRef.
-  const [tabs, setTabs] = useState<Tab[]>(() => [
-    { id: DEFAULT_SESSION_ID, name: "", cwd: "", engineId: selectedAgentId },
-  ]);
-  const [activeSessionId, setActiveSessionId] = useState(DEFAULT_SESSION_ID);
+  const [tabs, setTabs] = useState<Tab[]>(() => (restoredTabs ?? defaultTabs(selectedAgentId)).tabs);
+  const [activeSessionId, setActiveSessionId] = useState(() => (restoredTabs ?? defaultTabs(selectedAgentId)).activeId);
+  // Remember the tabs for the next launch.
+  useEffect(() => {
+    saveTabs({ tabs, activeId: activeSessionId });
+  }, [tabs, activeSessionId]);
   const [startOnMountIds, setStartOnMountIds] = useState<ReadonlySet<string>>(() => new Set());
   const runtimesRef = useRef<Record<string, RuntimeApi>>({});
   const [runtimeStates, setRuntimeStates] = useState<Record<string, RuntimeState>>({});
@@ -1343,6 +1352,41 @@ function App() {
     }));
     return off;
   }, [isInstallTerminalOpen, activeSessionId, handleRawOutput]);
+
+  // Tell the backend every tab's folder and name: the guard hook refuses
+  // writes into another tab's folder; the quit dialog names busy tabs.
+  useEffect(() => {
+    if (!isTauri()) return;
+    const entries = tabs.map((tb) => ({ id: tb.id, label: tabLabel(tb, t("appLocationShort")), cwd: tb.cwd }));
+    invoke("set_session_registry", { entries }).catch((e) => console.warn("set_session_registry failed:", e));
+  }, [tabs, lang]);
+
+  // A tab you aren't looking at (or any tab while agent-deck is in the
+  // background) is waiting at an approval prompt: notify once per prompt.
+  const notifiedPromptsRef = useRef<Record<string, string>>({});
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  useEffect(() => {
+    if (!isTauri()) return;
+    const { notify, notified } = promptNotifications(runtimeStates, activeSessionId, document.hasFocus(), notifiedPromptsRef.current);
+    notifiedPromptsRef.current = notified;
+    if (!notify.length) return;
+    void (async () => {
+      try {
+        const n = await import("@tauri-apps/plugin-notification");
+        let ok = await n.isPermissionGranted();
+        if (!ok) ok = (await n.requestPermission()) === "granted";
+        if (!ok) return;
+        for (const item of notify) {
+          const tab = tabsRef.current.find((tb) => tb.id === item.sessionId);
+          const name = tab ? tabLabel(tab, t("appLocationShort")) : item.sessionId;
+          n.sendNotification({ title: t("tabNeedsYouTitle").replace("{tab}", name), body: item.message.slice(0, 200) });
+        }
+      } catch (e) {
+        console.warn("notification failed:", e);
+      }
+    })();
+  }, [runtimeStates, activeSessionId, lang]);
 
   const showCheckingPanel = !agentStatusChecked ||
     !!(appConfig && pickEngine(appConfig.engines.map(e => e.id), agentStatuses, selectedAgentId) !== selectedAgentId);

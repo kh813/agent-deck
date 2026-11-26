@@ -71,6 +71,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -106,6 +107,7 @@ pub fn run() {
             pty::force_kill_pty,
             pty::close_pty_session,
             pty::resolve_session_folder,
+            pty::set_session_registry,
             web_server::start_web_server,
             web_server::stop_web_server,
             web_server::get_web_server_status,

@@ -41,6 +41,55 @@ pub fn note_output() {
     LAST_OUTPUT_MS.store(now_ms(), Ordering::Relaxed);
 }
 
+// Per tab (5.7.4): when each session last printed, and the tabs' names,
+// so the quit dialog can say which tabs are still working.
+static SESSION_OUTPUT_MS: std::sync::Mutex<Option<std::collections::HashMap<String, u64>>> = std::sync::Mutex::new(None);
+static SESSION_LABELS: std::sync::Mutex<Option<std::collections::HashMap<String, String>>> = std::sync::Mutex::new(None);
+
+pub fn note_output_for(session_id: &str) {
+    note_output();
+    let mut g = SESSION_OUTPUT_MS.lock().unwrap_or_else(|e| e.into_inner());
+    g.get_or_insert_with(Default::default).insert(session_id.to_string(), now_ms());
+}
+
+pub fn set_session_labels(labels: std::collections::HashMap<String, String>) {
+    *SESSION_LABELS.lock().unwrap_or_else(|e| e.into_inner()) = Some(labels);
+}
+
+/// Names of the tabs with output in the last BUSY_OUTPUT_WINDOW_MS, sorted.
+pub(crate) fn busy_tab_names(
+    outputs: &std::collections::HashMap<String, u64>,
+    labels: &std::collections::HashMap<String, String>,
+    now: u64,
+) -> Vec<String> {
+    let mut names: Vec<String> = outputs
+        .iter()
+        .filter(|(_, t)| now.saturating_sub(**t) < BUSY_OUTPUT_WINDOW_MS)
+        .map(|(id, _)| labels.get(id).cloned().unwrap_or_else(|| id.clone()))
+        .collect();
+    names.sort();
+    names
+}
+
+fn current_busy_tabs() -> Vec<String> {
+    let outputs = SESSION_OUTPUT_MS.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_default();
+    let labels = SESSION_LABELS.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_default();
+    busy_tab_names(&outputs, &labels, now_ms())
+}
+
+/// The quit question, naming the busy tabs when there are any.
+pub(crate) fn confirm_message(busy_tabs: &[String]) -> String {
+    if busy_tabs.is_empty() {
+        return CONFIRM_MESSAGE.to_string();
+    }
+    let list = busy_tabs.join("、");
+    let list_en = busy_tabs.join(", ");
+    format!(
+        "処理中のタブがあります: {list}\n終了すると、これらのタブで実行中のスキルや処理が中断されます。本当に終了しますか？\n\n\
+Tabs still working: {list_en}\nQuitting will interrupt what they are running. Quit anyway?"
+    )
+}
+
 pub(crate) fn should_confirm_quit(last_output_ms: u64, now_ms: u64, frontend_busy: bool) -> bool {
     frontend_busy || (last_output_ms != 0 && now_ms.saturating_sub(last_output_ms) < BUSY_OUTPUT_WINDOW_MS)
 }
@@ -90,7 +139,7 @@ pub fn request_quit<R: Runtime>(app: &AppHandle<R>) {
     }
     let app2 = app.clone();
     app.dialog()
-        .message(CONFIRM_MESSAGE)
+        .message(confirm_message(&current_busy_tabs()))
         .title(CONFIRM_TITLE)
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(CONFIRM_OK.into(), CONFIRM_CANCEL.into()))
@@ -218,7 +267,25 @@ mod tests {
         let menu = include_str!("menu.rs");
         assert!(menu.contains("quit_guard::install_quit_menu_item(handle, &menu)?"));
         assert!(menu.contains("id == crate::quit_guard::QUIT_MENU_ID"));
-        assert!(include_str!("pty.rs").contains("crate::quit_guard::note_output();"));
+        assert!(include_str!("pty.rs").contains("crate::quit_guard::note_output_for(session_id);"));
+    }
+
+    #[test]
+    fn quit_dialog_names_the_busy_tabs() {
+        let mut out = std::collections::HashMap::new();
+        out.insert("main".to_string(), 10_000u64);
+        out.insert("tab-1".to_string(), 1_000u64);
+        out.insert("tab-2".to_string(), 9_000u64);
+        let mut labels = std::collections::HashMap::new();
+        labels.insert("main".to_string(), "アプリの場所".to_string());
+        labels.insert("tab-2".to_string(), "レポート".to_string());
+        let busy = busy_tab_names(&out, &labels, 10_500);
+        assert_eq!(busy, vec!["アプリの場所".to_string(), "レポート".to_string()], "tab-1 went quiet");
+        let msg = confirm_message(&busy);
+        assert!(msg.contains("アプリの場所、レポート") && msg.contains("Tabs still working: アプリの場所, レポート"));
+        assert_eq!(confirm_message(&[]), CONFIRM_MESSAGE);
+        // unknown label -> the id
+        assert_eq!(busy_tab_names(&out, &Default::default(), 10_500), vec!["main".to_string(), "tab-2".to_string()]);
     }
 
     #[test]

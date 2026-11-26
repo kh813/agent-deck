@@ -46,3 +46,19 @@ describe("tabs wiring", () => {
     expect(app).toContain('display: showMainView ? undefined : "none"');
   });
 });
+
+describe("restore, registry, notifications wiring", () => {
+  it("tabs come from the last run and are saved on change", () => {
+    expect(app).toContain("useState(() => loadSavedTabs(");
+    expect(app).toContain("saveTabs({ tabs, activeId: activeSessionId })");
+    // the restored visible tab's engine is the starting selection
+    expect(app).toMatch(/restoredTabs\?\.tabs\.find\(\(t\) => t\.id === restoredTabs\.activeId\)\?\.engineId/);
+  });
+  it("every tab's folder goes to the backend for the guard hook", () => {
+    expect(app).toMatch(/invoke\("set_session_registry", \{ entries \}\)/);
+  });
+  it("prompt notifications use the decision helper and the OS plugin", () => {
+    expect(app).toContain("promptNotifications(runtimeStates, activeSessionId, document.hasFocus()");
+    expect(app).toContain('import("@tauri-apps/plugin-notification")');
+  });
+});

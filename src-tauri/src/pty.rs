@@ -431,12 +431,40 @@ fn peel_to_container(mut path: PathBuf) -> (PathBuf, bool) {
 // hasn't run yet / failed), that flag pair is dropped: `claude` hard-fails
 // with "Settings file not found" otherwise, and launching without the extra
 // permission rules beats not launching at all.
+/// `${GUARDRAILS}` in an engine's args: the product's guardrails (the
+/// install's AGENTS.md) handed to the agent explicitly, so they apply even
+/// when the tab's working folder is outside the install (agy/Claude only
+/// auto-load AGENTS.md/CLAUDE.md from the working folder and its parents).
+/// Confirmed 2026-11-26: Claude Code honours `--append-system-prompt`;
+/// agy loads AGENTS.md from an `--add-dir` folder instead.
+pub(crate) const GUARDRAILS_PLACEHOLDER: &str = "${GUARDRAILS}";
+
+pub(crate) fn guardrails_text(project_root: &Path) -> Option<String> {
+    let body = std::fs::read_to_string(project_root.join("AGENTS.md")).ok()?;
+    let root = project_root.to_string_lossy();
+    Some(format!(
+        "# agent-deck guardrails\n\nThe rules below come from {root}/AGENTS.md (the agent-deck install folder, {root}). \
+\"This project\" and paths like files/, tmp/ and python/ in them mean that folder, not your working folder. \
+Your working folder is the current directory: keep your file changes inside it (or in the locations the rules allow), \
+and never touch folders other agent-deck tabs are working in.\n\n{body}"
+    ))
+}
+
 pub(crate) fn resolve_launch_args(args: Vec<String>, project_root: &Path) -> Vec<String> {
     let root = project_root.to_string_lossy();
-    let expanded: Vec<String> = args
-        .into_iter()
-        .map(|a| a.replace("${PROJECT_ROOT}", &root))
-        .collect();
+    let guardrails = if args.iter().any(|a| a == GUARDRAILS_PLACEHOLDER) { guardrails_text(project_root) } else { None };
+    let mut expanded: Vec<String> = Vec::with_capacity(args.len());
+    for a in args {
+        if a == GUARDRAILS_PLACEHOLDER {
+            match &guardrails {
+                Some(text) => expanded.push(text.clone()),
+                // No AGENTS.md (dev checkout, odd install): drop the flag too.
+                None => { expanded.pop(); }
+            }
+        } else {
+            expanded.push(a.replace("${PROJECT_ROOT}", &root));
+        }
+    }
     let mut out = Vec::with_capacity(expanded.len());
     let mut i = 0;
     while i < expanded.len() {
@@ -598,7 +626,7 @@ fn emit_output<R: tauri::Runtime>(
     session_id: &str,
     data: &[u8],
 ) {
-    crate::quit_guard::note_output();
+    crate::quit_guard::note_output_for(session_id);
     let main = session_id == DEFAULT_SESSION;
     let _ = app.emit("session-output", SessionOutputPayload { session_id: session_id.to_string(), data: data.to_vec() });
     if main {
@@ -688,6 +716,14 @@ pub async fn start_session_internal<R: tauri::Runtime>(
 
     let mut cmd = CommandBuilder::new(&command);
     cmd.args(args);
+    // Who this session is, for the guard hook and skills (5.7.4): the hook
+    // only acts inside agent-deck sessions; AGENT_DECK_TMP is this tab's own
+    // temp folder, so the same skill in two tabs doesn't share files.
+    let session_tmp = project_root.join("tmp").join("sessions").join(&session_id);
+    let _ = std::fs::create_dir_all(&session_tmp);
+    cmd.env("AGENT_DECK_SESSION_ID", &session_id);
+    cmd.env("AGENT_DECK_ROOT", project_root.to_string_lossy().as_ref());
+    cmd.env("AGENT_DECK_TMP", session_tmp.to_string_lossy().as_ref());
     cmd.env("LANG", "en_US.UTF-8");
     cmd.env("LC_ALL", "en_US.UTF-8");
     cmd.env("COLUMNS", cols.to_string());
@@ -1028,6 +1064,42 @@ pub async fn force_kill_pty(session_id: Option<String>, app: AppHandle, state: S
     Ok(())
 }
 
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq)]
+pub struct SessionEntry {
+    pub id: String,
+    pub label: String,
+    pub cwd: String,
+}
+
+pub(crate) const SESSION_REGISTRY_FILE: &str = "agent-deck-sessions.json";
+
+/// Every tab's id, label and working folder, written to
+/// <root>/tmp/agent-deck-sessions.json for the guard hook (it refuses writes
+/// into another tab's folder) and kept for the quit dialog's tab names.
+pub(crate) fn write_session_registry(root: &Path, entries: &[SessionEntry]) -> std::io::Result<()> {
+    let dir = root.join("tmp");
+    std::fs::create_dir_all(&dir)?;
+    let json = serde_json::to_string_pretty(&serde_json::json!({ "sessions": entries })).unwrap_or_default();
+    let tmp = dir.join(format!("{SESSION_REGISTRY_FILE}.tmp"));
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, dir.join(SESSION_REGISTRY_FILE))
+}
+
+#[tauri::command]
+pub fn set_session_registry(entries: Vec<SessionEntry>) -> Result<(), String> {
+    // Folders as the hook will compare them: absolute, symlinks resolved,
+    // "" (the app's location) made explicit.
+    let entries: Vec<SessionEntry> = entries
+        .into_iter()
+        .filter(|e| valid_session_id(&e.id))
+        .map(|e| SessionEntry { cwd: canonical_folder(&e.cwd).unwrap_or(e.cwd.clone()), ..e })
+        .collect();
+    crate::quit_guard::set_session_labels(entries.iter().map(|e| (e.id.clone(), e.label.clone())).collect());
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let root = resolve_project_root(exe);
+    write_session_registry(&root, &entries).map_err(|e| e.to_string())
+}
+
 /// A tab's working folder as an absolute, symlink-resolved path, so two tabs
 /// can be compared (app_specs.md 5.7.4: the same or a nested folder may not
 /// be open in two tabs). "" = the app's own location (the default folder).
@@ -1192,6 +1264,34 @@ mod tests {
         }
         assert!(!canonical_folder("").unwrap().is_empty(), "default folder");
         assert!(canonical_folder(base.join("missing").to_str().unwrap()).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn guardrails_placeholder_expands_or_disappears_with_its_flag() {
+        let base = std::env::temp_dir().join(format!("agentdeck-guard-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let args = vec!["--settings".into(), "{}".into(), "--append-system-prompt".into(), GUARDRAILS_PLACEHOLDER.into()];
+        // no AGENTS.md -> flag dropped
+        let out = resolve_launch_args(args.clone(), &base);
+        assert_eq!(out, vec!["--settings", "{}"]);
+        std::fs::write(base.join("AGENTS.md"), "## File Access Policy\nOnly files/ and tmp/.").unwrap();
+        let out = resolve_launch_args(args, &base);
+        assert_eq!(out[2], "--append-system-prompt");
+        assert!(out[3].contains("File Access Policy") && out[3].contains(&*base.to_string_lossy()), "{}", out[3]);
+        assert!(out[3].contains("other agent-deck tabs"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn session_registry_is_written_atomically() {
+        let base = std::env::temp_dir().join(format!("agentdeck-reg-{}", std::process::id()));
+        let entries = vec![SessionEntry { id: "main".into(), label: "アプリの場所".into(), cwd: "/x".into() },
+                           SessionEntry { id: "tab-1".into(), label: "proj".into(), cwd: "/p/proj".into() }];
+        write_session_registry(&base, &entries).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(base.join("tmp").join(SESSION_REGISTRY_FILE)).unwrap()).unwrap();
+        assert_eq!(v["sessions"][1]["cwd"], "/p/proj");
+        assert!(!base.join("tmp").join(format!("{SESSION_REGISTRY_FILE}.tmp")).exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 

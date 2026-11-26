@@ -46,7 +46,11 @@ def test_not_named_settings_json_so_dev_sessions_are_unaffected():
     assert agent_setup.CLAUDE_SETTINGS_NAME != "settings.json"
     cfg = json.loads((ROOT / "agent_config.json").read_text(encoding="utf-8"))
     claude = next(e for e in cfg["engines"] if e["id"] == "claude")
-    assert claude["args"] == ["--settings", "${PROJECT_ROOT}/.claude/agent-deck-settings.json"]
+    assert claude["args"][:2] == ["--settings", "${PROJECT_ROOT}/.claude/agent-deck-settings.json"]
+    # the product guardrails go in explicitly (5.7.4): they apply in any working folder
+    assert claude["args"][2:] == ["--append-system-prompt", "${GUARDRAILS}"]
+    agy = next(e for e in cfg["engines"] if e["id"] == "agy")
+    assert agy["args"] == ["--add-dir", "${PROJECT_ROOT}"]  # agy loads AGENTS.md from an added folder
 
 
 def test_rebuild_and_init_install_claude_settings():
