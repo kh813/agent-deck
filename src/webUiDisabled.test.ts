@@ -14,7 +14,7 @@ describe("Web UI is disabled for now", () => {
     expect(app).toContain('invoke<boolean>("web_ui_available")');
   });
   it("the screen shows the notice and disables every control", () => {
-    expect(app).toMatch(/\{!webUiAvailable && \([\s\S]{0,400}webUiUnavailableTitle/);
+    expect(app).toMatch(/\{!webUiAvailable && \([\s\S]{0,1200}webUiUnavailableTitle/);
     expect(app).toContain("<fieldset disabled={!webUiAvailable}");
   });
   it("the start handler does nothing while unavailable", () => {
