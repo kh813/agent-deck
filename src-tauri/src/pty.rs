@@ -36,6 +36,9 @@ pub struct PtyState {
     pub writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
     pub child: Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>,
     pub broadcast_tx: Arc<tokio::sync::RwLock<Option<tokio::sync::broadcast::Sender<crate::web_server::WsServerEvent>>>>,
+    /// Bumped on every start_pty: lets a session's output task tell its own
+    /// child from a newer session's (see child-exit watching below).
+    pub generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Default for PtyState {
@@ -45,6 +48,7 @@ impl Default for PtyState {
             writer: Arc::new(Mutex::new(None)),
             child: Arc::new(Mutex::new(None)),
             broadcast_tx: Arc::new(tokio::sync::RwLock::new(None)),
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 }
@@ -610,6 +614,9 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
     *state.session.lock().await = Some(pair.master);
     *state.writer.lock().await = Some(writer);
     *state.child.lock().await = Some(child);
+    let my_generation = state.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let child_handle = state.child.clone();
+    let generation_handle = state.generation.clone();
 
     // TEMPORARY: raw PTY byte log for diagnosing rendering bugs in the
     // upstream CLI's own output. Truncated fresh on every session start.
@@ -655,6 +662,13 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
         let mut accumulated = Vec::new();
         let mut last_flush = std::time::Instant::now();
         let flush_interval = std::time::Duration::from_millis(15); // 15ms batching window
+        // The session also ends when its process exits, even if the output
+        // pipe never reports EOF. Confirmed on Windows (2026-11-26): ConPTY
+        // kept the pipe open after `self_update.py apply` exited, so
+        // "terminated" never fired and the app never restarted into the
+        // update (the same root cause as installers that "never finish").
+        let mut last_exit_check = std::time::Instant::now();
+        let mut exited_at: Option<std::time::Instant> = None;
 
         loop {
             match tokio::time::timeout(std::time::Duration::from_millis(5), rx.recv()).await {
@@ -699,12 +713,65 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
                         accumulated.clear();
                         last_flush = std::time::Instant::now();
                     }
+                    if last_exit_check.elapsed() >= CHILD_EXIT_POLL {
+                        last_exit_check = std::time::Instant::now();
+                        match exited_at {
+                            None => match child_exit_state(&child_handle, &generation_handle, my_generation) {
+                                ChildState::Exited => exited_at = Some(std::time::Instant::now()),
+                                ChildState::Superseded => break, // stopped/replaced: not ours to report
+                                ChildState::Running => {}
+                            },
+                            // A moment for the last output to arrive, then end
+                            // the session as if the pipe had closed.
+                            Some(t) if t.elapsed() >= CHILD_EXIT_GRACE => {
+                                if generation_handle.load(std::sync::atomic::Ordering::SeqCst) == my_generation {
+                                    let _ = app_clone.emit("pty-status", "terminated");
+                                    if let Some(ref tx) = broadcast_tx {
+                                        let _ = tx.send(crate::web_server::WsServerEvent::Status("terminated".to_string()));
+                                    }
+                                }
+                                break;
+                            }
+                            Some(_) => {}
+                        }
+                    }
                 }
             }
         }
     });
 
     Ok(())
+}
+
+/// How often a session checks whether its process has exited, and how long
+/// it then waits for trailing output before reporting "terminated".
+const CHILD_EXIT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+const CHILD_EXIT_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum ChildState {
+    Running,
+    Exited,
+    /// This session was stopped or replaced by a newer one.
+    Superseded,
+}
+
+pub(crate) fn child_exit_state(
+    child: &Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>,
+    generation: &std::sync::atomic::AtomicU64,
+    mine: u64,
+) -> ChildState {
+    if generation.load(std::sync::atomic::Ordering::SeqCst) != mine {
+        return ChildState::Superseded;
+    }
+    let Ok(mut guard) = child.try_lock() else { return ChildState::Running };
+    match guard.as_mut() {
+        None => ChildState::Superseded, // stop_pty took it (and reports itself)
+        Some(c) => match c.try_wait() {
+            Ok(Some(_)) => ChildState::Exited,
+            _ => ChildState::Running,
+        },
+    }
 }
 
 pub async fn stop_pty_internal(state: &PtyState) -> Result<(), String> {
@@ -839,6 +906,56 @@ pub fn get_app_bundle_dir() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn spawn_short_lived() -> Box<dyn portable_pty::Child + Send + Sync> {
+        let pair = native_pty_system()
+            .openpty(PtySize { rows: 10, cols: 40, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut cmd = if cfg!(windows) {
+            let mut c = CommandBuilder::new("cmd");
+            c.args(["/C", "exit 0"]);
+            c
+        } else {
+            CommandBuilder::new("true")
+        };
+        cmd.cwd(std::env::temp_dir());
+        let child = pair.slave.spawn_command(cmd).unwrap();
+        // keep the master alive like a real session (pipe stays open)
+        std::mem::forget(pair.master);
+        child
+    }
+
+    #[tokio::test]
+    async fn detects_a_finished_process_even_with_the_pipe_open() {
+        // Windows 2026-11-26: ConPTY kept the pipe open after the update
+        // script exited -> "terminated" never fired -> no restart.
+        let child = Arc::new(Mutex::new(Some(spawn_short_lived())));
+        let generation = std::sync::atomic::AtomicU64::new(7);
+        let mut state = ChildState::Running;
+        for _ in 0..100 {
+            state = child_exit_state(&child, &generation, 7);
+            if state == ChildState::Exited {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert_eq!(state, ChildState::Exited);
+    }
+
+    #[tokio::test]
+    async fn a_stopped_or_newer_session_is_not_reported_as_ours() {
+        let child: Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>> = Arc::new(Mutex::new(None));
+        let generation = std::sync::atomic::AtomicU64::new(3);
+        assert_eq!(child_exit_state(&child, &generation, 3), ChildState::Superseded, "stop_pty took it");
+        let child = Arc::new(Mutex::new(Some(spawn_short_lived())));
+        assert_eq!(child_exit_state(&child, &generation, 2), ChildState::Superseded, "a newer session started");
+    }
+
+    #[test]
+    fn exit_timing_is_short() {
+        assert!(CHILD_EXIT_POLL <= std::time::Duration::from_millis(500));
+        assert!(CHILD_EXIT_GRACE <= std::time::Duration::from_secs(2));
+    }
 
     #[test]
     fn test_resolve_launch_args_expands_project_root() {

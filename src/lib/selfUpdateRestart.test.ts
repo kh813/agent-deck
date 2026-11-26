@@ -28,5 +28,7 @@ describe("App wiring", () => {
     expect(alertIdx).toBeGreaterThan(restartIdx); // alert only in the fallback
     expect(app).toContain("void finishSelfUpdate(selfUpdateStartedAtRef.current);");
     expect(app).toContain("selfUpdateStartedAtRef.current = Date.now();");
+    // "error" ends the update session too (Windows: broken pipe)
+    expect(app).toMatch(/event\.payload === "error" && isSelfUpdating && selfUpdateActiveRef\.current\)[\s\S]{0,200}finishSelfUpdate\(selfUpdateStartedAtRef\.current\)/);
   });
 });

@@ -703,6 +703,15 @@ function App() {
   useEffect(() => {
     const unsubStatus = subscribeToTauriEvent(
       listen<string>("pty-status", (event) => {
+        // An agent-deck update's session can also end with "error" (the
+        // pipe broke instead of closing, Windows): it's over either way --
+        // check whether it installed and restart.
+        if (event.payload === "error" && isSelfUpdating && selfUpdateActiveRef.current) {
+          selfUpdateActiveRef.current = false;
+          setIsSelfUpdating(false);
+          void finishSelfUpdate(selfUpdateStartedAtRef.current);
+          return;
+        }
         if (event.payload === "terminated") {
           if (isInstalling) {
             setIsInstalling(false);
