@@ -4,6 +4,7 @@ mod config;
 mod menu;
 mod self_update;
 mod root_files;
+mod restart;
 mod cert;
 mod quit_guard;
 mod locale;
@@ -90,6 +91,8 @@ pub fn run() {
             self_update::check_self_update,
             self_update::default_self_update_kind,
             self_update::get_self_update_command,
+            restart::self_update_applied,
+            restart::restart_after_update,
             config::get_app_config,
             menu::set_theme,
             menu::set_auto_check_update,

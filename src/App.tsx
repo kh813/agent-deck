@@ -17,6 +17,7 @@ import { isNewerInstalled, isTestKind, isUpdateBannerVisible, lastCheckStore, sh
 import { baseName, pickImageFile, promptTextForPaths, saveClipboardImage, saveImageBlob } from "./lib/imageAttach";
 import { Attachment, AttachmentKind, MAX_ATTACHMENTS, addAttachments, canSend, composeMessage, removeAttachment } from "./lib/attachments";
 import { AttachmentChips, ImageAttachButton } from "./components/ImageAttachButton";
+import { RESTART_DELAY_MS, decideAfterSelfUpdate } from "./lib/selfUpdateRestart";
 import { loadLangChoice, parseLangChoice, resolveLang, saveLangChoice, setCurrentLang, type LangChoice } from "./lib/language";
 import { stopAndWaitForExit } from "./lib/ptyHandover";
 import {
@@ -259,6 +260,7 @@ function App() {
   // previous session's exit, which used to be taken as "update complete".
   const agentUpdateActiveRef = useRef(false);
   const selfUpdateActiveRef = useRef(false);
+  const selfUpdateStartedAtRef = useRef(0);
   const [isInstallTerminalOpen, setIsInstallTerminalOpen] = useState(false);
 
   // Web UI Server State (Desktop & Browser)
@@ -676,6 +678,27 @@ function App() {
     }
   }, [selectedAgentId, appConfig, agentStatuses, status, terminalSizeSettled, startSession]);
 
+  // After "Update to ...": restart into the new version when the update
+  // really installed one (lib/selfUpdateRestart.ts); otherwise say why not.
+  const finishSelfUpdate = useCallback(async (startedAtMs: number) => {
+    const outcome = await decideAfterSelfUpdate(
+      () => invoke<boolean>("self_update_applied", { startedAtMs }),
+    );
+    if (outcome === "restart") {
+      showStatusMessage(t("selfUpdateRestarting"), false);
+      await new Promise((r) => setTimeout(r, RESTART_DELAY_MS));
+      try {
+        await invoke("restart_after_update");
+      } catch {
+        // Couldn't relaunch (e.g. a dev build): fall back to asking.
+        showStatusMessage(t("selfUpdateAppliedRestart"), false);
+        alert(t("selfUpdateAppliedRestart"));
+      }
+    } else {
+      showStatusMessage(t("selfUpdateNotApplied"));
+    }
+  }, [showStatusMessage, lang]);
+
   // Listen to PTY termination during installation and updates
   useEffect(() => {
     const unsubStatus = subscribeToTauriEvent(
@@ -699,15 +722,14 @@ function App() {
             // an actual restart, so self_update.py apply's own completion
             // (this process exiting) is the whole signal -- just relay it.
             setIsSelfUpdating(false);
-            showStatusMessage(t("selfUpdateAppliedRestart"), false);
-            alert(t("selfUpdateAppliedRestart"));
+            void finishSelfUpdate(selfUpdateStartedAtRef.current);
           }
         }
       })
     );
 
     return unsubStatus;
-  }, [isInstalling, isUpdating, isSelfUpdating, checkAgentStatus, checkUpdateStatus, showStatusMessage]);
+  }, [isInstalling, isUpdating, isSelfUpdating, checkAgentStatus, checkUpdateStatus, showStatusMessage, finishSelfUpdate]);
 
   // Poll for install/update completion independent of the PTY session ever
   // reporting "terminated".
@@ -827,6 +849,7 @@ function App() {
 
       await handOverPty();
       selfUpdateActiveRef.current = true;
+      selfUpdateStartedAtRef.current = Date.now();
       showStatusMessage(t("selfUpdateStarted"), false);
       await invoke("start_pty", {
         command: updateCmd.command,

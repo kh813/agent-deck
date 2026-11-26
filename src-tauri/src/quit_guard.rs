@@ -59,6 +59,12 @@ pub fn exit_confirmed() -> bool {
     EXIT_CONFIRMED.load(Ordering::SeqCst)
 }
 
+/// Lets the next exit through without asking (a restart into a freshly
+/// installed update -- the user asked for it).
+pub fn confirm_exit() {
+    EXIT_CONFIRMED.store(true, Ordering::SeqCst);
+}
+
 #[tauri::command]
 pub fn set_quit_guard_busy(busy: bool) {
     FRONTEND_BUSY.store(busy, Ordering::Relaxed);

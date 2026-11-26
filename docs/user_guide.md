@@ -709,8 +709,8 @@ When a new version is published, you can update to the latest from the menu bar 
    Open the **Settings** menu. Normally click "**Update to Latest...**" (the latest official release). "Update to Test Release..." is for people taking part in development/testing (it may not appear, depending on your organization's setup).
 2. 更新がある場合、画面上部に通知バナーが表示されます。「**Update Now**」をクリックすると、ダウンロード・適用が自動で行われます（進行状況はターミナル画面に表示されます）。
    If an update is available, a notification banner appears at the top of the window. Click **Update Now** to download and apply it automatically (progress is shown in the terminal view).
-3. 完了後に再起動を案内するメッセージが表示されます。ウィンドウを閉じて `agent-deck.app`/`agent-deck.exe` を起動し直してください。
-   When complete, a message asks you to restart. Close the window and relaunch `agent-deck.app`/`agent-deck.exe`.
+3. 完了すると「新しいバージョンで再起動します…」と表示され、agent-deck が自動で再起動します（v0.2.9〜。終了の確認は出ません）。それ以前の版や、自動で再起動できなかった場合は、ウィンドウを閉じて `agent-deck.app`/`agent-deck.exe` を起動し直してください。
+   When complete, "Restarting into the new version…" appears and agent-deck restarts by itself (v0.2.9+, no quit confirmation). On older versions, or if it can't restart itself, close the window and relaunch `agent-deck.app`/`agent-deck.exe`.
 
 > すでに最新版の場合は、その旨を伝えるメッセージが表示されます。
 > If you already have the latest version, a message says so and no changes are made.
