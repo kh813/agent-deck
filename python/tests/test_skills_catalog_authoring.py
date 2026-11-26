@@ -378,3 +378,74 @@ def test_public_install_export_import_round_trip_japanese_path(public_install, t
     assert r["ok"] and r["data"]["names"] == ["weekly-report"], r
     md = public_install / "python" / "skills-personal" / "weekly-report" / "SKILL.md"
     assert md.read_text(encoding="utf-8").endswith("手順\n")
+
+
+class TestWhoIsMe:
+    """Which local skills are 'yours' must follow the Google account the
+    catalog uses -- share stamps that email into SKILL.md. With config.toml's
+    [user] email empty (a real install), a shared skill used to look like
+    someone else's: no unshare / update buttons, and delete didn't unshare."""
+
+    def test_remembered_account_wins_over_config(self, roots, monkeypatch, capsys):
+        monkeypatch.setattr(sc, "USER_EMAIL", "")
+        _skill(roots[2], "mine", email="hiroshi@example.com")
+        index([("mine", "hiroshi")])
+        _code, r = run_api(capsys, "local")
+        s = next(x for x in r["data"]["skills"] if x["name"] == "mine")
+        assert s["mine"] is False  # unknown account: can't tell
+
+        sc._remember_identity("hiroshi@example.com")
+        _code, r = run_api(capsys, "local")
+        s = next(x for x in r["data"]["skills"] if x["name"] == "mine")
+        assert s["mine"] is True and s["shared"] is True
+        assert r["data"]["me"] == "hiroshi"
+
+    def test_disabled_shared_skill_is_still_yours_and_shared(self, roots, monkeypatch, capsys):
+        monkeypatch.setattr(sc, "USER_EMAIL", "")
+        sc._remember_identity("hiroshi@example.com")
+        _skill(roots[2], "mine", email="hiroshi@example.com", disabled=True)
+        index([("mine", "hiroshi")])
+        _code, r = run_api(capsys, "local")
+        s = next(x for x in r["data"]["skills"] if x["name"] == "mine")
+        assert s["enabled"] is False and s["mine"] and s["shared"]
+
+    def test_delete_refuses_while_shared_with_remembered_account(self, roots, monkeypatch, capsys):
+        monkeypatch.setattr(sc, "USER_EMAIL", "")
+        sc._remember_identity("hiroshi@example.com")
+        d = _skill(roots[2], "mine", email="hiroshi@example.com")
+        index([("mine", "hiroshi")])
+        _code, r = run_api(capsys, "delete", "mine")
+        assert r["error"]["code"] == "shared" and d.exists()
+
+    def test_config_email_is_the_fallback(self, roots, capsys):
+        assert sc._me() == "test"  # roots sets USER_EMAIL test@example.com
+
+    def test_current_email_remembers(self, roots):
+        from unittest.mock import MagicMock
+        svc = MagicMock()
+        svc.about().get().execute.return_value = {"user": {"emailAddress": "who@example.com"}}
+        assert sc._current_email(svc) == "who@example.com"
+        assert sc._remembered_email() == "who@example.com"
+
+    def test_broken_identity_file_is_ignored(self, roots):
+        sc.IDENTITY_PATH.write_text("{not json", encoding="utf-8")
+        assert sc._remembered_email() == ""
+        sc.IDENTITY_PATH.write_text("[1]", encoding="utf-8")
+        assert sc._remembered_email() == ""
+
+    def test_catalog_visit_learns_the_account_once(self, roots, monkeypatch, capsys):
+        from unittest.mock import MagicMock
+        svc = MagicMock()
+        svc.about().get().execute.return_value = {"user": {"emailAddress": "who@example.com"}}
+        monkeypatch.setattr(sc, "_get_service", lambda *a, **k: svc)
+        monkeypatch.setattr(sc, "_load_catalog_skills", lambda: [])
+        monkeypatch.setattr(sc, "_LAST_LOAD_OFFLINE", False)
+        run_api(capsys, "catalog")
+        assert sc._remembered_email() == "who@example.com"
+        n = svc.about().get().execute.call_count
+        run_api(capsys, "catalog")
+        assert svc.about().get().execute.call_count == n  # cached
+
+    def test_identity_never_in_the_real_home(self):
+        from pathlib import Path
+        assert not str(sc.IDENTITY_PATH).startswith(str(Path.home() / ".gemini"))

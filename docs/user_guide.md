@@ -397,8 +397,8 @@ Click "📚 Skills" at the top right to open the Skill Catalog screen, where you
   Find and add shared skills. The list filters as you type (name, author and description; several keywords must all match; width and case don't matter). Filter by author from the menu or by clicking an author's name. "Add" installs a skill ("Update to latest" if already added). "Details" shows the full description.
 - **マイスキル / My Skills**: 自分のスキル（作ったもの、ファイルから読み込んだもの）。
   Your own skills (ones you made or imported from a file).
-  - 「＋ 新しいスキル」で作成、「編集」で説明と手順を変更、「削除」で PC から削除。「カタログに共有」「カタログの版を更新」（編集後にカタログ側も最新にする）「共有を取り下げ」。共有中のスキルを保存すると、カタログの版も更新するか確認されます。
-    "+ New skill" creates one, "Edit" changes its description and instructions, "Delete" removes it from this PC. "Share to catalog", "Update shared copy" (after editing) and "Unshare". Saving a shared skill asks whether to update the catalog's copy too.
+  - 「＋ 新しいスキル」で作成、「編集」で説明と手順を変更、「削除」で PC から削除。「カタログに共有」「カタログの版を更新」（編集後にカタログ側も最新にする）「共有を取り下げ」。共有中のスキルを保存すると、カタログの版も更新するか確認されます。共有中のスキルを「無効にする」と、カタログからも取り下げるか確認されます（「いいえ」ならこの PC でだけ無効になり、カタログには残ります）。
+    "+ New skill" creates one, "Edit" changes its description and instructions, "Delete" removes it from this PC. "Share to catalog", "Update shared copy" (after editing) and "Unshare". Saving a shared skill asks whether to update the catalog's copy too; disabling a shared skill asks whether to remove it from the catalog as well (No: it's only disabled on this PC and stays in the catalog).
   - 「🤖 AI と相談して作る」「🤖 AI と相談して改善」（編集画面）は、実行中のセッションに `my-skills create` / `my-skills update <名前>` を送り、AI と対話しながら作成・改善します。
     "🤖 Create with AI" and "🤖 Improve with AI" (in the editor) send `my-skills create` / `my-skills update <name>` to the running session so you can build the skill in conversation.
   - 各スキルの「エクスポート」、または「📤 マイスキルをすべてエクスポート」で ZIP ファイルに保存できます（PC の移行やバックアップ、カタログを通さずに同僚へ渡すときに）。「📥 ファイルから読み込む」で ZIP または SKILL.md を読み込むと、マイスキルに追加されます。同じ名前のスキルがあるときは上書きするか確認されます。他の人が作ったスキルは「作成: 名前」と表示され、作成者はその人のままなので、自分のものとしてカタログに共有することはできません。

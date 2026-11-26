@@ -167,6 +167,12 @@ except (FileNotFoundError, ImportError):
     run_auth_flow = None
 SCOPES    = ["https://www.googleapis.com/auth/drive"]
 TOKEN_PATH = Path.home() / ".gemini" / "agent_ui_library_token.json"
+# The Google account the catalog was last used with (written whenever Drive
+# says who we are). It decides which local skills are "yours": sharing
+# stamps that account's email into SKILL.md, so comparing against
+# config.toml's [user] email -- often empty or a different address --
+# made your own shared skills look like someone else's (no unshare button).
+IDENTITY_PATH = Path.home() / ".gemini" / "agent_deck_catalog_identity.json"
 # ============================================================
 
 CLIENT_CONFIG = {
@@ -249,7 +255,24 @@ def _get_service(timeout_seconds=None):
 
 
 def _current_email(service) -> str:
-    return service.about().get(fields="user").execute()["user"]["emailAddress"]
+    email = service.about().get(fields="user").execute()["user"]["emailAddress"]
+    _remember_identity(email)
+    return email
+
+
+def _remember_identity(email: str) -> None:
+    try:
+        IDENTITY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        IDENTITY_PATH.write_text(json.dumps({"email": email}), encoding="utf-8")
+    except OSError:
+        pass  # only a cache; config.toml's email is the fallback
+
+
+def _remembered_email() -> str:
+    try:
+        return str(json.loads(IDENTITY_PATH.read_text(encoding="utf-8")).get("email", "")).strip()
+    except (OSError, ValueError, AttributeError):
+        return ""
 
 
 def _owner_prefix(email: str) -> str:
@@ -1297,13 +1320,22 @@ def _single_match(service, query: str) -> dict:
 
 
 def _me() -> str:
-    if USER_EMAIL:
-        return _owner_prefix(USER_EMAIL)
-    return ""
+    """Your owner prefix: the catalog's Google account if known (it's what
+    share stamps into SKILL.md), else config.toml's [user] email."""
+    email = _remembered_email() or USER_EMAIL
+    return _owner_prefix(email) if email else ""
 
 
 def api_catalog(args):
-    return {"skills": _with_installed(_load_catalog_skills()), "offline": _LAST_LOAD_OFFLINE}
+    skills = _load_catalog_skills()
+    if not _LAST_LOAD_OFFLINE and not _remembered_email():
+        # First catalog visit: learn which account is "you" (one API call,
+        # then cached) so My Skills can offer unshare/update for yours.
+        try:
+            _current_email(_get_service())
+        except Exception:
+            pass
+    return {"skills": _with_installed(skills), "offline": _LAST_LOAD_OFFLINE}
 
 
 def api_search(args):

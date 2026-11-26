@@ -103,7 +103,9 @@ export function localActions(s: LocalSkill): LocalAction[] {
     return ["view", s.enabled ? "disable" : "enable", "export", ...(s.auto_sync ? [] : (["uninstall"] as const))];
   }
   const out: LocalAction[] = ["edit"];
-  if (s.mine && s.shared) out.push("reshare", "unshare");
+  // Updating the shared copy uploads the enabled skill; a disabled one can
+  // still be unshared.
+  if (s.mine && s.shared) out.push(...(s.enabled ? (["reshare", "unshare"] as const) : (["unshare"] as const)));
   else if (s.mine && s.enabled) out.push("share");
   out.push(s.enabled ? "disable" : "enable", "export", "delete");
   return out;
@@ -228,6 +230,7 @@ const TEXT = {
     delete: "削除",
     uninstall: "アンインストール",
     newSkill: "＋ 新しいスキル",
+    askUnshareOnDisable: "「{name}」はカタログに共有中です。カタログからも取り下げますか？\n（「いいえ」なら共有はそのままで、この PC でだけ無効になります）",
     export: "エクスポート",
     exportAll: "📤 マイスキルをすべてエクスポート",
     importFile: "📥 ファイルから読み込む",
@@ -319,6 +322,7 @@ const TEXT = {
     delete: "Delete",
     uninstall: "Uninstall",
     newSkill: "+ New skill",
+    askUnshareOnDisable: "\"{name}\" is shared in the catalog. Remove it from the catalog too?\n(No: it stays shared and is only disabled on this PC.)",
     export: "Export",
     exportAll: "📤 Export all my skills",
     importFile: "📥 Import from file",

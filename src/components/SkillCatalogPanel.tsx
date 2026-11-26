@@ -222,8 +222,20 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
     const question = confirmFor(a, s);
     if (question && !(await confirmDialog(question, lang))) return;
     if (a === "delete" && s.shared && (await run("unshare", [s.name])) === null) return;
+    // Disabling only affects this PC; a shared skill would stay in the
+    // catalog unless you say otherwise.
+    const alsoUnshare = a === "disable" && s.mine && s.shared && !noCatalog
+      && (await confirmDialog(T("askUnshareOnDisable", { name: s.name }), lang));
     const op = opForAction(a);
-    if (op) await mutate(op, s.name);
+    if (!op) return;
+    if (alsoUnshare) {
+      if ((await run(op, [s.name])) === null) return;
+      if ((await run("unshare", [s.name])) === null) { refresh(); return; }
+      await finish(op);
+      refresh();
+      return;
+    }
+    await mutate(op, s.name);
   };
 
   const saveDraft = async (draft: SkillDraft) => {

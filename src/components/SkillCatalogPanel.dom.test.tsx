@@ -539,3 +539,39 @@ describe("export / import files", () => {
     expect(opsSince(n)).toEqual([]);
   });
 });
+
+describe("disabling a shared skill", () => {
+  it("asks; yes -> disable, unshare, rebuild", async () => {
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openMine();
+    const n = calls.length;
+    answers = [true];
+    fireEvent.click(btnIn(card("my-shared"), "無効にする"));
+    await waitFor(() => expect(opsSince(n)).toEqual(["disable", "unshare", "rebuild", "local"]));
+    await idle();
+    // now disabled and unshared: no catalog buttons left on it
+    expect([...card("my-shared").querySelectorAll("button")].map((b) => b.textContent))
+      .toEqual(["編集", "有効にする", "エクスポート", "削除"]);
+  });
+
+  it("no -> only disabled here, still shared (unshare button stays)", async () => {
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openMine();
+    const n = calls.length;
+    answers = [false];
+    fireEvent.click(btnIn(card("my-shared"), "無効にする"));
+    await waitFor(() => expect(opsSince(n)).toEqual(["disable", "rebuild", "local"]));
+    await idle();
+    expect([...card("my-shared").querySelectorAll("button")].map((b) => b.textContent))
+      .toEqual(["編集", "共有を取り下げ", "有効にする", "エクスポート", "削除"]);
+  });
+
+  it("an unshared skill is disabled without asking", async () => {
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openMine();
+    const n = calls.length;
+    answers = [false]; // would block if asked
+    fireEvent.click(btnIn(card("my-skill"), "無効にする"));
+    await waitFor(() => expect(opsSince(n)).toEqual(["disable", "rebuild", "local"]));
+  });
+});

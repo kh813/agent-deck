@@ -29,8 +29,8 @@ describe("localActions", () => {
   });
   it("your shared skill: update the shared copy or unshare", () => {
     expect(m.localActions(loc({ shared: true }))).toEqual(["edit", "reshare", "unshare", "disable", "export", "delete"]);
-    // still shared while disabled: unsharing stays possible
-    expect(m.localActions(loc({ shared: true, enabled: false }))).toEqual(["edit", "reshare", "unshare", "enable", "export", "delete"]);
+    // still shared while disabled: unsharing stays possible (updating needs it enabled)
+    expect(m.localActions(loc({ shared: true, enabled: false }))).toEqual(["edit", "unshare", "enable", "export", "delete"]);
   });
   it("disabled unshared skill: no share", () => {
     expect(m.localActions(loc({ enabled: false }))).toEqual(["edit", "enable", "export", "delete"]);
