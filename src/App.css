@@ -340,9 +340,13 @@ body {
    platform, Skills on another). */
 .header-btn {
   box-sizing: border-box;
-  height: 38px;
-  padding-top: 0;
-  padding-bottom: 0;
+  /* Same height as the agent / working-folder chips beside them (33px),
+     so the whole header row lines up. 38px (rc12) made Skills / Web UI
+     grow instead of the red Stop shrinking, and the solid red still read
+     as taller next to the pale buttons. */
+  height: 33px;
+  padding: 0 14px;
+  font-size: 0.85rem;
   line-height: 1;
 }
 
