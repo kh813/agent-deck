@@ -196,20 +196,33 @@ def _fetch_latest_release() -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _newest_prerelease(releases: list) -> dict:
+    """The highest-versioned pre-release (drafts ignored).
+
+    2026-11-26, confirmed: GitHub's list is NOT newest-first by version --
+    it returned v0.2.8-rc9 above v0.2.8-rc10, so taking the first one kept
+    offering rc9 and package_release --test re-uploaded rc9. Compared with
+    parse_version (rc10 > rc9); publish time breaks ties / unparseable tags."""
+    candidates = [r for r in releases if r.get("prerelease") and not r.get("draft")]
+    if not candidates:
+        raise RuntimeError(f"No pre-release found among {_REPO}'s releases")
+
+    def key(r):
+        v = parse_version(r.get("tag_name", ""))
+        return (v is not None, v or (), r.get("published_at") or r.get("created_at") or "")
+    return max(candidates, key=key)
+
+
 def _fetch_latest_prerelease() -> dict:
     """Return the newest pre-release (a tag with a semver prerelease suffix,
     e.g. v0.0.22-rc1 -- see release.yml). GitHub's /releases/latest endpoint
-    excludes pre-releases by definition, so this walks the plain releases
-    list instead, which the API already returns newest-first."""
+    excludes pre-releases by definition, so this walks the releases list."""
     req = urllib.request.Request(
-        _API_RELEASES, headers={"Accept": "application/vnd.github+json"}
+        _API_RELEASES + "?per_page=100", headers={"Accept": "application/vnd.github+json"}
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         releases = json.loads(resp.read().decode("utf-8"))
-    for release in releases:
-        if release.get("prerelease"):
-            return release
-    raise RuntimeError(f"No pre-release found among {_REPO}'s releases")
+    return _newest_prerelease(releases)
 
 
 def _fetch_release(channel: str) -> dict:

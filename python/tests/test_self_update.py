@@ -1005,3 +1005,47 @@ class TestPythonPayloadInPlace:
             body = src[src.index(fn):]
             body = body[:body.index("\ndef ", 1)]
             assert body.index("_install_python_payload(staging)") < body.index("_atomic_swap(new_dest, dest)"), fn
+
+
+class TestNewestPrerelease:
+    """2026-11-26, confirmed: GitHub listed v0.2.8-rc9 above v0.2.8-rc10."""
+
+    def _r(self, tag, pre=True, published="2026-11-26T00:00:00Z", draft=False):
+        return {"tag_name": tag, "prerelease": pre, "published_at": published, "draft": draft}
+
+    def test_rc10_beats_rc9_whatever_the_list_order(self):
+        real_order = [self._r("v0.2.8-rc9"), self._r("v0.2.8-rc8"), self._r("v0.2.8-rc10"), self._r("v0.2.8-rc6")]
+        assert su._newest_prerelease(real_order)["tag_name"] == "v0.2.8-rc10"
+        assert su._newest_prerelease(list(reversed(real_order)))["tag_name"] == "v0.2.8-rc10"
+
+    def test_next_version_beats_rc_of_previous(self):
+        rs = [self._r("v0.2.8-rc10"), self._r("v0.3.0-rc1"), self._r("v0.2.9-rc2")]
+        assert su._newest_prerelease(rs)["tag_name"] == "v0.3.0-rc1"
+
+    def test_stable_and_drafts_ignored(self):
+        rs = [self._r("v0.2.8", pre=False), self._r("v0.2.9-rc1", draft=True), self._r("v0.2.8-rc3")]
+        assert su._newest_prerelease(rs)["tag_name"] == "v0.2.8-rc3"
+
+    def test_unparseable_tags_lose_to_versions_and_tie_on_time(self):
+        rs = [self._r("nightly", published="2026-12-01T00:00:00Z"), self._r("v0.1.0-rc1", published="2026-01-01T00:00:00Z")]
+        assert su._newest_prerelease(rs)["tag_name"] == "v0.1.0-rc1"
+        rs = [self._r("a-test", published="2026-01-01T00:00:00Z"), self._r("b-test", published="2026-02-01T00:00:00Z")]
+        assert su._newest_prerelease(rs)["tag_name"] == "b-test"
+
+    def test_none(self):
+        with pytest.raises(RuntimeError):
+            su._newest_prerelease([self._r("v1.0.0", pre=False)])
+
+    def test_fetch_uses_it_and_asks_for_a_full_page(self, monkeypatch):
+        seen = {}
+
+        def fake(req, *a, **k):
+            seen["url"] = req.full_url
+            return _fake_urlopen([self._r("v0.2.8-rc9"), self._r("v0.2.8-rc10")])
+        monkeypatch.setattr(su.urllib.request, "urlopen", fake)
+        assert su._fetch_latest_prerelease()["tag_name"] == "v0.2.8-rc10"
+        assert seen["url"].endswith("?per_page=100")
+
+    def test_package_release_resolves_through_it(self):
+        src = (Path(__file__).resolve().parents[1] / "scripts" / "tools" / "package_release.py").read_text(encoding="utf-8")
+        assert "su._fetch_release(channel)" in src
