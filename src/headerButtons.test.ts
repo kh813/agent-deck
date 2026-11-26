@@ -17,9 +17,10 @@ describe("header buttons share one height", () => {
   });
   it(".header-btn fixes the height (not just padding)", () => {
     const rule = css.slice(css.indexOf(".header-btn {"), css.indexOf("}", css.indexOf(".header-btn {")));
-    // the agent / working-folder chips beside them measure 33px (WebKit and
-    // Chromium, real header rendered with Tauri mocked); buttons match them
-    expect(rule).toMatch(/height: 33px;/);
+    // buttons and the agent / working-folder chips share one height
+    expect(rule).toContain("height: var(--header-control-height);");
+    expect(css).toMatch(/\.app-header \{\s*--header-control-height: \d+px;/);
+    expect(css).toMatch(/\.app-header \.cwd-display \{[^}]*height: var\(--header-control-height\);/);
     expect(rule).toContain("box-sizing: border-box");
     expect(rule).toContain("line-height: 1");
   });

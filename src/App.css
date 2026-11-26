@@ -338,13 +338,23 @@ body {
    box -- Japanese text and emoji have different default line heights per
    font and OS, so the buttons came out 1-3px apart (Stop taller on one
    platform, Skills on another). */
+/* One height for everything in the header row -- the agent / working-folder
+   chips and the Stop / Start / Skills / Web UI buttons -- so the buttons
+   are exactly as tall as the chips' borders whatever fonts are installed
+   (a chip's natural height follows its font: Fira Code / Outfit). 38px
+   (rc12) made Skills / Web UI grow instead of the red Stop shrinking. */
+.app-header {
+  --header-control-height: 33px;
+}
+
+.app-header .cwd-display {
+  box-sizing: border-box;
+  height: var(--header-control-height);
+}
+
 .header-btn {
   box-sizing: border-box;
-  /* Same height as the agent / working-folder chips beside them (33px),
-     so the whole header row lines up. 38px (rc12) made Skills / Web UI
-     grow instead of the red Stop shrinking, and the solid red still read
-     as taller next to the pale buttons. */
-  height: 33px;
+  height: var(--header-control-height);
   padding: 0 14px;
   font-size: 0.85rem;
   line-height: 1;
