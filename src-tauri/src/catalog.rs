@@ -64,6 +64,21 @@ pub(crate) fn validate_request(op: &str, args: &[String], input: Option<&str>) -
     Ok(())
 }
 
+/// The app and its python/ folder are from different releases (2026-11-26,
+/// Windows: an update swapped the exe but couldn't refresh python/), so the
+/// script has no `api` entry point -- running it would just print its help.
+/// Say what happened and how to fix it instead.
+pub(crate) fn outdated_script_error(script: &std::path::Path) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(script).ok()?; // missing/unreadable: let the run report it
+    if text.contains(API_MARKER.trim_end()) {
+        return None;
+    }
+    Some(error_value(
+        "script_outdated",
+        format!("{}", script.display()),
+    ))
+}
+
 fn error_value(code: &str, message: String) -> serde_json::Value {
     serde_json::json!({ "ok": false, "error": { "code": code, "message": message }, "log": "" })
 }
@@ -78,6 +93,9 @@ pub fn run_catalog_api_with_input(op: &str, args: &[String], input: Option<&str>
     }
     let root = get_default_cwd();
     let script = root.join("python").join("scripts").join("setup").join("skills_catalog.py");
+    if let Some(e) = outdated_script_error(&script) {
+        return e;
+    }
     let mut cmd = Command::new(python_bin());
     cmd.arg(&script).arg("api").arg(op).args(args);
     cmd.current_dir(&root);
@@ -216,6 +234,30 @@ mod tests {
             let body = &py[start..start + 400.min(py.len() - start)];
             assert!(body.contains("_read_stdin_json()"), "{op} must read stdin");
         }
+    }
+
+    #[test]
+    fn detects_a_script_from_an_older_release() {
+        let dir = std::env::temp_dir().join(format!("agent-deck-catalog-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("old.py");
+        std::fs::write(&old, "\"\"\"...every install picks them up on next launch.\"\"\"\nprint(__doc__)\n").unwrap();
+        let v = outdated_script_error(&old).expect("old script");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "script_outdated");
+        assert!(v["error"]["message"].as_str().unwrap().ends_with("old.py"));
+        let new = dir.join("new.py");
+        std::fs::write(&new, "API_MARKER = \"@@AGENT_DECK_JSON@@ \"\n").unwrap();
+        assert!(outdated_script_error(&new).is_none());
+        assert!(outdated_script_error(&dir.join("missing.py")).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_real_script_is_current() {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../python/scripts/setup/skills_catalog.py");
+        assert!(outdated_script_error(&script).is_none());
     }
 
     #[test]

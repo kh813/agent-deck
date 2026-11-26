@@ -248,3 +248,13 @@ describe("scale: 100 authors, 2000 skills", () => {
     expect(performance.now() - t).toBeLessThan(500); // ~a few ms in practice
   });
 });
+
+describe("script_outdated", () => {
+  it("explains the half-finished update and how to fix it, with the path", () => {
+    const ja = m.describeError("ja", { code: "script_outdated", message: "C:\\agent-deck\\python\\scripts\\setup\\skills_catalog.py" });
+    expect(ja).toContain("バージョンが合っていません");
+    expect(ja).toContain("Chrome");
+    expect(ja).toContain("skills_catalog.py");
+    expect(m.describeError("en", { code: "script_outdated", message: "/x/skills_catalog.py" })).toContain("update");
+  });
+});

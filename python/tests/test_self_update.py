@@ -899,3 +899,109 @@ class TestDriveVersions:
                            capture_output=True, text=True, encoding="utf-8", timeout=60)
         out = json.loads(r.stdout.strip().splitlines()[-1])
         assert out["update_available"] is False and out["installed_tag"] == "0.2.8-rc4"
+
+
+class TestPythonPayloadInPlace:
+    """2026-11-26, confirmed on Windows: an update swapped the exe, then
+    failed to refresh python/ (a preserved folder with an open file couldn't
+    be moved), leaving the new app over v0.2.7 scripts -- the skill screen
+    showed "失敗しました: an organization distributes its own skills ...".
+    python/ is now refreshed in place and BEFORE the app swap."""
+
+    def _staging(self, tmp_path, files):
+        st = tmp_path / "staging"
+        for rel, text in files.items():
+            p = st / "python" / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding="utf-8")
+        return st
+
+    def test_overwrites_adds_removes_and_keeps_user_data(self, project_root, tmp_path):
+        py = project_root / "python"
+        for rel, text in {
+            "scripts/setup/skills_catalog.py": "old",
+            "scripts/setup/removed_upstream.py": "stale",
+            "skills/gone-skill/SKILL.md": "stale",
+            "skills-personal/mine/SKILL.md": "keep",
+            "skills-catalog/org/SKILL.md": "keep",
+            "scripts/automation/ChromeUserData/Default/Cookies": "keep",
+            "scripts/automation/logs/run.log": "keep",
+        }.items():
+            (py / rel).parent.mkdir(parents=True, exist_ok=True)
+            (py / rel).write_text(text, encoding="utf-8")
+        st = self._staging(tmp_path, {
+            "scripts/setup/skills_catalog.py": "new",
+            "scripts/setup/added.py": "new",
+            "skills/translator/SKILL.md": "new",
+        })
+        su._install_python_payload(st)
+        r = lambda rel: (py / rel).read_text(encoding="utf-8")
+        assert r("scripts/setup/skills_catalog.py") == "new"
+        assert r("scripts/setup/added.py") == "new"
+        assert r("skills/translator/SKILL.md") == "new"
+        assert not (py / "scripts/setup/removed_upstream.py").exists()
+        assert not (py / "skills/gone-skill").exists(), "emptied folders go too"
+        for rel in ("skills-personal/mine/SKILL.md", "skills-catalog/org/SKILL.md",
+                    "scripts/automation/ChromeUserData/Default/Cookies", "scripts/automation/logs/run.log"):
+            assert r(rel) == "keep", rel
+
+    def test_never_moves_or_opens_preserved_folders(self, project_root, tmp_path, monkeypatch):
+        """The Windows failure: moving a folder with an open file inside."""
+        py = project_root / "python"
+        (py / "scripts/automation/ChromeUserData").mkdir(parents=True)
+        (py / "scripts/automation/ChromeUserData/Lock").write_text("in use")
+        st = self._staging(tmp_path, {"scripts/setup/x.py": "new"})
+        real_move, real_rmtree = su.shutil.move, su.shutil.rmtree
+
+        def guard(path, *a, **k):
+            assert "ChromeUserData" not in str(path), f"touched {path}"
+        monkeypatch.setattr(su.shutil, "move", lambda s, d, *a, **k: (guard(s), real_move(s, d))[1])
+        monkeypatch.setattr(su.shutil, "rmtree", lambda p, *a, **k: (guard(p), real_rmtree(p, *a, **k))[1])
+        su._install_python_payload(st)
+        assert (py / "scripts/automation/ChromeUserData/Lock").read_text() == "in use"
+
+    def test_a_file_that_cant_be_written_raises_with_a_hint(self, project_root, tmp_path, monkeypatch):
+        st = self._staging(tmp_path, {"scripts/setup/a.py": "new", "scripts/setup/locked.py": "new"})
+        real_copy = su.shutil.copy2
+
+        def copy(src, dst, *a, **k):
+            if str(dst).endswith("locked.py"):
+                raise PermissionError(13, "Access is denied")
+            return real_copy(src, dst, *a, **k)
+        monkeypatch.setattr(su.shutil, "copy2", copy)
+        with pytest.raises(RuntimeError) as e:
+            su._install_python_payload(st)
+        assert "locked.py" in str(e.value) and "Chrome" in str(e.value)
+
+    @pytest.mark.parametrize("channel", ["github", "drive"])
+    def test_python_failure_leaves_the_app_unswapped(self, project_root, monkeypatch, channel):
+        """Consistent install on failure: the old app with the old python/."""
+        monkeypatch.setattr(su.sys, "platform", "darwin")
+        monkeypatch.setattr(su, "_verify_mac_signature", lambda *a, **k: None)
+        app = project_root / "agent-deck.app" / "Contents" / "MacOS"
+        app.mkdir(parents=True)
+        (app / "agent-deck").write_text("OLD APP")
+
+        def boom(staging):
+            raise RuntimeError("python/ busy")
+        monkeypatch.setattr(su, "_install_python_payload", boom)
+        if channel == "github":
+            monkeypatch.setattr(su, "_fetch_latest_release", lambda: _fake_release("v0.2.0"))
+            monkeypatch.setattr(su.subprocess, "run", lambda cmd, *a, **kw: (
+                _make_org_rebranded_zip(Path(cmd[-1])) if cmd[0] == "curl" else None,
+                subprocess.CompletedProcess(cmd, 0))[1])
+            with pytest.raises(RuntimeError, match="busy"):
+                su.apply()
+        else:
+            monkeypatch.setattr(su, "_get_drive_service", lambda **kw: _FakeDriveService("2026-11-26T00:00:00Z"))
+            monkeypatch.setattr(su, "_download_drive_media", lambda svc, fid, path: _make_org_rebranded_zip(path))
+            with pytest.raises(RuntimeError, match="busy"):
+                su.apply_drive("file-1")
+        assert (app / "agent-deck").read_text() == "OLD APP"
+
+    def test_order_in_source(self):
+        src = (Path(su.__file__)).read_text(encoding="utf-8")
+        for fn in ("def apply(", "def apply_drive("):
+            body = src[src.index(fn):]
+            body = body[:body.index("\ndef ", 1)]
+            assert body.index("_install_python_payload(staging)") < body.index("_atomic_swap(new_dest, dest)"), fn

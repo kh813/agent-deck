@@ -324,6 +324,7 @@ const TEXT = {
     done: "完了しました。新しいセッションから使えます（実行中のセッションは「停止」→「セッション開始」で反映）。",
     confirmUnshare: "「{name}」をカタログから取り下げますか？（自分の PC のスキルは残ります）",
     confirmShare: "「{name}」をカタログに共有しますか？組織のメンバーが閲覧・インポートできるようになります。",
+    err_script_outdated: "アプリ本体とスキル管理用のスクリプトのバージョンが合っていません（前回の更新が途中で止まった可能性があります）。agent-deck から起動した Chrome などを閉じてから、「Settings」メニューの更新をもう一度実行するか、最新の ZIP をこのフォルダに上書き展開してください。\n古いスクリプト: {message}",
     err_no_catalog: "この環境では共有スキルカタログを使えません（組織向けの config.toml がありません）。",
     err_timeout: "時間内に完了しませんでした。ネットワークや Google のログインを確認してください。",
     err_python_missing: "Python を起動できませんでした。セットアップを確認してください。",
@@ -419,6 +420,7 @@ const TEXT = {
     done: "Done. Available in new sessions (Stop, then Start Session to use it in the current one).",
     confirmUnshare: "Remove \"{name}\" from the catalog? (Your local copy stays.)",
     confirmShare: "Share \"{name}\" to the catalog? Members of your organization will be able to see and import it.",
+    err_script_outdated: "The app and its skill-management script are from different versions (the last update may have stopped halfway). Close Chrome and anything else started from agent-deck, then run the update from the Settings menu again, or extract the latest ZIP over this folder.\nOld script: {message}",
     err_no_catalog: "The shared skill catalog isn't available here (no organization config.toml).",
     err_timeout: "Timed out. Check the network or the Google sign-in.",
     err_python_missing: "Couldn't run Python. Check the setup.",
@@ -444,6 +446,8 @@ export function describeError(lang: Lang, e: ApiError): string {
     case "python_missing":
     case "not_found":
       return catalogText(lang, `err_${e.code}` as CatalogTextKey);
+    case "script_outdated":
+      return catalogText(lang, "err_script_outdated", { message: e.message });
     case "ambiguous":
       return catalogText(lang, "err_ambiguous", { candidates: (e.candidates ?? []).join(", ") });
     case "exists":

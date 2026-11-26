@@ -253,34 +253,89 @@ _PRESERVED_PYTHON_DIRS = (
 )
 
 
+def _is_preserved(rel: Path) -> bool:
+    """rel (relative to python/) is, or is inside, a preserved path."""
+    parts = rel.parts
+    for keep in _PRESERVED_PYTHON_DIRS:
+        k = tuple(keep.split("/"))
+        if parts[:len(k)] == k:
+            return True
+    return False
+
+
 def _install_python_payload(staging: Path) -> None:
-    """Refresh <root>/python/ from the zip, preserving the per-install data
-    listed in _PRESERVED_PYTHON_DIRS (skill roots, saved browser login,
-    scheduled-task sidecars and logs)."""
+    """Refresh <root>/python/ from the zip IN PLACE, never touching the
+    per-install data in _PRESERVED_PYTHON_DIRS.
+
+    2026-11-26, confirmed on Windows: this used to move the preserved
+    folders aside, delete python/ and copy the new tree in. Moving a folder
+    with an open file inside (Chrome's profile in ChromeUserData while
+    Chrome runs, an open log) fails on Windows, and since the exe had
+    already been swapped, the install was left as a new app over the old
+    python/ (the skill screen then ran a v0.2.7 script: "失敗しました: an
+    organization distributes its own skills ..."). Now: every file from
+    the zip is copied over its old copy; files the release no longer has
+    are removed afterwards; preserved paths are never moved or opened.
+    Raises if any file of the new release couldn't be written -- apply()
+    does this BEFORE swapping the app, so a failure leaves a consistent
+    (old) install."""
     new_python = staging / "python"
     if not new_python.exists():
         return
 
     dest_python = PROJECT_ROOT / "python"
-    backups = []
-    for keep in _PRESERVED_PYTHON_DIRS:
-        existing = dest_python / keep
-        backup = staging / f"_preserve_{keep.replace('/', '__')}"
-        if existing.exists() and not existing.is_symlink():
-            shutil.move(str(existing), str(backup))
-            backups.append((keep, backup))
-
     if dest_python.is_symlink():
         dest_python.unlink()
-    elif dest_python.exists():
-        shutil.rmtree(dest_python)
-    shutil.copytree(new_python, dest_python)
-    _normalize_sh_to_lf(dest_python)
+    dest_python.mkdir(parents=True, exist_ok=True)
 
-    for keep, backup in backups:
-        shutil.rmtree(dest_python / keep, ignore_errors=True)
-        (dest_python / keep).parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(backup), str(dest_python / keep))
+    failed = []
+    shipped = set()
+    for src in sorted(new_python.rglob("*")):
+        rel = src.relative_to(new_python)
+        if _is_preserved(rel):
+            continue  # a release never ships these; never overwrite user data
+        shipped.add(rel)
+        dst = dest_python / rel
+        try:
+            if src.is_dir():
+                if dst.exists() and not dst.is_dir():
+                    dst.unlink()
+                dst.mkdir(parents=True, exist_ok=True)
+            else:
+                if dst.is_dir() and not dst.is_symlink():
+                    shutil.rmtree(dst)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+        except OSError as e:
+            failed.append(f"{rel.as_posix()}: {e}")
+    if failed:
+        raise RuntimeError(
+            "python/ を更新できませんでした（ファイルが使用中の可能性があります）。"
+            "agent-deck から起動した Chrome やスキルを閉じてから、もう一度更新してください。 / "
+            "Couldn't update python/ (files may be in use). Close Chrome and any running "
+            "skills started from agent-deck, then update again.\n  " + "\n  ".join(failed[:10]))
+
+    # Remove what the new release no longer ships (an old script left
+    # behind could still be picked up). Best effort: a leftover file that
+    # can't be removed right now is harmless.
+    existing = []
+    for root, dirs, files in os.walk(dest_python):
+        base = Path(root).relative_to(dest_python)
+        # don't even walk into preserved folders (a Chrome profile is huge)
+        dirs[:] = [d for d in dirs if not _is_preserved(base / d)]
+        existing += [dest_python / base / n for n in dirs + files]
+    for old in sorted(existing, key=lambda p: len(p.parts), reverse=True):
+        rel = old.relative_to(dest_python)
+        if rel in shipped or _is_preserved(rel):
+            continue
+        try:
+            if old.is_symlink() or old.is_file():
+                old.unlink()
+            elif old.is_dir() and not any(old.iterdir()):
+                old.rmdir()  # deepest first, so emptied folders go too
+        except OSError:
+            pass
+    _normalize_sh_to_lf(dest_python)
 
 
 def _verify_mac_signature(new_dest: Path, label: str) -> None:
@@ -406,8 +461,10 @@ def apply(channel: str = "prod", current: str = "") -> None:
         if sys.platform != "win32":
             _verify_mac_signature(new_dest, f"the downloaded {latest_tag} build")
 
-        _atomic_swap(new_dest, dest)
+        # python/ first: it's what can fail on Windows (files in use), and
+        # failing before the app is swapped leaves a consistent install.
         _install_python_payload(staging)
+        _atomic_swap(new_dest, dest)
 
     _marker_path(dest_name).write_text(latest_tag)
     print(f"  {latest_tag} installed to {dest}.")
@@ -601,8 +658,10 @@ def apply_drive(file_id: str, current: str = "") -> None:
         if sys.platform != "win32":
             _verify_mac_signature(new_dest, "the org build downloaded from Drive")
 
-        _atomic_swap(new_dest, dest)
+        # python/ first: it's what can fail on Windows (files in use), and
+        # failing before the app is swapped leaves a consistent install.
         _install_python_payload(staging)
+        _atomic_swap(new_dest, dest)
 
         # The org's config-bundled ZIP is the one place config.toml itself
         # ships -- refresh the local copy so org-wide config changes (Drive
