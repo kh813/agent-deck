@@ -147,7 +147,8 @@ class TestInstall:
         assert set(data) == {"mine", agent_setup.GUARD_HOOK_NAME}
         entry = data[agent_setup.GUARD_HOOK_NAME]["PreToolUse"][0]
         assert entry["matcher"] == g.AGY_MATCHER
-        assert "agent_deck_guard.py" in entry["hooks"][0]["command"] and entry["hooks"][0]["command"].endswith("--engine agy")
+        cmd = entry["hooks"][0]["command"]
+        assert "agent_deck_guard.py" in cmd and cmd.rstrip('"').endswith("--engine agy")  # Windows: wrapped for cmd /c
 
     def test_invalid_hooks_file_is_left_alone(self, tmp_path):
         import setup as agent_setup
