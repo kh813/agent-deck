@@ -267,12 +267,14 @@ describe("create", () => {
     await openMine();
     fireEvent.click(screen.getByRole("button", { name: "＋ 新しいスキル" }));
     const body = screen.getByLabelText("手順（AI への指示）") as HTMLTextAreaElement;
-    expect(body.value).toContain("## やること"); // template
+    expect(body.value).toContain("## 手順"); // template
+    expect(body.value.startsWith("# スキル名\n")).toBe(true);
     const n = calls.length;
     fireEvent.click(screen.getByRole("button", { name: "作成" }));
     expect(screen.getByRole("alert").textContent).toContain("スキル名は");
     fireEvent.change(screen.getByLabelText("スキル名"), { target: { value: " Weekly-Report " } });
     expect((screen.getByLabelText("スキル名") as HTMLInputElement).value).toBe("weekly-report");
+    expect(body.value.startsWith("# weekly-report\n")).toBe(true); // heading follows the name
     fireEvent.click(screen.getByRole("button", { name: "作成" }));
     expect(screen.getByRole("alert").textContent).toContain("説明を入力");
     expect(calls.length).toBe(n); // nothing sent while invalid

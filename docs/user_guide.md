@@ -400,6 +400,8 @@ Click "📚 Skills" at the top right to open the Skill Catalog screen, where you
   Find and add shared skills. The list filters as you type (name, author and description; several keywords must all match; width and case don't matter). Filter by author from the menu or by clicking an author's name. "Add" installs a skill ("Update to latest" if already added). "Details" shows the full description.
 - **マイスキル / My Skills**: 自分のスキル（作ったもの、ファイルから読み込んだもの）。
   Your own skills (ones you made or imported from a file).
+  - 「＋ 新しいスキル」の画面では、「スキル名」と「説明」がそのまま SKILL.md 冒頭の `---` で囲まれた部分（name / description）になります。「手順」欄には、概要・目的／使うタイミング／手順／ルール・注意点／出力の形式・例 の見出し入りのひな形が入っているので、書き換えて使ってください（見出しの `# スキル名` は入力したスキル名に合わせて変わります）。
+    In "+ New skill", the Name and Description fields become the `---` header (name / description) of SKILL.md. The Instructions field starts with a template (Purpose / When to use / Steps / Rules / Output format & examples) to fill in; its `# heading` follows the name you type.
   - 「＋ 新しいスキル」で作成、「編集」で説明と手順を変更、「削除」で PC から削除。「カタログに共有」「カタログの版を更新」（編集後にカタログ側も最新にする）「共有を取り下げ」。共有中のスキルを保存すると、カタログの版も更新するか確認されます。共有中のスキルを「無効にする」と、カタログからも取り下げるか確認されます（「いいえ」ならこの PC でだけ無効になり、カタログには残ります）。
     "+ New skill" creates one, "Edit" changes its description and instructions, "Delete" removes it from this PC. "Share to catalog", "Update shared copy" (after editing) and "Unshare". Saving a shared skill asks whether to update the catalog's copy too; disabling a shared skill asks whether to remove it from the catalog as well (No: it's only disabled on this PC and stays in the catalog).
   - 「🤖 AI と相談して作る」「🤖 AI と相談して改善」（編集画面）は、実行中のセッションに `my-skills create` / `my-skills update <名前>` を送り、AI と対話しながら作成・改善します。

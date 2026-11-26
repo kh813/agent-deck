@@ -138,11 +138,67 @@ export function draftProblem(d: SkillDraft, isNew: boolean): DraftProblem {
   return null;
 }
 
-/** A starting point for a new skill's instructions. */
-export function skillTemplate(lang: Lang): string {
+/**
+ * A starting point for a new skill's instructions (the body below the
+ * frontmatter -- name/description come from the form's own fields and are
+ * written as the `---` header on save). Sections follow the common SKILL.md
+ * layout: purpose, when to use, steps, rules, output/examples. The heading
+ * carries the skill's name (see retitleTemplate).
+ */
+export function skillTemplate(lang: Lang, name = ""): string {
+  const title = name.trim() || (lang === "ja" ? "スキル名" : "Skill name");
   return lang === "ja"
-    ? "# スキル名\n\n## やること\n\n1. \n2. \n3. \n\n## 注意点\n\n- \n"
-    : "# Skill name\n\n## Steps\n\n1. \n2. \n3. \n\n## Notes\n\n- \n";
+    ? `# ${title}
+
+## 概要・目的
+このスキルのゴールと、どんなときに使うかを書きます。
+
+## 使うタイミング
+- 例: ユーザーが「〇〇して」と頼んだとき
+- 例: 〇〇の形式で出力を求められたとき
+
+## 手順
+1. **確認**: 必要な情報がそろっているか確認する（足りなければユーザーに質問ツールで聞く）。
+2. **作成**: 手順に沿って作業する。
+3. **チェック**: 抜けや誤りがないか見直してから結果を伝える。
+
+## ルール・注意点
+- 推測で補わず、不明な点はユーザーに確認する。
+- ファイルを上書き・削除する前は必ず確認する。
+
+## 出力の形式・例
+期待する出力の形や、良い例・悪い例を書きます。
+`
+    : `# ${title}
+
+## Purpose
+What this skill achieves and when it should be used.
+
+## When to use
+- e.g. when the user asks to "..."
+- e.g. when output in a particular format is requested
+
+## Steps
+1. **Check**: make sure the needed information is there (ask the user with the question tool if not).
+2. **Do**: carry out the work step by step.
+3. **Review**: check for gaps or mistakes before reporting the result.
+
+## Rules
+- Don't fill gaps with guesses; ask the user.
+- Always confirm before overwriting or deleting files.
+
+## Output format / examples
+The expected shape of the output, with good and bad examples.
+`;
+}
+
+/**
+ * Keep the template's heading in step with the name being typed -- but only
+ * while the body is still the untouched template for the previous name
+ * (never rewrite what the user has written).
+ */
+export function retitleTemplate(body: string, lang: Lang, prevName: string, nextName: string): string {
+  return body === skillTemplate(lang, prevName) ? skillTemplate(lang, nextName) : body;
 }
 
 /** What "Create with AI" / "Improve with AI" type into the session. */

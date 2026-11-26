@@ -11,6 +11,7 @@ import {
   catalogText,
   confirmDialog,
   draftProblem,
+  retitleTemplate,
   skillTemplate,
 } from "../lib/skillCatalog";
 
@@ -46,7 +47,13 @@ export function SkillEditor({ lang, mode, doc, busy, onSave, onCancel, onAskAgen
   const [problem, setProblem] = useState<DraftProblem>(null);
   const readOnly = mode === "view";
   const set = (k: keyof SkillDraft) => (e: { target: { value: string } }) => {
-    setDraft({ ...draft, [k]: k === "name" ? e.target.value.trim().toLowerCase() : e.target.value });
+    if (k === "name") {
+      const name = e.target.value.trim().toLowerCase();
+      // the template's "# <name>" heading follows the name while untouched
+      setDraft({ ...draft, name, body: mode === "new" ? retitleTemplate(draft.body, lang, draft.name, name) : draft.body });
+    } else {
+      setDraft({ ...draft, [k]: e.target.value });
+    }
     setProblem(null);
   };
 

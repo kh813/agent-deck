@@ -84,8 +84,25 @@ describe("drafts", () => {
     expect(py).toContain(`SKILL_NAME_RE = re.compile(r"${m.SKILL_NAME_RE.source}")`);
   });
   it("template and agent prompts", () => {
-    expect(m.skillTemplate("ja")).toContain("## やること");
-    expect(m.skillTemplate("en")).toContain("## Steps");
+    for (const h of ["# スキル名", "## 概要・目的", "## 使うタイミング", "## 手順", "## ルール・注意点", "## 出力の形式・例"]) {
+      expect(m.skillTemplate("ja")).toContain(h);
+    }
+    for (const h of ["# Skill name", "## Purpose", "## When to use", "## Steps", "## Rules", "## Output format / examples"]) {
+      expect(m.skillTemplate("en")).toContain(h);
+    }
+    expect(m.skillTemplate("ja", "weekly-report").startsWith("# weekly-report\n")).toBe(true);
+    // the frontmatter is NOT in the body: the form's name/description become it on save
+    expect(m.skillTemplate("ja").startsWith("---")).toBe(false);
+    // engine-neutral wording (AGENTS.md maps "question tool" per engine)
+    expect(m.skillTemplate("ja")).toContain("質問ツール");
+  });
+  it("heading follows the typed name only while the template is untouched", () => {
+    const t0 = m.skillTemplate("ja");
+    const t1 = m.retitleTemplate(t0, "ja", "", "weekly");
+    expect(t1.startsWith("# weekly\n")).toBe(true);
+    expect(m.retitleTemplate(t1, "ja", "weekly", "weekly-report").startsWith("# weekly-report\n")).toBe(true);
+    const edited = t1 + "追記";
+    expect(m.retitleTemplate(edited, "ja", "weekly", "other")).toBe(edited);
     expect(m.agentPrompt("create")).toBe("my-skills create");
     expect(m.agentPrompt("update", "weekly-report")).toBe("my-skills update weekly-report");
   });
