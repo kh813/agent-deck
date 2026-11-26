@@ -140,14 +140,32 @@ pub fn get_app_config(cwd: Option<String>) -> AppConfig {
         }
     }
 
-    // Return default fallback
-    AppConfig::default()
+    // No agent_config.json anywhere: use the one this build ships (all
+    // engines), not the agy-only built-in default. 2026-11-26, confirmed on
+    // a Mac install whose root agent_config.json had gone missing: only
+    // Antigravity was offered although Claude Code was installed.
+    shipped_config()
+}
+
+/// The agent_config.json shipped with (and embedded in) this build.
+pub(crate) fn shipped_config() -> AppConfig {
+    serde_json::from_str::<AppConfig>(include_str!("../../agent_config.json"))
+        .map(resolve_pre_launch_override)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn shipped_config_offers_every_engine() {
+        let c = shipped_config();
+        let ids: Vec<&str> = c.engines.iter().map(|e| e.id.as_str()).collect();
+        assert!(ids.contains(&"agy") && ids.contains(&"claude"), "{ids:?}");
+        assert!(c.pre_launch_command.is_some(), "per-OS preflight resolved");
+    }
 
     #[test]
     fn test_get_app_config_cwd_resolution() {

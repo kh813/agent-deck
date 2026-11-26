@@ -36,10 +36,14 @@ const SHIPPED: &[Shipped] = &[
     Shipped { rel: "preflight.bat", bytes: include_bytes!("../../preflight.bat"), windows_only: Some(true) },
 ];
 
-/// Only touch something that looks like an agent-deck install.
+/// Only touch something that looks like an agent-deck install. Judged by
+/// python/ only -- NOT by agent_config.json, one of the very files this
+/// restores: 2026-11-26, a Mac install whose agent_config.json had gone
+/// missing never got it (or anything else here) back, and offered only
+/// Antigravity.
 fn is_install_root(root: &Path) -> bool {
-    root.join("agent_config.json").is_file()
-        && root.join("python").join("scripts").join("setup").join("self_update.py").is_file()
+    let setup = root.join("python").join("scripts").join("setup");
+    setup.join("self_update.py").is_file() && setup.join("setup.py").is_file()
 }
 
 fn applies_here(f: &Shipped, is_windows: bool) -> bool {
@@ -108,9 +112,22 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("python/scripts/setup")).unwrap();
         fs::write(dir.join("python/scripts/setup/self_update.py"), "").unwrap();
+        fs::write(dir.join("python/scripts/setup/setup.py"), "").unwrap();
         fs::write(dir.join("agent_config.json"), "{\"old\": true}").unwrap();
         fs::write(dir.join("preflight.sh"), "old").unwrap();
         dir
+    }
+
+    #[test]
+    fn restores_a_missing_agent_config_json() {
+        // The 2026-11-26 Mac install: agent_config.json gone -> only agy offered.
+        let root = install("missing-config");
+        fs::remove_file(root.join("agent_config.json")).unwrap();
+        let written = sync_root_files_for(&root, false);
+        assert!(written.contains(&"agent_config.json".to_string()), "{written:?}");
+        assert_eq!(fs::read(root.join("agent_config.json")).unwrap(), include_bytes!("../../agent_config.json"));
+        assert!(!root.join("agent_config.json.prev").exists(), "nothing to back up");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
