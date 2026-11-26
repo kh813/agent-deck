@@ -104,6 +104,7 @@ pub fn run() {
             catalog::catalog_api,
             menu::set_language_menu_state,
             pty::force_kill_pty,
+            pty::close_pty_session,
             web_server::start_web_server,
             web_server::stop_web_server,
             web_server::get_web_server_status,

@@ -30,25 +30,111 @@ pub(crate) fn colorfgbg(dark: bool) -> &'static str {
     if dark { "15;0" } else { "0;15" }
 }
 
+/// One terminal session (one tab, app_specs.md 5.7.4).
 #[derive(Clone)]
-pub struct PtyState {
+pub struct PtySession {
     pub session: Arc<Mutex<Option<Box<dyn portable_pty::MasterPty + Send>>>>,
     pub writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
     pub child: Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>,
-    pub broadcast_tx: Arc<tokio::sync::RwLock<Option<tokio::sync::broadcast::Sender<crate::web_server::WsServerEvent>>>>,
-    /// Bumped on every start_pty: lets a session's output task tell its own
-    /// child from a newer session's (see child-exit watching below).
+    /// Bumped on every start: lets a session's output task tell its own
+    /// child from a newer one's (see child-exit watching below).
     pub generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
-impl Default for PtyState {
+impl Default for PtySession {
     fn default() -> Self {
         Self {
             session: Arc::new(Mutex::new(None)),
             writer: Arc::new(Mutex::new(None)),
             child: Arc::new(Mutex::new(None)),
-            broadcast_tx: Arc::new(tokio::sync::RwLock::new(None)),
             generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+}
+
+/// The session a command without a session id means: the single-session UI
+/// (and the Web UI) keep working unchanged while tabs are being added.
+pub const DEFAULT_SESSION: &str = "main";
+
+/// Session ids come from the frontend: short, no path/control characters.
+pub(crate) fn valid_session_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Every session by id (tabs), plus the Web UI broadcast channel.
+#[derive(Clone)]
+pub struct PtyState {
+    pub sessions: Arc<std::sync::Mutex<std::collections::HashMap<String, PtySession>>>,
+    pub broadcast_tx: Arc<tokio::sync::RwLock<Option<tokio::sync::broadcast::Sender<crate::web_server::WsServerEvent>>>>,
+}
+
+impl Default for PtyState {
+    fn default() -> Self {
+        Self {
+            sessions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            broadcast_tx: Arc::new(tokio::sync::RwLock::new(None)),
+        }
+    }
+}
+
+impl PtyState {
+    /// The session with this id, created (empty) on first use.
+    pub fn session(&self, id: &str) -> PtySession {
+        let mut map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        map.entry(id.to_string()).or_default().clone()
+    }
+
+    /// Ids of every known session (started or not), sorted.
+    pub fn session_ids(&self) -> Vec<String> {
+        let map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ids: Vec<String> = map.keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
+    /// Forget a session (its tab was closed). Stop it first.
+    pub fn remove(&self, id: &str) {
+        let mut map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        map.remove(id);
+    }
+}
+
+fn resolve_session_id(session_id: Option<String>) -> Result<String, String> {
+    let id = session_id.unwrap_or_else(|| DEFAULT_SESSION.to_string());
+    if valid_session_id(&id) { Ok(id) } else { Err(format!("invalid session id: {id:?}")) }
+}
+
+#[derive(Clone, Serialize)]
+pub struct SessionOutputPayload {
+    pub session_id: String,
+    pub data: Vec<u8>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct SessionStatusPayload {
+    pub session_id: String,
+    pub status: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct SessionPromptPayload {
+    pub session_id: String,
+    pub prompt: PtyPromptPayload,
+}
+
+/// "terminated" / "error" for one session: the per-session event, plus the
+/// legacy single-session `pty-status` for the default session.
+fn emit_status<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    broadcast_tx: &Option<tokio::sync::broadcast::Sender<crate::web_server::WsServerEvent>>,
+    session_id: &str,
+    status: &str,
+) {
+    let _ = app.emit("session-status", SessionStatusPayload { session_id: session_id.to_string(), status: status.to_string() });
+    if session_id == DEFAULT_SESSION {
+        let _ = app.emit("pty-status", status);
+        if let Some(ref tx) = broadcast_tx {
+            let _ = tx.send(crate::web_server::WsServerEvent::Status(status.to_string()));
         }
     }
 }
@@ -509,12 +595,17 @@ enum PtyMessage {
 fn emit_output<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     broadcast_tx: &Option<tokio::sync::broadcast::Sender<crate::web_server::WsServerEvent>>,
+    session_id: &str,
     data: &[u8],
 ) {
     crate::quit_guard::note_output();
-    let _ = app.emit("pty-output", PtyOutputPayload { data: data.to_vec() });
-    if let Some(ref tx) = broadcast_tx {
-        let _ = tx.send(crate::web_server::WsServerEvent::Output(data.to_vec()));
+    let main = session_id == DEFAULT_SESSION;
+    let _ = app.emit("session-output", SessionOutputPayload { session_id: session_id.to_string(), data: data.to_vec() });
+    if main {
+        let _ = app.emit("pty-output", PtyOutputPayload { data: data.to_vec() });
+        if let Some(ref tx) = broadcast_tx {
+            let _ = tx.send(crate::web_server::WsServerEvent::Output(data.to_vec()));
+        }
     }
 
     // Lossy-decoding here is fine even if it mangles a
@@ -534,9 +625,12 @@ fn emit_output<R: tauri::Runtime>(
             }
         }
         
-        let _ = app.emit("pty-prompt", prompt.clone());
-        if let Some(ref tx) = broadcast_tx {
-            let _ = tx.send(crate::web_server::WsServerEvent::Prompt(prompt));
+        let _ = app.emit("session-prompt", SessionPromptPayload { session_id: session_id.to_string(), prompt: prompt.clone() });
+        if main {
+            let _ = app.emit("pty-prompt", prompt.clone());
+            if let Some(ref tx) = broadcast_tx {
+                let _ = tx.send(crate::web_server::WsServerEvent::Prompt(prompt));
+            }
         }
     }
 }
@@ -550,7 +644,23 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: &PtyState,
 ) -> Result<(), String> {
-    let _ = stop_pty_internal(state).await;
+    start_session_internal(DEFAULT_SESSION, command, args, cwd, rows, cols, app, state).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn start_session_internal<R: tauri::Runtime>(
+    session_id: &str,
+    command: String,
+    args: Vec<String>,
+    cwd: Option<String>,
+    rows: Option<u16>,
+    cols: Option<u16>,
+    app: tauri::AppHandle<R>,
+    state: &PtyState,
+) -> Result<(), String> {
+    let sess = state.session(session_id);
+    let session_id = session_id.to_string();
+    let _ = stop_session(&sess).await;
 
     // Default to a reasonable size if the frontend didn't report the
     // xterm.js viewport's actual fitted size yet. Whenever this doesn't
@@ -611,12 +721,12 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
-    *state.session.lock().await = Some(pair.master);
-    *state.writer.lock().await = Some(writer);
-    *state.child.lock().await = Some(child);
-    let my_generation = state.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-    let child_handle = state.child.clone();
-    let generation_handle = state.generation.clone();
+    *sess.session.lock().await = Some(pair.master);
+    *sess.writer.lock().await = Some(writer);
+    *sess.child.lock().await = Some(child);
+    let my_generation = sess.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let child_handle = sess.child.clone();
+    let generation_handle = sess.generation.clone();
 
     // TEMPORARY: raw PTY byte log for diagnosing rendering bugs in the
     // upstream CLI's own output. Truncated fresh on every session start.
@@ -678,29 +788,23 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
                     // Flush immediately if buffer size is large (>= 16 KB)
                     // or if the flush interval has elapsed.
                     if accumulated.len() >= 16384 || last_flush.elapsed() >= flush_interval {
-                        emit_output(&app_clone, &broadcast_tx, &accumulated);
+                        emit_output(&app_clone, &broadcast_tx, &session_id, &accumulated);
                         accumulated.clear();
                         last_flush = std::time::Instant::now();
                     }
                 }
                 Ok(Some(PtyMessage::Terminated)) => {
                     if !accumulated.is_empty() {
-                        emit_output(&app_clone, &broadcast_tx, &accumulated);
+                        emit_output(&app_clone, &broadcast_tx, &session_id, &accumulated);
                     }
-                    let _ = app_clone.emit("pty-status", "terminated");
-                    if let Some(ref tx) = broadcast_tx {
-                        let _ = tx.send(crate::web_server::WsServerEvent::Status("terminated".to_string()));
-                    }
+                    emit_status(&app_clone, &broadcast_tx, &session_id, "terminated");
                     break;
                 }
                 Ok(Some(PtyMessage::Error)) => {
                     if !accumulated.is_empty() {
-                        emit_output(&app_clone, &broadcast_tx, &accumulated);
+                        emit_output(&app_clone, &broadcast_tx, &session_id, &accumulated);
                     }
-                    let _ = app_clone.emit("pty-status", "error");
-                    if let Some(ref tx) = broadcast_tx {
-                        let _ = tx.send(crate::web_server::WsServerEvent::Status("error".to_string()));
-                    }
+                    emit_status(&app_clone, &broadcast_tx, &session_id, "error");
                     break;
                 }
                 Ok(None) => {
@@ -709,7 +813,7 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
                 Err(_) => {
                     // Timeout (5ms idle). Flush immediately to keep interactive inputs responsive.
                     if !accumulated.is_empty() {
-                        emit_output(&app_clone, &broadcast_tx, &accumulated);
+                        emit_output(&app_clone, &broadcast_tx, &session_id, &accumulated);
                         accumulated.clear();
                         last_flush = std::time::Instant::now();
                     }
@@ -725,10 +829,7 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
                             // the session as if the pipe had closed.
                             Some(t) if t.elapsed() >= CHILD_EXIT_GRACE => {
                                 if generation_handle.load(std::sync::atomic::Ordering::SeqCst) == my_generation {
-                                    let _ = app_clone.emit("pty-status", "terminated");
-                                    if let Some(ref tx) = broadcast_tx {
-                                        let _ = tx.send(crate::web_server::WsServerEvent::Status("terminated".to_string()));
-                                    }
+                                    emit_status(&app_clone, &broadcast_tx, &session_id, "terminated");
                                 }
                                 break;
                             }
@@ -775,22 +876,30 @@ pub(crate) fn child_exit_state(
 }
 
 pub async fn stop_pty_internal(state: &PtyState) -> Result<(), String> {
-    let mut child_guard = state.child.lock().await;
+    stop_session(&state.session(DEFAULT_SESSION)).await
+}
+
+pub async fn stop_session(sess: &PtySession) -> Result<(), String> {
+    let mut child_guard = sess.child.lock().await;
     if let Some(mut child) = child_guard.take() {
         let _ = child.kill();
     }
-    
-    let mut writer_guard = state.writer.lock().await;
+
+    let mut writer_guard = sess.writer.lock().await;
     *writer_guard = None;
 
-    let mut session_guard = state.session.lock().await;
+    let mut session_guard = sess.session.lock().await;
     *session_guard = None;
 
     Ok(())
 }
 
 pub async fn write_to_pty_internal(input: String, state: &PtyState) -> Result<(), String> {
-    let mut writer_guard = state.writer.lock().await;
+    write_to_session(input, &state.session(DEFAULT_SESSION)).await
+}
+
+pub async fn write_to_session(input: String, sess: &PtySession) -> Result<(), String> {
+    let mut writer_guard = sess.writer.lock().await;
     if let Some(ref mut writer) = *writer_guard {
         writer
             .write_all(input.as_bytes())
@@ -803,7 +912,11 @@ pub async fn write_to_pty_internal(input: String, state: &PtyState) -> Result<()
 }
 
 pub async fn resize_pty_internal(rows: u16, cols: u16, state: &PtyState) -> Result<(), String> {
-    let session_guard = state.session.lock().await;
+    resize_session(rows, cols, &state.session(DEFAULT_SESSION)).await
+}
+
+pub async fn resize_session(rows: u16, cols: u16, sess: &PtySession) -> Result<(), String> {
+    let session_guard = sess.session.lock().await;
     if let Some(ref master) = *session_guard {
         debug_log_marker(&format!("resize_pty rows={rows} cols={cols}"));
         master
@@ -821,43 +934,62 @@ pub async fn resize_pty_internal(rows: u16, cols: u16, state: &PtyState) -> Resu
 // --- Tauri Command Wrapper ---
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn start_pty(
     command: String,
     args: Vec<String>,
     cwd: Option<String>,
     rows: Option<u16>,
     cols: Option<u16>,
+    session_id: Option<String>,
     app: AppHandle,
     state: State<'_, PtyState>,
 ) -> Result<(), String> {
-    start_pty_internal(command, args, cwd, rows, cols, app, &state).await
+    let id = resolve_session_id(session_id)?;
+    start_session_internal(&id, command, args, cwd, rows, cols, app, &state).await
 }
 
 #[tauri::command]
 pub async fn resize_pty(
     rows: u16,
     cols: u16,
+    session_id: Option<String>,
     state: State<'_, PtyState>,
 ) -> Result<(), String> {
-    resize_pty_internal(rows, cols, &state).await
+    let id = resolve_session_id(session_id)?;
+    resize_session(rows, cols, &state.session(&id)).await
 }
 
 #[tauri::command]
 pub async fn write_to_pty(
     input: String,
+    session_id: Option<String>,
     state: State<'_, PtyState>,
 ) -> Result<(), String> {
-    write_to_pty_internal(input, &state).await
+    let id = resolve_session_id(session_id)?;
+    write_to_session(input, &state.session(&id)).await
 }
 
 #[tauri::command]
-pub async fn stop_pty(state: State<'_, PtyState>) -> Result<(), String> {
-    stop_pty_internal(&state).await
+pub async fn stop_pty(session_id: Option<String>, state: State<'_, PtyState>) -> Result<(), String> {
+    let id = resolve_session_id(session_id)?;
+    stop_session(&state.session(&id)).await
+}
+
+/// Stop a session and forget it (its tab was closed).
+#[tauri::command]
+pub async fn close_pty_session(session_id: String, state: State<'_, PtyState>) -> Result<(), String> {
+    let id = resolve_session_id(Some(session_id))?;
+    stop_session(&state.session(&id)).await?;
+    state.remove(&id);
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn force_kill_pty(app: AppHandle, state: State<'_, PtyState>) -> Result<(), String> {
-    let mut child_guard = state.child.lock().await;
+pub async fn force_kill_pty(session_id: Option<String>, app: AppHandle, state: State<'_, PtyState>) -> Result<(), String> {
+    let id = resolve_session_id(session_id)?;
+    let sess = state.session(&id);
+    let mut child_guard = sess.child.lock().await;
     if let Some(mut child) = child_guard.take() {
         #[cfg(target_os = "windows")]
         {
@@ -880,14 +1012,18 @@ pub async fn force_kill_pty(app: AppHandle, state: State<'_, PtyState>) -> Resul
             }
         }
     }
+    drop(child_guard);
 
-    let mut writer_guard = state.writer.lock().await;
+    let mut writer_guard = sess.writer.lock().await;
     *writer_guard = None;
+    drop(writer_guard);
 
-    let mut session_guard = state.session.lock().await;
+    let mut session_guard = sess.session.lock().await;
     *session_guard = None;
+    drop(session_guard);
 
-    let _ = app.emit("pty-status", "terminated");
+    let broadcast_tx = state.broadcast_tx.read().await.clone();
+    emit_status(&app, &broadcast_tx, &id, "terminated");
 
     Ok(())
 }
@@ -949,6 +1085,78 @@ mod tests {
         assert_eq!(child_exit_state(&child, &generation, 3), ChildState::Superseded, "stop_pty took it");
         let child = Arc::new(Mutex::new(Some(spawn_short_lived())));
         assert_eq!(child_exit_state(&child, &generation, 2), ChildState::Superseded, "a newer session started");
+    }
+
+    #[test]
+    fn session_ids_are_validated() {
+        for ok in ["main", "tab-1", "a_b", "x".repeat(64).as_str()] {
+            assert!(valid_session_id(ok), "{ok}");
+        }
+        for bad in ["", "../x", "a b", "tab/1", "x\n", &"x".repeat(65)] {
+            assert!(!valid_session_id(bad), "{bad:?}");
+        }
+        assert_eq!(resolve_session_id(None).unwrap(), DEFAULT_SESSION);
+        assert!(resolve_session_id(Some("../etc".into())).is_err());
+    }
+
+    #[test]
+    fn each_id_has_its_own_session() {
+        let state = PtyState::default();
+        let a = state.session("tab-a");
+        let a2 = state.session("tab-a");
+        let b = state.session("tab-b");
+        assert!(Arc::ptr_eq(&a.child, &a2.child), "same id -> same session");
+        assert!(!Arc::ptr_eq(&a.child, &b.child), "different ids -> separate sessions");
+        assert_eq!(state.session_ids(), vec!["tab-a", "tab-b"]);
+        state.remove("tab-a");
+        assert_eq!(state.session_ids(), vec!["tab-b"]);
+    }
+
+    #[tokio::test]
+    async fn two_sessions_run_side_by_side_with_separate_output_and_status() {
+        use std::sync::Mutex as StdMutex;
+        use tauri::Listener;
+        let app = tauri::test::mock_app();
+        let state = PtyState::default();
+        let outputs: Arc<StdMutex<Vec<(String, String)>>> = Arc::default();
+        let statuses: Arc<StdMutex<Vec<(String, String)>>> = Arc::default();
+        let legacy_outputs: Arc<StdMutex<usize>> = Arc::default();
+        {
+            let o = outputs.clone();
+            app.listen_any("session-output", move |e| {
+                let v: serde_json::Value = serde_json::from_str(e.payload()).unwrap();
+                let data: Vec<u8> = serde_json::from_value(v["data"].clone()).unwrap();
+                o.lock().unwrap().push((v["session_id"].as_str().unwrap().to_string(), String::from_utf8_lossy(&data).into_owned()));
+            });
+            let st = statuses.clone();
+            app.listen_any("session-status", move |e| {
+                let v: serde_json::Value = serde_json::from_str(e.payload()).unwrap();
+                st.lock().unwrap().push((v["session_id"].as_str().unwrap().to_string(), v["status"].as_str().unwrap().to_string()));
+            });
+            let l = legacy_outputs.clone();
+            app.listen_any("pty-output", move |_| *l.lock().unwrap() += 1);
+        }
+        let (cmd, args_a, args_b): (&str, Vec<String>, Vec<String>) = if cfg!(windows) {
+            ("cmd", vec!["/C".into(), "echo ALPHA-OUT".into()], vec!["/C".into(), "echo BRAVO-OUT".into()])
+        } else {
+            ("/bin/sh", vec!["-c".into(), "echo ALPHA-OUT".into()], vec!["-c".into(), "echo BRAVO-OUT".into()])
+        };
+        let tmp = std::env::temp_dir().to_string_lossy().into_owned();
+        start_session_internal("tab-a", cmd.into(), args_a, Some(tmp.clone()), Some(10), Some(80), app.handle().clone(), &state).await.unwrap();
+        start_session_internal("tab-b", cmd.into(), args_b, Some(tmp), Some(10), Some(80), app.handle().clone(), &state).await.unwrap();
+
+        for _ in 0..100 {
+            let done = statuses.lock().unwrap().len() >= 2;
+            if done { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let text = |id: &str| outputs.lock().unwrap().iter().filter(|(s, _)| s == id).map(|(_, t)| t.clone()).collect::<String>();
+        assert!(text("tab-a").contains("ALPHA-OUT") && !text("tab-a").contains("BRAVO-OUT"), "{:?}", text("tab-a"));
+        assert!(text("tab-b").contains("BRAVO-OUT") && !text("tab-b").contains("ALPHA-OUT"), "{:?}", text("tab-b"));
+        let st = statuses.lock().unwrap().clone();
+        assert!(st.contains(&("tab-a".into(), "terminated".into())), "{st:?}");
+        assert!(st.contains(&("tab-b".into(), "terminated".into())), "{st:?}");
+        assert_eq!(*legacy_outputs.lock().unwrap(), 0, "legacy single-session events are for the default session only");
     }
 
     #[test]

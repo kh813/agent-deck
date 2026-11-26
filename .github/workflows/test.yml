@@ -7,7 +7,7 @@ name: "test"
 # a tag should only be cut from a green commit.
 on:
   push:
-    branches: [main]
+    branches: [main, "feature/**"]
   pull_request:
   workflow_dispatch:
 
