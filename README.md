@@ -297,6 +297,12 @@ OS ごとに異なるコマンドを実行したい場合は、`pre_launch_macos
      npm run tauri build
      ```
 
+### ビルド時間について
+* 日々の開発は `npm run tauri dev` を使います。画面（React）の変更は再ビルドなしで即時反映され、Rust の変更は差分だけ自動で再ビルドされます（数秒〜十数秒）。ローカルのリリースビルドは配布物の確認が必要なときだけで十分です。
+* コンパイル済みの依存クレートは `src-tauri/target/` に残り、2 回目以降は差分だけがビルドされます（初回のリリースビルドは数分、以降は 1 分弱）。`cargo clean` や `target/` の削除はしないでください。
+* sccache は使っていません。作業フォルダが 1 つなら `target/` で十分で、sccache を使うと差分コンパイル（incremental）が無効になり、開発中のビルドがかえって遅くなるためです。複数の作業フォルダ（git worktree など）で並行して開発する場合は、`CARGO_TARGET_DIR` を共通のフォルダに向けると依存のビルドを共有できます。
+* GitHub Actions では `Swatinem/rust-cache` で依存クレートをキャッシュしています（`build-cache.yml` が main 上でリリース用キャッシュを用意）。
+
 ---
 
 ## 📦 自動リリースビルド (CI/CD)
