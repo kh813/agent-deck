@@ -333,6 +333,19 @@ body {
   border-left: 1px solid var(--header-border);
 }
 
+/* Header buttons (Stop / Start Session / Skills / Web UI) share one fixed
+   height: with padding alone, each one's height followed its text's line
+   box -- Japanese text and emoji have different default line heights per
+   font and OS, so the buttons came out 1-3px apart (Stop taller on one
+   platform, Skills on another). */
+.header-btn {
+  box-sizing: border-box;
+  height: 38px;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 1;
+}
+
 /* The working-folder chip is a button (click = pick folder) but keeps the
    chip look instead of the global button styling. */
 .cwd-button {

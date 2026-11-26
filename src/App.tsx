@@ -1259,11 +1259,11 @@ function App() {
               </div>
 
               {status === "running" ? (
-                <button className="danger" onClick={stopSession}>
+                <button className="danger header-btn" onClick={stopSession}>
                   {t("stop")}
                 </button>
               ) : (
-                <button className="primary" onClick={handleStartPty} disabled={isStarting}>
+                <button className="primary header-btn" onClick={handleStartPty} disabled={isStarting}>
                   {t("startSession")}
                 </button>
               )}
@@ -1274,7 +1274,7 @@ function App() {
               {isTauri() && (
                 <div className="header-aside">
                 <button
-                  className="secondary"
+                  className="secondary header-btn"
                   onClick={() => setIsCatalogOpen(true)}
                   style={{ display: "flex", alignItems: "center", gap: "6px", marginRight: "8px" }}
                   title={lang === "ja" ? "スキルカタログ" : "Skill Catalog"}
@@ -1282,7 +1282,7 @@ function App() {
                   📚 {lang === "ja" ? "スキル" : "Skills"}
                 </button>
                 <button
-                  className="secondary"
+                  className="secondary header-btn"
                   onClick={() => {
                     refreshWebServerStatus();
                     setIsWebUiModalOpen(true);
