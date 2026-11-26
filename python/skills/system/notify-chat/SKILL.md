@@ -19,9 +19,9 @@ Google Chat's Incoming Webhooks need no new OAuth scope and no per-user re-authe
 
 Once set up, any script or skill can send a notification via `python3 python/scripts/automation/notify_chat.py "<message>"`. Setting up the recurring execution itself (OS scheduler configuration, etc.) is out of scope for this skill.
 
-**目的が「定期実行の結果をChatに送りたい」であれば、先に `agy-schedule` スキルを案内してください** — そちらでGoogle Workspace Studio（クラウド実行・スケジュール＋Chat通知が標準機能）との比較を行った上で、それでもagy側の通知設定が必要ならこのスキルに戻ってきます。
+**目的が「定期実行の結果をChatに送りたい」であれば、先に `scheduled-tasks` スキルを案内してください** — そちらでGoogle Workspace Studio（クラウド実行・スケジュール＋Chat通知が標準機能）との比較を行った上で、それでもagy側の通知設定が必要ならこのスキルに戻ってきます。
 
-**If the goal is "send results from a scheduled run to Chat," point the user to the `agy-schedule` skill first** — it walks through the comparison with Google Workspace Studio (cloud-based, with scheduling and Chat notifications built in natively), and only comes back to this skill if agy-side notification setup is still needed.
+**If the goal is "send results from a scheduled run to Chat," point the user to the `scheduled-tasks` skill first** — it walks through the comparison with Google Workspace Studio (cloud-based, with scheduling and Chat notifications built in natively), and only comes back to this skill if agy-side notification setup is still needed.
 
 ## 手順 / Workflow
 

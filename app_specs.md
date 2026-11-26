@@ -6,7 +6,7 @@
 - **エンジン選択 (4)**: 選択中のエンジンが未インストールなら、インストール済みのエンジンへ自動で切り替える。選択は次回起動時に引き継ぐ。
 - **更新管理 (5.6)**: アプリ内の更新チェックは `latest_version_url` を定義したエンジン（agy）のみ。Claude Code はネイティブインストーラの自動更新に任せる。
 - **プロンプト GUI 化 (5.3)**: Claude Code のフォルダ信頼ダイアログ（「No, exit」が先頭）と番号付き許可メニュー（`Do you want to proceed?` 等）を実出力に基づいて検出し、位置ベースのキー入力で応答する。
-- **スキル・指示・権限**: スキルを `.claude/skills/`（＋`~/.claude/skills/`）にもインストール。`AGENTS.md` をエンジン共通の記述に変更（`ask_user` / `AskUserQuestion`）。agy ポリシー相当の許可ルールを `claude --settings` で適用。定期実行（`agy-schedule`）も `--engine claude`（`claude -p`）に対応。
+- **スキル・指示・権限**: スキルを `.claude/skills/`（＋`~/.claude/skills/`）にもインストール。`AGENTS.md` をエンジン共通の記述に変更（`ask_user` / `AskUserQuestion`）。agy ポリシー相当の許可ルールを `claude --settings` で適用。定期実行（`agy-schedule`、v0.2.10 で `scheduled-tasks` に改名）も `--engine claude`（`claude -p`）に対応。
 
 **【v13 更新概要：Web UI リモートアクセス機能（HTTPS/WSS、自己署名SSL、パスワード必須認証）】**
 - **背景と目的**: iPadやLAN内の別端末からブラウザ経由でデスクトップアプリ（`agent-deck`）にアクセスし、ローカルにインストールされた `agy` 等をリモート操作できるようにする。

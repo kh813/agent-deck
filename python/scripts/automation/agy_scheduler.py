@@ -19,7 +19,7 @@ A small JSON sidecar per task (under python/scripts/automation/scheduled/, not
 committed to git) is the source of truth for display/editing — the OS-level
 registration is derived from it and can be regenerated at any time.
 
-Usage (see the `agy-schedule` skill for the guided flow):
+Usage (see the `scheduled-tasks` skill for the guided flow):
   python3 agy_scheduler.py create <name> --prompt "..." --daily HH:MM
   python3 agy_scheduler.py create <name> --prompt "..." --weekly MON,WED,FRI HH:MM
   python3 agy_scheduler.py list

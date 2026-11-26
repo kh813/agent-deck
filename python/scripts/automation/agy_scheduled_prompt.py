@@ -8,7 +8,7 @@ Usage:
   python3 agy_scheduled_prompt.py "<prompt>" [--timeout SECONDS] [--engine agy|claude]
 
 Not meant to be run interactively — this is the payload invoked by scheduled
-tasks created through the `agy-schedule` skill (see agy_scheduler.py).
+tasks created through the `scheduled-tasks` skill (see agy_scheduler.py).
 """
 import argparse
 import shutil

@@ -67,9 +67,9 @@ If the user may want to reference the raw fetched details later, offer to save t
 
 ### 6. 繰り返し実行したい場合 / For Recurring Checks
 
-「毎回」「定期的に」「監視して」など継続的な収集を求められた場合、このスキル自体はループ機能を持たないため、`agy-schedule` スキル（agy経由でのOS定期実行の作成・管理）の利用を案内してください。`agy-schedule` は、状況によっては Google Workspace Studio の方が適していることも案内します。
+「毎回」「定期的に」「監視して」など継続的な収集を求められた場合、このスキル自体はループ機能を持たないため、`scheduled-tasks` スキル（agy / Claude Code のプロンプトの OS 定期実行の作成・管理）の利用を案内してください。`scheduled-tasks` は、状況によっては Google Workspace Studio の方が適していることも案内します。
 
-If the user wants this repeated on an interval ("every day", "keep monitoring", etc.), this skill itself has no looping mechanism — point them to the `agy-schedule` skill (creates and manages recurring OS-level agy runs) instead of trying to reimplement that here. `agy-schedule` will itself flag when Google Workspace Studio may be a better fit.
+If the user wants this repeated on an interval ("every day", "keep monitoring", etc.), this skill itself has no looping mechanism — point them to the `scheduled-tasks` skill (creates and manages recurring OS-level agy runs) instead of trying to reimplement that here. `scheduled-tasks` will itself flag when Google Workspace Studio may be a better fit.
 
 ## 使用例 / Examples
 

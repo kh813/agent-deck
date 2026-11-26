@@ -210,7 +210,7 @@ Once the tool launches, you can operate it through conversation. Skills can be i
 | `/translator` | 文章の翻訳・言語判定 / Translate text, detect language |
 | `/info-collector` | 指定した情報源から特定項目だけを収集 / Collect specific fields from a given source |
 | `/research-assistant` | トピックを指定した自由な調査 / Open-ended topic research |
-| `/agy-schedule` | 定型プロンプトの定期実行を設定（agy / Claude Code どちらでも）/ Schedule a recurring prompt (agy or Claude Code) |
+| `/scheduled-tasks` | 定型プロンプトの定期実行を設定（agy / Claude Code どちらでも）/ Schedule a recurring prompt (agy or Claude Code) |
 | `/notify-chat` | 定期実行の結果を Google Chat に通知する設定 / Set up Google Chat notifications for scheduled runs |
 | `/setup` | 環境の初期化・スキル管理 / Setup and skill management |
 | `/skill-catalog` | グループ共有のスキルカタログを閲覧・取得 / Browse and import shared skills from the group catalog |
