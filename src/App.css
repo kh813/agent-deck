@@ -27,6 +27,13 @@
   --input-bg: rgba(255, 255, 255, 0.95);
   --input-border: rgba(0, 0, 0, 0.08);
   --input-color: #1e293b;
+  /* Form fields inside dialogs (skill catalog): a distinct fill and a
+     border with >= 3:1 contrast to the dialog (themes.test.ts). */
+  --field-bg: #f1f5f9;
+  --field-border: #8591a3;
+  --field-focus: #2563eb;
+  --field-text: #1e293b;
+  --field-placeholder: #64748b;
   --agent-item-bg: rgba(255, 255, 255, 0.6);
   --text-muted: #64748b;
 
@@ -62,6 +69,13 @@ body.theme-dark {
   --input-bg: rgba(15, 23, 42, 0.95);
   --input-border: rgba(255, 255, 255, 0.1);
   --input-color: #f8fafc;
+  /* Form fields inside dialogs (skill catalog): a distinct fill and a
+     border with >= 3:1 contrast to the dialog (themes.test.ts). */
+  --field-bg: #1e293b;
+  --field-border: #64748b;
+  --field-focus: #3b82f6;
+  --field-text: #f1f5f9;
+  --field-placeholder: #94a3b8;
   --agent-item-bg: rgba(30, 41, 59, 0.6);
   --text-muted: #94a3b8;
 }
@@ -88,6 +102,13 @@ body.theme-dracula {
   --input-bg: rgba(40, 42, 54, 0.95);
   --input-border: rgba(255, 255, 255, 0.1);
   --input-color: #f8f8f2;
+  /* Form fields inside dialogs (skill catalog): a distinct fill and a
+     border with >= 3:1 contrast to the dialog (themes.test.ts). */
+  --field-bg: #1d1e26;
+  --field-border: #6272a4;
+  --field-focus: #bd93f9;
+  --field-text: #f8f8f2;
+  --field-placeholder: #7c87b8;
   --agent-item-bg: rgba(68, 71, 90, 0.6);
   --text-muted: #6272a4;
 }
@@ -114,6 +135,13 @@ body.theme-oneDark {
   --input-bg: rgba(40, 44, 52, 0.95);
   --input-border: rgba(255, 255, 255, 0.1);
   --input-color: #abb2bf;
+  /* Form fields inside dialogs (skill catalog): a distinct fill and a
+     border with >= 3:1 contrast to the dialog (themes.test.ts). */
+  --field-bg: #1e2227;
+  --field-border: #7f848e;
+  --field-focus: #61afef;
+  --field-text: #dcdfe4;
+  --field-placeholder: #7f848e;
   --agent-item-bg: rgba(53, 59, 69, 0.6);
   --text-muted: #5c6370;
 }
@@ -140,6 +168,13 @@ body.theme-solarizedLight {
   --input-bg: rgba(253, 246, 227, 0.95);
   --input-border: rgba(147, 161, 161, 0.2);
   --input-color: #657b83;
+  /* Form fields inside dialogs (skill catalog): a distinct fill and a
+     border with >= 3:1 contrast to the dialog (themes.test.ts). */
+  --field-bg: #eee8d5;
+  --field-border: #657b83;
+  --field-focus: #268bd2;
+  --field-text: #073642;
+  --field-placeholder: #657b83;
   --agent-item-bg: rgba(238, 232, 213, 0.6);
   --text-muted: #93a1a1;
 }
@@ -166,6 +201,13 @@ body.theme-solarizedDark {
   --input-bg: rgba(7, 54, 66, 0.95);
   --input-border: rgba(88, 110, 117, 0.2);
   --input-color: #839496;
+  /* Form fields inside dialogs (skill catalog): a distinct fill and a
+     border with >= 3:1 contrast to the dialog (themes.test.ts). */
+  --field-bg: #002b36;
+  --field-border: #839496;
+  --field-focus: #268bd2;
+  --field-text: #93a1a1;
+  --field-placeholder: #839496;
   --agent-item-bg: rgba(0, 43, 54, 0.6);
   --text-muted: #586e75;
 }
@@ -575,4 +617,51 @@ button:hover {
 
 button:active {
   transform: translateY(1px);
+}
+
+/* Text boxes / selects inside dialogs (skill catalog, skill editor). Unlike
+   .input-field (the chat box, which sits in its own framed bar), these sit
+   directly on the dialog, so they need their own fill and border to be
+   recognizable as inputs. */
+.dialog-field {
+  box-sizing: border-box;
+  background: var(--field-bg);
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  color: var(--field-text);
+  font-size: 0.9rem;
+  font-family: inherit;
+  padding: 8px 10px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.dialog-field::placeholder {
+  color: var(--field-placeholder);
+  opacity: 1;
+}
+
+.dialog-field:hover:not(:disabled) {
+  border-color: var(--field-focus);
+}
+
+.dialog-field:focus {
+  border-color: var(--field-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--field-focus) 25%, transparent);
+}
+
+.dialog-field:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dialog-field[readonly] {
+  border-style: dashed;
+}
+
+.dialog-search {
+  padding-left: 32px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 10px center;
 }

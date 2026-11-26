@@ -382,10 +382,10 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
             </div>
 
             <div style={{ display: "flex", gap: "8px", marginBottom: "10px", alignItems: "center" }}>
-              <input className="input-field" type="search" value={query} onChange={(e) => setQuery(e.target.value)}
+              <input className="dialog-field dialog-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)}
                 placeholder={T("filterPlaceholder")} aria-label={T("search")} style={{ flex: 1, minWidth: 0 }} />
               {tab === "catalog" && owners.length > 1 && (
-                <select className="input-field" value={owner} onChange={(e) => setOwner(e.target.value)}
+                <select className="dialog-field" value={owner} onChange={(e) => setOwner(e.target.value)}
                   aria-label={T("ownerAll")} style={{ maxWidth: "180px" }}>
                   <option value="">{T("ownerAll")}</option>
                   {owners.map((o) => <option key={o} value={o}>{ownerLabel(o)}</option>)}

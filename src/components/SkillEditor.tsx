@@ -87,7 +87,7 @@ export function SkillEditor({ lang, mode, doc, busy, onSave, onCancel, onAskAgen
         {mode === "new" && (
           <>
             <label style={label} htmlFor="skill-name">{T("fieldName")}</label>
-            <input id="skill-name" className="input-field" value={draft.name} onChange={set("name")}
+            <input id="skill-name" className="dialog-field" value={draft.name} onChange={set("name")}
               disabled={busy} placeholder="weekly-report" autoFocus spellCheck={false}
               style={field(problem === "name")} />
             <p style={hint}>{T("fieldNameHint")}</p>
@@ -95,13 +95,13 @@ export function SkillEditor({ lang, mode, doc, busy, onSave, onCancel, onAskAgen
         )}
 
         <label style={label} htmlFor="skill-description">{T("fieldDescription")}</label>
-        <textarea id="skill-description" className="input-field" value={draft.description} onChange={set("description")}
+        <textarea id="skill-description" className="dialog-field" value={draft.description} onChange={set("description")}
           disabled={busy} readOnly={readOnly} rows={3}
           style={{ ...field(problem === "description"), resize: "vertical" }} />
         {!readOnly && <p style={hint}>{T("fieldDescriptionHint")}</p>}
 
         <label style={label} htmlFor="skill-body">{T("fieldBody")}</label>
-        <textarea id="skill-body" className="input-field" value={draft.body} onChange={set("body")}
+        <textarea id="skill-body" className="dialog-field" value={draft.body} onChange={set("body")}
           disabled={busy} readOnly={readOnly} rows={16} spellCheck={false}
           style={{ ...field(problem === "body"), fontFamily: "var(--mono-font, monospace)", fontSize: "0.8rem", resize: "vertical" }} />
         {!readOnly && <p style={hint}>{T("fieldBodyHint")}</p>}
