@@ -56,7 +56,7 @@ export interface ApiError {
 export type ApiResult<T> = { ok: true; data: T; log: string } | { ok: false; error: ApiError; log: string };
 
 export type CatalogOp =
-  | "catalog" | "search" | "info" | "local" | "import" | "share" | "unshare" | "enable" | "disable" | "rebuild"
+  | "catalog" | "catalog-cached" | "search" | "info" | "local" | "import" | "share" | "unshare" | "enable" | "disable" | "rebuild"
   | "read" | "create" | "save" | "delete" | "uninstall" | "export" | "import-file";
 
 /** `input` goes to the script's stdin (create/save: a SkillDraft). */
@@ -202,10 +202,24 @@ export function filterSkills<T extends Searchable>(skills: readonly T[], query: 
 export const AUTO_SYNC_OWNER = "_default";
 
 /** Owners for the filter menu: the org's auto-installed set first, then A-Z. */
-export function catalogOwners(skills: readonly CatalogSkill[]): string[] {
+/**
+ * Author menu: built from whoever appears in the index (nobody registers
+ * authors anywhere). The org's auto-installed set first, then you, then A-Z.
+ */
+export function catalogOwners(skills: readonly CatalogSkill[], me = ""): string[] {
   const set = new Set(skills.map((s) => s.owner).filter(Boolean));
-  const rest = [...set].filter((o) => o !== AUTO_SYNC_OWNER).sort((a, b) => a.localeCompare(b));
-  return set.has(AUTO_SYNC_OWNER) ? [AUTO_SYNC_OWNER, ...rest] : rest;
+  const pinned = [AUTO_SYNC_OWNER, me].filter((o) => o && set.has(o));
+  const rest = [...set].filter((o) => !pinned.includes(o)).sort((a, b) => a.localeCompare(b));
+  return [...pinned, ...rest];
+}
+
+/** What `catalog` / `catalog-cached` return. */
+export interface CatalogData {
+  skills: CatalogSkill[];
+  offline: boolean;
+  me?: string;
+  cached?: boolean;
+  cached_at?: number;
 }
 
 export function filterByOwner<T extends { owner: string }>(skills: readonly T[], owner: string): T[] {
@@ -230,6 +244,9 @@ const TEXT = {
     delete: "削除",
     uninstall: "アンインストール",
     newSkill: "＋ 新しいスキル",
+    ownerMe: "自分（{name}）",
+    refreshing: "最新の一覧を確認中…",
+    refreshFailed: "最新の一覧を取得できなかったため、前回取得した一覧を表示しています。",
     askUnshareOnDisable: "「{name}」はカタログに共有中です。カタログからも取り下げますか？\n（「いいえ」なら共有はそのままで、この PC でだけ無効になります）",
     export: "エクスポート",
     exportAll: "📤 マイスキルをすべてエクスポート",
@@ -322,6 +339,9 @@ const TEXT = {
     delete: "Delete",
     uninstall: "Uninstall",
     newSkill: "+ New skill",
+    ownerMe: "Me ({name})",
+    refreshing: "Checking for the latest list…",
+    refreshFailed: "Couldn't fetch the latest list; showing the one fetched last time.",
     askUnshareOnDisable: "\"{name}\" is shared in the catalog. Remove it from the catalog too?\n(No: it stays shared and is only disabled on this PC.)",
     export: "Export",
     exportAll: "📤 Export all my skills",

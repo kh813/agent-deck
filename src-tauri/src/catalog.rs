@@ -21,7 +21,7 @@ pub const API_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// Ops the screen may call (mirrors skills_catalog.py API_OPS).
 pub(crate) const ALLOWED_OPS: &[&str] = &[
-    "catalog", "search", "info", "local", "import", "share", "unshare", "enable", "disable", "rebuild",
+    "catalog", "catalog-cached", "search", "info", "local", "import", "share", "unshare", "enable", "disable", "rebuild",
     "read", "create", "save", "delete", "uninstall", "export", "import-file",
 ];
 /// Ops that read a JSON document on stdin (a skill's multi-line text).

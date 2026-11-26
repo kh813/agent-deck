@@ -226,3 +226,25 @@ describe("splitLocal", () => {
     expect(m.catalogText("en", "tabInstalled")).toBe("Installed");
   });
 });
+
+describe("scale: 100 authors, 2000 skills", () => {
+  const big = Array.from({ length: 2000 }, (_, i) => ({
+    name: `skill-${i}`, owner: `user${i % 100}`, modified: "2026-11-01",
+    description: `経費 PDF レポート 説明 ${i}`, installed: null,
+  }));
+  it("author menu: every author once, org set and you pinned", () => {
+    const owners = m.catalogOwners([...big, { ...big[0], name: "x", owner: "_default" }], "user42");
+    expect(owners).toHaveLength(101);
+    expect(owners.slice(0, 2)).toEqual(["_default", "user42"]);
+    expect(new Set(owners).size).toBe(101);
+  });
+  it("you aren't pinned if you have no skills there", () => {
+    expect(m.catalogOwners(big.slice(0, 5), "nobody")).not.toContain("nobody");
+  });
+  it("filtering every keystroke stays fast", () => {
+    const t = performance.now();
+    for (const q of ["け", "けい", "経費", "経費 p", "経費 pdf", "user4"]) m.filterSkills(m.filterByOwner(big, ""), q);
+    m.catalogOwners(big);
+    expect(performance.now() - t).toBeLessThan(500); // ~a few ms in practice
+  });
+});

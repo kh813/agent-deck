@@ -10,6 +10,10 @@ type Call = { op: string; args: string[]; input: unknown };
 const calls: Call[] = [];
 let answers: boolean[] = [];
 let failNext: Record<string, { code: string; message: string }> = {};
+let hasCache = true;
+let driveDown = false;
+let freshCatalog: typeof catalog | null = null;
+let catalogGate: Promise<void> | null = null;
 
 interface FakeLocal {
   name: string; description: string; root: "common" | "catalog" | "personal";
@@ -31,7 +35,13 @@ function fake(op: string, args: string[], input: unknown) {
   const ok = (data: unknown) => ({ ok: true, data, log: "" });
   const find = (n: string) => local.find((s) => s.name === n)!;
   switch (op) {
-    case "catalog": return ok({ skills: catalog, offline: false });
+    case "catalog":
+      if (driveDown) return { ok: false, error: { code: "exception", message: "HttpError 503" }, log: "" };
+      hasCache = true;
+      return ok({ skills: freshCatalog ?? catalog, offline: false, me: "taro" });
+    case "catalog-cached":
+      return hasCache ? ok({ skills: catalog, offline: false, cached: true, cached_at: 1, me: "taro" })
+        : { ok: false, error: { code: "no_cache", message: "x" }, log: "" };
     case "local": return ok({ skills: local.map(({ body: _b, ...s }) => s), me: "test" });
     case "read": {
       const s = local.find((x) => x.name === args[0] && (!args[1] || x.root === args[1]))!;
@@ -75,6 +85,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: async (_cmd: string, a: { op: string; args: string[]; input: string | null }) => {
     const input = a.input === null ? undefined : JSON.parse(a.input);
     calls.push({ op: a.op, args: a.args, input });
+    if (a.op === "catalog" && catalogGate) await catalogGate;
     return fake(a.op, a.args, input);
   },
 }));
@@ -113,6 +124,10 @@ async function openInstalled() {
 beforeEach(() => {
   calls.length = 0;
   dialogCalls.length = 0;
+  hasCache = true;
+  driveDown = false;
+  freshCatalog = null;
+  catalogGate = null;
   savePath = "/out/x.zip";
   openPath = "/in/skill.zip";
   answers = [];
@@ -132,7 +147,7 @@ describe("catalog tab", () => {
     render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
     await screen.findByText("expense-check");
     await idle();
-    expect(ops()).toEqual(["catalog"]);
+    expect(ops()).toEqual(["catalog-cached", "catalog"]);
     const box = screen.getByPlaceholderText(/名前・作成者・説明/);
     fireEvent.change(box, { target: { value: "ぴーでぃーえふ" } }); // no match: kana is not romanized
     expect(screen.queryByText("expense-check")).toBeNull();
@@ -144,14 +159,14 @@ describe("catalog tab", () => {
     expect(screen.getByText("1 件")).toBeTruthy();
     fireEvent.change(box, { target: { value: "zzz" } });
     expect(screen.getByText("該当するスキルはありません。")).toBeTruthy();
-    expect(ops()).toEqual(["catalog"]);
+    expect(ops()).toEqual(["catalog-cached", "catalog"]);
   });
 
   it("filters by author from the menu or by clicking an author", async () => {
     render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
     await screen.findByText("expense-check");
     const select = screen.getByRole("combobox") as HTMLSelectElement;
-    expect([...select.options].map((o) => o.textContent)).toEqual(["すべての作成者", "全員に配布", "hanako", "taro"]);
+    expect([...select.options].map((o) => o.textContent)).toEqual(["すべての作成者", "全員に配布", "自分（taro）", "hanako"]);
     fireEvent.change(select, { target: { value: "taro" } });
     expect(screen.getByText("expense-check")).toBeTruthy();
     expect(screen.queryByText("pdf-tools")).toBeNull();
@@ -169,7 +184,7 @@ describe("catalog tab", () => {
     await screen.findByText(/完了しました/);
     await idle();
     expect(calls.find((c) => c.op === "import")!.args).toEqual(["taro/expense-check"]);
-    expect(ops()).toEqual(["catalog", "import", "rebuild", "catalog"]);
+    expect(ops()).toEqual(["catalog-cached", "catalog", "import", "rebuild", "catalog-cached", "catalog"]);
     expect(screen.getByText(/完了しました/)).toBeTruthy();
   });
 });
@@ -453,7 +468,7 @@ describe("English", () => {
 
 describe("public install (no org catalog)", () => {
   it("opens on My Skills, no catalog tab, no share buttons, local ops still work", async () => {
-    failNext.catalog = { code: "no_catalog", message: "x" };
+    failNext["catalog-cached"] = { code: "no_catalog", message: "x" };
     render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
     await screen.findByText("my-skill", { selector: "strong" });
     await idle();
@@ -463,7 +478,7 @@ describe("public install (no org catalog)", () => {
     const labels = (n: string) => [...card(n).querySelectorAll("button")].map((b) => b.textContent);
     expect(labels("my-skill")).toEqual(["編集", "無効にする", "エクスポート", "削除"]);
     expect(labels("my-shared")).toEqual(["編集", "無効にする", "エクスポート", "削除"]);
-    expect(ops()).toEqual(["catalog", "local"]);
+    expect(ops()).toEqual(["catalog-cached", "local"]); // never tries Drive
     const n = calls.length;
     fireEvent.click(btnIn(card("my-skill"), "無効にする"));
     await waitFor(() => expect(opsSince(n)).toEqual(["disable", "rebuild", "local"]));
@@ -573,5 +588,49 @@ describe("disabling a shared skill", () => {
     answers = [false]; // would block if asked
     fireEvent.click(btnIn(card("my-skill"), "無効にする"));
     await waitFor(() => expect(opsSince(n)).toEqual(["disable", "rebuild", "local"]));
+  });
+});
+
+describe("catalog: cached list first, fresh one in the background", () => {
+  it("shows the cached list at once, then swaps in the fresh one", async () => {
+    let release!: () => void;
+    catalogGate = new Promise<void>((r) => (release = r));
+    freshCatalog = [...catalog, { name: "brand-new", owner: "jiro", modified: "2026-11-26", description: "new", installed: null }];
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await screen.findByText("expense-check"); // cached copy, while Drive is still "loading"
+    expect(screen.queryByText("brand-new")).toBeNull();
+    expect(screen.getByText(/最新の一覧を確認中/)).toBeTruthy();
+    // the screen is usable meanwhile; only changing things waits
+    expect((screen.getByRole("button", { name: "マイスキル" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(btnIn(card("expense-check"), "追加").disabled).toBe(true);
+    release();
+    await screen.findByText("brand-new");
+    await waitFor(() => expect(screen.queryByText(/最新の一覧を確認中/)).toBeNull());
+    expect(btnIn(card("expense-check"), "追加").disabled).toBe(false);
+    expect(ops()).toEqual(["catalog-cached", "catalog"]);
+  });
+
+  it("first visit (nothing cached) waits for Drive with the normal progress note", async () => {
+    hasCache = false;
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await screen.findByText("expense-check");
+    expect(ops()).toEqual(["catalog-cached", "catalog"]);
+  });
+
+  it("Drive unreachable: keeps the cached list and says it may be old", async () => {
+    driveDown = true;
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await screen.findByText("expense-check");
+    await screen.findByText(/前回取得した一覧/);
+    expect(screen.queryByRole("alert")).toBeNull(); // not an error, just a note
+  });
+
+  it("you're pinned in the author menu as 自分", async () => {
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await screen.findByText("expense-check");
+    await idle();
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    expect(select.options[2].textContent).toBe("自分（taro）");
+    expect(select.options[2].value).toBe("taro");
   });
 });

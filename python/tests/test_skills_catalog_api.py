@@ -213,3 +213,32 @@ def test_no_config_gives_no_catalog_json(tmp_path):
     last = r.stdout.strip().splitlines()[-1]
     assert last.startswith("@@AGENT_DECK_JSON@@ ")
     assert json.loads(last.split(" ", 1)[1])["error"]["code"] == "no_catalog"
+
+
+class TestCatalogCached:
+    """The screen's instant first paint: the last-downloaded index, no Drive."""
+
+    def test_returns_the_cached_index_without_drive(self, roots, monkeypatch, capsys):
+        sc._write_index(CATALOG)
+        _skill(roots[1], "ask-portal")
+        monkeypatch.setattr(sc, "_get_service", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no Drive")))
+        code, r = run_api(capsys, "catalog-cached")
+        assert code == 0 and r["ok"], r
+        d = r["data"]
+        assert d["cached"] is True and d["cached_at"] > 0 and d["me"] == "test"
+        assert [s["name"] for s in d["skills"]] == sorted(s["name"] for s in CATALOG)
+        assert next(s for s in d["skills"] if s["name"] == "ask-portal")["installed"] == "catalog"
+
+    def test_no_cache_yet(self, roots, capsys):
+        code, r = run_api(capsys, "catalog-cached")
+        assert code == 1 and r["error"]["code"] == "no_cache"
+
+    def test_catalog_reports_me_too(self, roots, monkeypatch, capsys):
+        monkeypatch.setattr(sc, "_load_catalog_skills", lambda: CATALOG)
+        monkeypatch.setattr(sc, "_LAST_LOAD_OFFLINE", True)  # no identity lookup
+        _code, r = run_api(capsys, "catalog")
+        assert r["data"]["me"] == "test"
+
+    def test_not_a_local_op(self):
+        # Public installs (no config.toml) have no catalog: no_catalog, not a stale list.
+        assert "catalog-cached" not in sc.LOCAL_API_OPS

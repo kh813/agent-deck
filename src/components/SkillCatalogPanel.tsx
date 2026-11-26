@@ -10,6 +10,7 @@ import type { Lang } from "../utils/i18n";
 import {
   AUTO_SYNC_OWNER,
   ApiResult,
+  CatalogData,
   CatalogOp,
   CatalogSkill,
   DRIVE_OPS,
@@ -71,6 +72,10 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
   // A public install (no org config.toml): no shared catalog, but your own
   // and installed skills are still managed here.
   const [noCatalog, setNoCatalog] = useState(false);
+  // Background refresh of the catalog list (doesn't block the screen; only
+  // buttons that change things wait for it, so they act on the fresh list).
+  const [refreshing, setRefreshing] = useState(false);
+  const [me, setMe] = useState("");
 
   useEffect(() => {
     onBusyChange?.(busy !== null);
@@ -108,11 +113,46 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
     [T, lang],
   );
 
+  // The list as last downloaded shows at once (~0.2 s, no Drive); the fresh
+  // copy from Drive (~1-2 s) replaces it in the background. Only the very
+  // first visit (nothing cached yet) waits for Drive.
   const loadCatalog = useCallback(async () => {
-    const data = await run<{ skills: CatalogSkill[]; offline: boolean }>("catalog", [], undefined, true);
-    if (data) {
-      setCatalog(data.skills);
-      setOffline(data.offline);
+    let cached: ApiResult<CatalogData> | null = null;
+    try {
+      cached = await callCatalog<CatalogData>("catalog-cached");
+    } catch {
+      cached = null;
+    }
+    if (cached && !cached.ok && cached.error.code === "no_catalog") {
+      setNoCatalog(true);
+      setTab("mine");
+      return;
+    }
+    if (!cached?.ok) {
+      const data = await run<CatalogData>("catalog", [], undefined, true);
+      if (data) {
+        setCatalog(data.skills);
+        setOffline(data.offline);
+        setMe(data.me ?? "");
+      }
+      return;
+    }
+    setCatalog(cached.data.skills);
+    setMe(cached.data.me ?? "");
+    setRefreshing(true);
+    try {
+      const fresh = await callCatalog<CatalogData>("catalog");
+      if (fresh.ok) {
+        setCatalog(fresh.data.skills);
+        setOffline(fresh.data.offline);
+        setMe(fresh.data.me ?? "");
+      } else {
+        setOffline(true); // keep the cached list; say it may be old
+      }
+    } catch {
+      setOffline(true);
+    } finally {
+      setRefreshing(false);
     }
   }, [run]);
 
@@ -261,15 +301,16 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
     onClose();
   };
 
-  const owners = useMemo(() => catalogOwners(catalog ?? []), [catalog]);
+  const owners = useMemo(() => catalogOwners(catalog ?? [], me), [catalog, me]);
   const shownCatalog = useMemo(
     () => (catalog ? filterSkills(filterByOwner(catalog, owner), query) : null),
     [catalog, owner, query],
   );
   const shownLocal = useMemo(() => (local ? splitLocal(filterSkills(local, query)) : null), [local, query]);
-  const ownerLabel = (o: string) => (o === AUTO_SYNC_OWNER ? T("ownerDefault") : o);
+  const ownerLabel = (o: string) => (o === AUTO_SYNC_OWNER ? T("ownerDefault") : o === me ? T("ownerMe", { name: o }) : o);
 
   const disabled = busy !== null;
+  const actionsDisabled = disabled || refreshing;
   const tagStyle = (bg: string, fg: string) => ({
     fontSize: "0.7rem", padding: "1px 6px", borderRadius: "4px", background: bg, color: fg, marginLeft: "6px",
   });
@@ -296,7 +337,7 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
         </div>
         <div style={{ display: "flex", gap: "6px", flexShrink: 0, flexWrap: "wrap" }}>
           {localActions(s).filter((a) => !noCatalog || !CATALOG_ACTIONS.has(a)).map((a) => (
-            <button key={a} className={a === "share" || a === "edit" ? "primary" : "secondary"} disabled={disabled}
+            <button key={a} className={a === "share" || a === "edit" ? "primary" : "secondary"} disabled={actionsDisabled}
               style={{ ...smallBtn, ...(DANGER.has(a) ? { color: "#ef4444" } : {}) }}
               onClick={() => void onLocalAction(s, a)}>
               {T(a)}
@@ -400,6 +441,9 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
             {noCatalog && (
               <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "8px" }}>ℹ {T("noCatalogNote")}</div>
             )}
+            {tab === "catalog" && refreshing && (
+              <div role="status" style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "8px" }}>🔄 {T("refreshing")}</div>
+            )}
             {tab === "catalog" && offline && (
               <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "8px" }}>⚠ {T("offline")}</div>
             )}
@@ -436,7 +480,7 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
                         {action.kind === "none" ? (
                           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", alignSelf: "center" }}>{T(action.label)}</span>
                         ) : (
-                          <button className="primary" disabled={disabled} style={{ ...smallBtn, padding: "4px 12px" }}
+                          <button className="primary" disabled={actionsDisabled} style={{ ...smallBtn, padding: "4px 12px" }}
                             onClick={() => void mutate("import", importTarget(s))}>
                             {T(action.kind)}
                           </button>

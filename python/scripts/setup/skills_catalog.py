@@ -1335,7 +1335,22 @@ def api_catalog(args):
             _current_email(_get_service())
         except Exception:
             pass
-    return {"skills": _with_installed(skills), "offline": _LAST_LOAD_OFFLINE}
+    return {"skills": _with_installed(skills), "offline": _LAST_LOAD_OFFLINE, "me": _me()}
+
+
+def api_catalog_cached(args):
+    """The index as last downloaded (no Drive, no Google login): the screen
+    shows this at once (~0.2 s) and swaps in `catalog`'s fresh copy (~1-2 s)
+    when it arrives."""
+    skills = _read_index()
+    if skills is None:
+        raise ApiError("no_cache", "まだカタログを取得していません / The catalog hasn't been fetched yet")
+    try:
+        cached_at = int(INDEX_PATH.stat().st_mtime * 1000)
+    except OSError:
+        cached_at = 0
+    return {"skills": _with_installed(skills), "offline": False, "cached": True,
+            "cached_at": cached_at, "me": _me()}
 
 
 def api_search(args):
@@ -1798,7 +1813,7 @@ def api_import_file(args):
 
 
 API_OPS = {
-    "catalog": api_catalog, "search": api_search, "info": api_info, "local": api_local,
+    "catalog": api_catalog, "catalog-cached": api_catalog_cached, "search": api_search, "info": api_info, "local": api_local,
     "import": api_import, "share": api_share, "unshare": api_unshare,
     "enable": api_enable, "disable": api_disable, "rebuild": api_rebuild,
     "read": api_read, "create": api_create, "save": api_save, "delete": api_delete,
