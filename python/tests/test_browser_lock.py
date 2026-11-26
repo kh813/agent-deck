@@ -9,9 +9,14 @@ from pathlib import Path
 
 import pytest
 
+from unittest.mock import MagicMock
+
 ROOT = Path(__file__).resolve().parents[2]
 AUTOMATION = ROOT / "python" / "scripts" / "automation"
 sys.path.insert(0, str(AUTOMATION))
+# common.py imports the install's config (config.toml), absent on CI.
+_had_config = "config" in sys.modules
+sys.modules.setdefault("config", MagicMock(COMPANY_DOMAIN="example.com", USER_EMAIL="u@example.com"))
 import common  # noqa: E402
 
 
@@ -27,6 +32,8 @@ def lock_path(tmp_path, monkeypatch):
 def _holder(lock_path: Path, seconds: float) -> subprocess.Popen:
     code = textwrap.dedent(f"""
         import sys, time
+        from unittest.mock import MagicMock
+        sys.modules["config"] = MagicMock(COMPANY_DOMAIN="example.com", USER_EMAIL="u@example.com")
         sys.path.insert(0, {str(AUTOMATION)!r})
         import common
         common.browser_lock_path = lambda: {str(lock_path)!r}
