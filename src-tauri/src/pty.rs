@@ -1028,6 +1028,23 @@ pub async fn force_kill_pty(session_id: Option<String>, app: AppHandle, state: S
     Ok(())
 }
 
+/// A tab's working folder as an absolute, symlink-resolved path, so two tabs
+/// can be compared (app_specs.md 5.7.4: the same or a nested folder may not
+/// be open in two tabs). "" = the app's own location (the default folder).
+/// Windows' verbatim prefix (\\?\) from canonicalize is dropped so paths
+/// read like the ones the folder picker returns.
+pub(crate) fn canonical_folder(path: &str) -> Result<String, String> {
+    let p = if path.trim().is_empty() { get_default_cwd() } else { PathBuf::from(path) };
+    let c = std::fs::canonicalize(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+    let s = c.to_string_lossy().into_owned();
+    Ok(s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s))
+}
+
+#[tauri::command]
+pub fn resolve_session_folder(path: String) -> Result<String, String> {
+    canonical_folder(&path)
+}
+
 #[tauri::command]
 pub fn get_app_bundle_dir() -> Result<String, String> {
     if let Ok(exe_path) = std::env::current_exe() {
@@ -1157,6 +1174,25 @@ mod tests {
         assert!(st.contains(&("tab-a".into(), "terminated".into())), "{st:?}");
         assert!(st.contains(&("tab-b".into(), "terminated".into())), "{st:?}");
         assert_eq!(*legacy_outputs.lock().unwrap(), 0, "legacy single-session events are for the default session only");
+    }
+
+    #[test]
+    fn canonical_folder_resolves_symlinks_and_the_default() {
+        let base = std::env::temp_dir().join(format!("agentdeck-canon-{}", std::process::id()));
+        let real = base.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let canon_real = canonical_folder(real.to_str().unwrap()).unwrap();
+        assert!(!canon_real.starts_with(r"\\?\"), "{canon_real}");
+        #[cfg(unix)]
+        {
+            let link = base.join("link");
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            assert_eq!(canonical_folder(link.to_str().unwrap()).unwrap(), canon_real, "symlink -> same folder");
+        }
+        assert!(!canonical_folder("").unwrap().is_empty(), "default folder");
+        assert!(canonical_folder(base.join("missing").to_str().unwrap()).is_err());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

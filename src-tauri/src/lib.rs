@@ -105,6 +105,7 @@ pub fn run() {
             menu::set_language_menu_state,
             pty::force_kill_pty,
             pty::close_pty_session,
+            pty::resolve_session_folder,
             web_server::start_web_server,
             web_server::stop_web_server,
             web_server::get_web_server_status,

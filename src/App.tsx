@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { ask, message, open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Terminal } from "@xterm/xterm";
-import { useChatSession } from "./hooks/useChatSession";
 import { TerminalView } from "./components/TerminalView";
 import { SkillCatalogPanel } from "./components/SkillCatalogPanel";
 import { subscribeToTauriEvent } from "./lib/tauriListener";
@@ -18,7 +17,14 @@ import { baseName, pickImageFile, promptTextForPaths, saveClipboardImage, saveIm
 import { Attachment, AttachmentKind, MAX_ATTACHMENTS, addAttachments, canSend, composeMessage, removeAttachment } from "./lib/attachments";
 import { AttachmentChips, ImageAttachButton } from "./components/ImageAttachButton";
 import { RESTART_DELAY_MS, decideAfterSelfUpdate } from "./lib/selfUpdateRestart";
-import { DEFAULT_SESSION_ID, SessionStatusEvent, isForSession } from "./lib/sessions";
+import {
+  DEFAULT_SESSION_ID, MAX_TABS, SessionOutputEvent, SessionStatusEvent, Tab, addTab, canAddTab,
+  findFolderConflict, isForSession, newSessionId, nextActiveAfterClose, removeTab, renameTab, tabLabel,
+} from "./lib/sessions";
+import { sameSet, tabShortcutTarget } from "./lib/tabShortcuts";
+import { workingSessions } from "./lib/sessionLights";
+import { TabSidebar } from "./components/TabSidebar";
+import { IDLE_RUNTIME_STATE, RuntimeApi, RuntimeState, SessionRuntime } from "./components/SessionRuntime";
 import { loadLangChoice, parseLangChoice, resolveLang, saveLangChoice, setCurrentLang, type LangChoice } from "./lib/language";
 import { stopAndWaitForExit } from "./lib/ptyHandover";
 import {
@@ -62,11 +68,7 @@ interface UpdateStatus {
 }
 
 function App() {
-  const isWindows = window.navigator.userAgent.includes("Windows");
-  const defaultShell = isWindows ? "powershell.exe" : "zsh";
 
-  const [shellPath, setShellPath] = useState(defaultShell);
-  const [shellArgs, setShellArgs] = useState("");
   const [input, setInput] = useState("");
   // Images attached from the input bar (🖼 button / paste), sent with the text.
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -335,10 +337,28 @@ function App() {
   // (Assigned below, once useChatSession has run.) Lets a prompt answered
   // in the terminal also dismiss the GUI's prompt panel.
   const noteTerminalInputRef = useRef<(data: string) => void>(() => {});
-  // The session (tab) the terminal, input bar and install/update flows act
-  // on. One tab for now ("main"); the tab UI makes this switchable
-  // (lib/sessions.ts, app_specs.md 5.7.4).
-  const activeSessionId = DEFAULT_SESSION_ID;
+  // ── Tabs (app_specs.md 5.7.4) ──
+  // One tab = one session. The terminal, input bar, prompt panel and the
+  // install/update flows act on the active tab. Each tab's live session is a
+  // SessionRuntime (always mounted); its state is reported into
+  // runtimeStates and its controls registered in runtimesRef.
+  const [tabs, setTabs] = useState<Tab[]>(() => [
+    { id: DEFAULT_SESSION_ID, name: "", cwd: "", engineId: selectedAgentId },
+  ]);
+  const [activeSessionId, setActiveSessionId] = useState(DEFAULT_SESSION_ID);
+  const [startOnMountIds, setStartOnMountIds] = useState<ReadonlySet<string>>(() => new Set());
+  const runtimesRef = useRef<Record<string, RuntimeApi>>({});
+  const [runtimeStates, setRuntimeStates] = useState<Record<string, RuntimeState>>({});
+  const registerRuntime = useCallback((id: string, api: RuntimeApi | null) => {
+    if (api) runtimesRef.current[id] = api;
+    else delete runtimesRef.current[id];
+  }, []);
+  const handleRuntimeState = useCallback((id: string, state: RuntimeState) => {
+    setRuntimeStates((prev) => ({ ...prev, [id]: state }));
+    // the tab remembers its folder once its session has one
+    if (state.cwd) setTabs((prev) => prev.map((t) => (t.id === id && t.cwd !== state.cwd ? { ...t, cwd: state.cwd } : t)));
+  }, []);
+  const activeRuntime = useCallback(() => runtimesRef.current[activeSessionId], [activeSessionId]);
   const handleTerminalInput = useCallback((data: string) => {
     noteTerminalInputRef.current(data);
     invoke("write_to_pty", { input: data, sessionId: activeSessionId });
@@ -359,33 +379,52 @@ function App() {
     }, 300);
   }, []);
 
-  const getTerminalSize = useCallback(() => terminalSizeRef.current ?? undefined, []);
 
-  const {
-    cwd,
-    status,
-    isStarting,
-    activePrompt,
-    noteTerminalInput,
-    statusMessage,
-    showStatusMessage,
-    startSession,
-    stopSession,
-    sendMessage,
-    respondToPrompt,
-    changeCwd,
-  } = useChatSession({
-    sessionId: activeSessionId,
-    command: shellPath,
-    defaultArgs: shellArgs.trim() ? shellArgs.split(" ") : [],
-    initialCwd: "",
-    onRawOutput: handleRawOutput,
-    getTerminalSize,
-    preLaunchCommand: appConfig?.pre_launch_command ?? undefined,
-    preLaunchArgs: appConfig?.pre_launch_args,
-    preLaunchRequired: appConfig?.pre_launch_required,
-  });
-  noteTerminalInputRef.current = noteTerminalInput;
+  // The active tab's session, as the rest of the screen sees it.
+  const activeState = runtimeStates[activeSessionId] ?? IDLE_RUNTIME_STATE;
+  const { cwd, status, isStarting, activePrompt, statusMessage } = activeState;
+  const startSession = useCallback(
+    async (targetCwd?: string, command?: string, args?: string[]) => {
+      await activeRuntime()?.startSession(targetCwd, command, args);
+    },
+    [activeRuntime],
+  );
+  const stopSession = useCallback(async () => { await activeRuntime()?.stopSession(); }, [activeRuntime]);
+  const sendMessage = useCallback(async (text: string) => { await activeRuntime()?.sendMessage(text); }, [activeRuntime]);
+  const respondToPrompt = useCallback(
+    async (text: string, raw?: string) => { await activeRuntime()?.respondToPrompt(text, raw); },
+    [activeRuntime],
+  );
+  const changeCwdUnchecked = useCallback(async (dir: string) => { await activeRuntime()?.changeCwd(dir); }, [activeRuntime]);
+  // Platform folder-name case rule for the "same or nested folder" check.
+  const caseInsensitiveFs = typeof navigator !== "undefined" && /Mac|Win/i.test(navigator.userAgent);
+  // Resolve a folder (and every other tab's) and refuse one already in use
+  // by another tab, or nested with one (5.7.4). Returns the resolved path.
+  const checkFolderFree = useCallback(async (dir: string, forTabId?: string): Promise<string | null> => {
+    if (!isTauri()) return dir;
+    const resolve = (p: string) => invoke<string>("resolve_session_folder", { path: p }).catch(() => p);
+    const folder = await resolve(dir);
+    const others = await Promise.all(tabs.filter((tb) => tb.id !== forTabId).map(async (tb) => ({ ...tb, cwd: await resolve(tb.cwd) })));
+    const conflict = findFolderConflict(others, folder, caseInsensitiveFs);
+    if (conflict) {
+      await message(
+        t("folderInUse").replace("{tab}", tabLabel(conflict, t("appLocationShort"))).replace("{folder}", folder),
+        { title: "agent-deck", kind: "warning" },
+      );
+      return null;
+    }
+    return folder;
+  }, [tabs, caseInsensitiveFs, lang]);
+  const changeCwd = useCallback(async (dir: string) => {
+    const folder = await checkFolderFree(dir, activeSessionId);
+    if (folder) await changeCwdUnchecked(dir);
+  }, [checkFolderFree, activeSessionId, changeCwdUnchecked]);
+  const showStatusMessage = useCallback((text: string, autoClear = true) => {
+    const rt = activeRuntime();
+    if (rt) rt.showStatusMessage(text, autoClear);
+    else console.info(text);
+  }, [activeRuntime]);
+  noteTerminalInputRef.current = (data: string) => activeRuntime()?.noteTerminalInput(data);
 
   // Load SKILL.md content when CWD changes
   useEffect(() => {
@@ -614,17 +653,6 @@ function App() {
     setUpdateStatus({ current_version: null, latest_version: null, update_available: false });
   }, [selectedAgentId]);
 
-  // 3. Update PTY command configuration when selection or statuses change
-  useEffect(() => {
-    if (!appConfig) return;
-    const engine = appConfig.engines.find(e => e.id === selectedAgentId);
-    const status = agentStatuses[selectedAgentId];
-    if (engine && status && status.installed && status.path) {
-      setShellPath(status.path);
-      const args = engine.args || [];
-      setShellArgs(args.join(" "));
-    }
-  }, [selectedAgentId, agentStatuses, appConfig]);
 
   // Quit guard (src-tauri/src/quit_guard.rs): while any of these runs,
   // Cmd/Ctrl+Q or closing the window asks before quitting. (A working
@@ -1101,7 +1129,8 @@ function App() {
     showStatusMessage(t("imageAttachFailed").replace("{error}", String(e)), false);
   }, [showStatusMessage, lang]);
   const typeIntoTerminal = useCallback((text: string) => {
-    if (terminalRef.current) terminalRef.current.paste(text);
+    const term = activeRuntime()?.terminal();
+    if (term) term.paste(text);
     else handleTerminalInput(text);
   }, [handleTerminalInput]);
   const requireRunning = useCallback(() => {
@@ -1180,7 +1209,170 @@ function App() {
     };
   }, []);
 
+  // ── Tab operations ──
+  const switchToTab = useCallback((id: string) => {
+    const tab = tabs.find((tb) => tb.id === id);
+    if (!tab) return;
+    // Not an engine *change* for the engine-change auto-start effect.
+    previousAgentIdRef.current = tab.engineId;
+    setSelectedAgentId(tab.engineId);
+    setActiveSessionId(id);
+  }, [tabs]);
+
+  // The engine picked in the header belongs to the active tab.
+  useEffect(() => {
+    setTabs((prev) => prev.map((tb) => (tb.id === activeSessionId && tb.engineId !== selectedAgentId ? { ...tb, engineId: selectedAgentId } : tb)));
+  }, [selectedAgentId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleNewTab = useCallback(async () => {
+    if (!isTauri()) return;
+    if (!canAddTab(tabs)) {
+      showStatusMessage(t("tabLimit").replace("{max}", String(MAX_TABS)));
+      return;
+    }
+    let picked: string | string[] | null = null;
+    try {
+      picked = await open({ directory: true, multiple: false, title: t("newTabPickFolder") });
+    } catch (e) {
+      console.error("Failed to open directory dialog:", e);
+    }
+    if (!picked || typeof picked !== "string") return;
+    const folder = await checkFolderFree(picked);
+    if (!folder) return;
+    const id = newSessionId(tabs.map((tb) => tb.id));
+    setTabs((prev) => addTab(prev, { id, name: "", cwd: folder, engineId: selectedAgentId }));
+    setStartOnMountIds((prev) => new Set(prev).add(id));
+    previousAgentIdRef.current = selectedAgentId;
+    setActiveSessionId(id);
+  }, [tabs, checkFolderFree, selectedAgentId, showStatusMessage, lang]);
+
+  const handleCloseTab = useCallback(async (id: string = activeSessionId) => {
+    if (tabs.length <= 1) {
+      showStatusMessage(t("lastTabCantClose"));
+      return;
+    }
+    const tab = tabs.find((tb) => tb.id === id);
+    if (!tab) return;
+    if (runtimeStates[id]?.status === "running") {
+      const ok = await ask(t("closeTabConfirm").replace("{tab}", tabLabel(tab, t("appLocationShort"))), {
+        title: "agent-deck", kind: "warning", okLabel: t("closeTabOk"), cancelLabel: t("cancel"),
+      });
+      if (!ok) return;
+    }
+    await invoke("close_pty_session", { sessionId: id }).catch(() => {});
+    const next = nextActiveAfterClose(tabs, id, activeSessionId);
+    if (next && next !== activeSessionId) switchToTab(next);
+    setTabs((prev) => removeTab(prev, id));
+    setRuntimeStates((prev) => {
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+    delete lastOutputAtRef.current[id];
+  }, [tabs, activeSessionId, runtimeStates, switchToTab, showStatusMessage, lang]);
+
+  // Shortcuts: New Tab / Close Tab come from the File menu (CmdOrCtrl+T/W);
+  // Ctrl+Tab / Ctrl+Shift+Tab / CmdOrCtrl+1..9 are handled here, before
+  // the terminal sees them.
+  const tabActionsRef = useRef({ handleNewTab, handleCloseTab, switchToTab, tabs, activeSessionId });
+  tabActionsRef.current = { handleNewTab, handleCloseTab, switchToTab, tabs, activeSessionId };
+  useEffect(() => {
+    if (!isTauri()) return;
+    const offNew = subscribeToTauriEvent(listen("menu-new-tab", () => void tabActionsRef.current.handleNewTab()));
+    const offClose = subscribeToTauriEvent(listen("menu-close-tab", () => void tabActionsRef.current.handleCloseTab()));
+    const onKey = (e: KeyboardEvent) => {
+      const { tabs: list, activeSessionId: cur, switchToTab: go } = tabActionsRef.current;
+      const target = tabShortcutTarget(e, list.map((tb) => tb.id), cur);
+      if (target) {
+        e.preventDefault();
+        e.stopPropagation();
+        go(target);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      offNew();
+      offClose();
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, []);
+
+  // Which tabs are working (output in the last few seconds), for the lights.
+  const lastOutputAtRef = useRef<Record<string, number>>({});
+  const [workingIds, setWorkingIds] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    if (!isTauri()) return;
+    const off = subscribeToTauriEvent(listen<SessionOutputEvent>("session-output", (e) => {
+      lastOutputAtRef.current[e.payload.session_id] = Date.now();
+    }));
+    const timer = setInterval(() => {
+      const next = workingSessions(lastOutputAtRef.current, Date.now());
+      setWorkingIds((prev) => (sameSet(prev, next) ? prev : next));
+    }, 1000);
+    return () => {
+      off();
+      clearInterval(timer);
+    };
+  }, []);
+
+  // The engine install screen shows the active tab's install output.
+  useEffect(() => {
+    if (!isTauri() || !isInstallTerminalOpen) return;
+    const off = subscribeToTauriEvent(listen<SessionOutputEvent>("session-output", (e) => {
+      if (isForSession(e.payload, activeSessionId)) handleRawOutput(new Uint8Array(e.payload.data));
+    }));
+    return off;
+  }, [isInstallTerminalOpen, activeSessionId, handleRawOutput]);
+
+  const showCheckingPanel = !agentStatusChecked ||
+    !!(appConfig && pickEngine(appConfig.engines.map(e => e.id), agentStatuses, selectedAgentId) !== selectedAgentId);
+  const showOnboardingPanel = !showCheckingPanel && !currentAgentStatus.installed;
+  const showMainView = !showCheckingPanel && !showOnboardingPanel;
+
   return (
+    <div className="app-shell">
+    {showMainView && (
+      <TabSidebar
+        lang={lang}
+        tabs={tabs}
+        activeId={activeSessionId}
+        states={runtimeStates}
+        engineNames={Object.fromEntries((appConfig?.engines ?? []).map((e) => [e.id, e.name]))}
+        workingIds={workingIds}
+        onSelect={switchToTab}
+        onNew={() => void handleNewTab()}
+        onClose={(id) => void handleCloseTab(id)}
+        onRename={(id, name) => setTabs((prev) => renameTab(prev, id, name))}
+        footer={isTauri() ? (<>
+                <button
+                  className="secondary header-btn"
+                  onClick={() => setIsCatalogOpen(true)}
+                  style={{ display: "flex", alignItems: "center", gap: "6px" }}
+                  title={lang === "ja" ? "スキルカタログ" : "Skill Catalog"}
+                >
+                  📚 {lang === "ja" ? "スキル" : "Skills"}
+                </button>
+                <button
+                  className="secondary header-btn"
+                  onClick={() => {
+                    refreshWebServerStatus();
+                    setIsWebUiModalOpen(true);
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    background: webServerStatus.running ? "rgba(16, 185, 129, 0.15)" : undefined,
+                    borderColor: webServerStatus.running ? "#10b981" : undefined,
+                    color: webServerStatus.running ? "#10b981" : undefined,
+                  }}
+                  title="Web UI Remote Access"
+                >
+                  🌐 Web UI {webServerStatus.running ? "● ON" : ""}
+                </button>
+</>) : undefined}
+      />
+    )}
     <div className="app-container">
       {/* Header and Connection Panel */}
       <header className="app-header">
@@ -1334,39 +1526,7 @@ function App() {
                 </button>
               )}
 
-              {/* Web UI is a separate feature from the session controls
-                  (engine / folder / status / start-stop), so it sits apart at
-                  the right edge behind a divider. */}
-              {isTauri() && (
-                <div className="header-aside">
-                <button
-                  className="secondary header-btn"
-                  onClick={() => setIsCatalogOpen(true)}
-                  style={{ display: "flex", alignItems: "center", gap: "6px", marginRight: "8px" }}
-                  title={lang === "ja" ? "スキルカタログ" : "Skill Catalog"}
-                >
-                  📚 {lang === "ja" ? "スキル" : "Skills"}
-                </button>
-                <button
-                  className="secondary header-btn"
-                  onClick={() => {
-                    refreshWebServerStatus();
-                    setIsWebUiModalOpen(true);
-                  }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    background: webServerStatus.running ? "rgba(16, 185, 129, 0.15)" : undefined,
-                    borderColor: webServerStatus.running ? "#10b981" : undefined,
-                    color: webServerStatus.running ? "#10b981" : undefined,
-                  }}
-                  title="Web UI Remote Access"
-                >
-                  🌐 Web UI {webServerStatus.running ? "● ON" : ""}
-                </button>
-                </div>
-              )}
+
             </>
           )}
         </div>
@@ -1502,14 +1662,14 @@ function App() {
           main panel can use the full width) */}
       <div className="app-body-layout">
         {/* Main Panel View (live terminal OR Onboarding installer) */}
-        {!agentStatusChecked ||
-        (appConfig && pickEngine(appConfig.engines.map(e => e.id), agentStatuses, selectedAgentId) !== selectedAgentId) ? (
+        {showCheckingPanel && (
           /* First detection still running, or the selection is about to move
              to an installed engine: don't claim anything is missing yet */
           <div className="onboarding-panel" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
             <p className="onboarding-desc">{t("checkingAgents")}</p>
           </div>
-        ) : !currentAgentStatus.installed ? (
+        )}
+        {showOnboardingPanel && (
           /* Onboarding Panel */
           <div className="onboarding-panel" style={{ display: "flex", flexDirection: isInstallTerminalOpen ? "row" : "column", gap: "24px", width: "100%" }}>
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
@@ -1556,9 +1716,10 @@ function App() {
               </div>
             )}
           </div>
-        ) : (
-          /* Live Antigravity Terminal Session */
-          <div className="main-view-layout" style={{ flex: 1 }}>
+        )}
+        {/* Live sessions: always mounted (hidden while the panels above
+            show) so every tab's terminal keeps its output (5.7.4). */}
+          <div className="main-view-layout" style={{ flex: 1, display: showMainView ? undefined : "none" }}>
             <div className="chat-panel">
               <div className="terminal-panel" style={{ flex: 1 }}>
                 <div className="terminal-header">
@@ -1567,17 +1728,32 @@ function App() {
                     {status.toUpperCase()}
                   </span>
                 </div>
-                <div style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-                  <TerminalView
-                    terminalRef={terminalRef}
-                    onData={handleTerminalInput}
-                    onResize={handleTerminalResize}
-                    theme={themes[currentThemeId].terminal}
-                    fontFamily={terminalFont.family}
-                    fontSize={terminalFont.size}
-                    onImagePaste={handleTerminalImagePaste}
-                    onNativeImagePaste={handleNativeImagePaste}
-                  />
+                <div style={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative" }}>
+                  {tabs.map((tab) => {
+                    const engine = appConfig?.engines.find((e) => e.id === tab.engineId);
+                    return (
+                      <SessionRuntime
+                        key={tab.id}
+                        sessionId={tab.id}
+                        active={tab.id === activeSessionId}
+                        initialCwd={tab.cwd}
+                        command={agentStatuses[tab.engineId]?.path ?? ""}
+                        args={engine?.args ?? []}
+                        preLaunchCommand={appConfig?.pre_launch_command ?? undefined}
+                        preLaunchArgs={appConfig?.pre_launch_args}
+                        preLaunchRequired={appConfig?.pre_launch_required}
+                        theme={themes[currentThemeId].terminal}
+                        fontFamily={terminalFont.family}
+                        fontSize={terminalFont.size}
+                        startOnMount={startOnMountIds.has(tab.id)}
+                        onState={handleRuntimeState}
+                        register={registerRuntime}
+                        onResize={handleTerminalResize}
+                        onImagePaste={handleTerminalImagePaste}
+                        onNativeImagePaste={handleNativeImagePaste}
+                      />
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1714,7 +1890,6 @@ function App() {
               </form>
             </div>
           </div>
-        )}
 
         {/* SKILL.md Preview Modal */}
         {isPreviewOpen && (
@@ -2088,6 +2263,7 @@ function App() {
           </div>
         )}
       </div>
+    </div>
     </div>
   );
 }

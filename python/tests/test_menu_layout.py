@@ -67,8 +67,11 @@ def test_view_holds_theme_font_and_language(menu):
         assert item in menu["View"], menu["View"]
 
 
-def test_file_holds_force_kill(menu):
-    assert menu["File"][0] == "Force Kill Session"
+def test_file_holds_tabs_and_force_kill(menu):
+    f = menu["File"]
+    assert f[:4] == ["New Tab", "Close Tab", "---", "Force Kill Session"], f
+    # Close Tab owns CmdOrCtrl+W: the predefined Close Window is gone
+    assert not any(l.replace("&", "").lower().startswith("close window") for l in f), f
 
 
 def test_settings_is_only_updates_and_settings(menu):

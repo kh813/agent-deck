@@ -65,3 +65,33 @@ describe("tabs", () => {
     expect(s.nextActiveAfterClose([tab("a")], "a", "a")).toBeNull();
   });
 });
+
+describe("folder conflicts (same or nested folder)", () => {
+  it("same folder, trailing slashes and separators", () => {
+    expect(s.foldersOverlap("/Users/me/proj", "/Users/me/proj/", false)).toBe(true);
+    expect(s.foldersOverlap("C:\\work\\proj", "C:/work/proj", true)).toBe(true);
+  });
+  it("nested either way", () => {
+    expect(s.foldersOverlap("/Users/me/proj", "/Users/me/proj/docs", false)).toBe(true);
+    expect(s.foldersOverlap("/Users/me/proj/docs", "/Users/me/proj", false)).toBe(true);
+  });
+  it("siblings with a shared prefix are not nested", () => {
+    expect(s.foldersOverlap("/Users/me/proj", "/Users/me/project", false)).toBe(false);
+    expect(s.foldersOverlap("/a/b", "/a/c", false)).toBe(false);
+  });
+  it("case: ignored on Windows/default macOS volumes, respected otherwise", () => {
+    expect(s.foldersOverlap("C:\\Work\\Proj", "c:\\work\\proj\\x", true)).toBe(true);
+    expect(s.foldersOverlap("/Users/me/Proj", "/Users/me/proj", false)).toBe(false);
+  });
+  it("roots and empty paths", () => {
+    expect(s.foldersOverlap("/", "/anything", false)).toBe(true);
+    expect(s.foldersOverlap("C:\\", "C:\\x", true)).toBe(true);
+    expect(s.foldersOverlap("", "/x", false)).toBe(false);
+  });
+  it("finds the conflicting tab, ignoring the tab being changed", () => {
+    const tabs = [tab("a", "/p/proj"), tab("b", "/p/other")];
+    expect(s.findFolderConflict(tabs, "/p/proj/sub", false)?.id).toBe("a");
+    expect(s.findFolderConflict(tabs, "/p/new", false)).toBeNull();
+    expect(s.findFolderConflict(tabs, "/p/proj", false, "a")).toBeNull();
+  });
+});

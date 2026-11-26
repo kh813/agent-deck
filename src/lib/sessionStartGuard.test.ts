@@ -20,7 +20,10 @@ describe("session start guard wiring", () => {
 
   it("the hook exposes isStarting and App consumes it", () => {
     expect(hook).toMatch(/return \{[\s\S]*?\bisStarting,/);
-    expect(app).toMatch(/const \{[\s\S]*?\bisStarting,[\s\S]*?\} = useChatSession\(/);
+    // per tab: SessionRuntime reports it, App reads the active tab's
+    const rt = readFileSync(join(__dirname, "..", "components", "SessionRuntime.tsx"), "utf8");
+    expect(rt).toContain("isStarting: chat.isStarting");
+    expect(app).toMatch(/const \{ cwd, status, isStarting, activePrompt, statusMessage \} = activeState;/);
   });
 
   it("the Start button is disabled while a start is in progress", () => {

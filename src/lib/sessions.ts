@@ -83,3 +83,34 @@ export function nextActiveAfterClose(tabs: readonly Tab[], closedId: string, act
   const i = tabs.findIndex((t) => t.id === closedId);
   return (rest[Math.min(i, rest.length - 1)] ?? rest[0]).id;
 }
+
+// ── Working folders: never the same or nested folder in two tabs ──
+// Paths are the canonical ones from resolve_session_folder (symlinks
+// resolved); here only separators, a trailing slash and -- on Windows /
+// default macOS volumes -- letter case are evened out.
+
+export function normalizeFolder(path: string, caseInsensitive: boolean): string {
+  let p = path.replace(/\\/g, "/");
+  while (p.length > 1 && p.endsWith("/") && !/^[A-Za-z]:\/$/.test(p)) p = p.slice(0, -1);
+  return caseInsensitive ? p.toLowerCase() : p;
+}
+
+/** Same folder, or one inside the other. */
+export function foldersOverlap(a: string, b: string, caseInsensitive: boolean): boolean {
+  const x = normalizeFolder(a, caseInsensitive);
+  const y = normalizeFolder(b, caseInsensitive);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const within = (inner: string, outer: string) => inner.startsWith(outer.endsWith("/") ? outer : outer + "/");
+  return within(x, y) || within(y, x);
+}
+
+/** The tab already using `folder` (or a folder nested with it), if any. */
+export function findFolderConflict(
+  tabs: readonly Tab[],
+  folder: string,
+  caseInsensitive: boolean,
+  ignoreTabId?: string,
+): Tab | null {
+  return tabs.find((t) => t.id !== ignoreTabId && t.cwd && foldersOverlap(t.cwd, folder, caseInsensitive)) ?? null;
+}
