@@ -18,6 +18,7 @@ import { baseName, pickImageFile, promptTextForPaths, saveClipboardImage, saveIm
 import { Attachment, AttachmentKind, MAX_ATTACHMENTS, addAttachments, canSend, composeMessage, removeAttachment } from "./lib/attachments";
 import { AttachmentChips, ImageAttachButton } from "./components/ImageAttachButton";
 import { RESTART_DELAY_MS, decideAfterSelfUpdate } from "./lib/selfUpdateRestart";
+import { DEFAULT_SESSION_ID, SessionStatusEvent, isForSession } from "./lib/sessions";
 import { loadLangChoice, parseLangChoice, resolveLang, saveLangChoice, setCurrentLang, type LangChoice } from "./lib/language";
 import { stopAndWaitForExit } from "./lib/ptyHandover";
 import {
@@ -334,15 +335,19 @@ function App() {
   // (Assigned below, once useChatSession has run.) Lets a prompt answered
   // in the terminal also dismiss the GUI's prompt panel.
   const noteTerminalInputRef = useRef<(data: string) => void>(() => {});
+  // The session (tab) the terminal, input bar and install/update flows act
+  // on. One tab for now ("main"); the tab UI makes this switchable
+  // (lib/sessions.ts, app_specs.md 5.7.4).
+  const activeSessionId = DEFAULT_SESSION_ID;
   const handleTerminalInput = useCallback((data: string) => {
     noteTerminalInputRef.current(data);
-    invoke("write_to_pty", { input: data });
-  }, []);
+    invoke("write_to_pty", { input: data, sessionId: activeSessionId });
+  }, [activeSessionId]);
 
   // Keeps the PTY's reported window size in sync with what xterm.js is actually rendering.
   const handleTerminalResize = useCallback((size: { rows: number; cols: number }) => {
     terminalSizeRef.current = size;
-    invoke("resize_pty", size).catch(() => {
+    invoke("resize_pty", { ...size, sessionId: activeSessionId }).catch(() => {
       // No active session yet - the size will be used when one starts.
     });
 
@@ -370,6 +375,7 @@ function App() {
     respondToPrompt,
     changeCwd,
   } = useChatSession({
+    sessionId: activeSessionId,
     command: shellPath,
     defaultArgs: shellArgs.trim() ? shellArgs.split(" ") : [],
     initialCwd: "",
@@ -423,7 +429,7 @@ function App() {
     const unsub = subscribeToTauriEvent(
       listen("menu-force-kill-requested", async () => {
         try {
-          await invoke("force_kill_pty");
+          await invoke("force_kill_pty", { sessionId: activeSessionId });
         } catch (e) {
           console.error("Failed to force kill PTY:", e);
         }
@@ -715,7 +721,9 @@ function App() {
   // Listen to PTY termination during installation and updates
   useEffect(() => {
     const unsubStatus = subscribeToTauriEvent(
-      listen<string>("pty-status", (event) => {
+      listen<SessionStatusEvent>("session-status", (raw) => {
+        if (!isForSession(raw.payload, activeSessionId)) return;
+        const event = { payload: raw.payload.status };
         // An agent-deck update's session can also end with "error" (the
         // pipe broke instead of closing, Windows): it's over either way --
         // check whether it installed and restart.
@@ -810,6 +818,7 @@ function App() {
         cwd: appBundleDir,
         rows: terminalSizeRef.current?.rows,
         cols: terminalSizeRef.current?.cols,
+        sessionId: activeSessionId,
       });
     } catch (e: any) {
       setIsInstalling(false);
@@ -823,8 +832,10 @@ function App() {
   const handOverPty = () =>
     stopAndWaitForExit({
       isRunning: status === "running",
-      stop: () => invoke("stop_pty"),
-      onStatus: (cb) => listen<string>("pty-status", (e) => cb(e.payload)),
+      stop: () => invoke("stop_pty", { sessionId: activeSessionId }),
+      onStatus: (cb) => listen<SessionStatusEvent>("session-status", (e) => {
+        if (isForSession(e.payload, activeSessionId)) cb(e.payload.status);
+      }),
     });
 
   // Trigger update via PTY. This reuses the same always-visible main
@@ -848,6 +859,7 @@ function App() {
         cwd: appBundleDir,
         rows: terminalSizeRef.current?.rows,
         cols: terminalSizeRef.current?.cols,
+        sessionId: activeSessionId,
       });
     } catch (e: any) {
       agentUpdateActiveRef.current = false;
@@ -878,6 +890,7 @@ function App() {
         args: updateCmd.args,
         rows: terminalSizeRef.current?.rows,
         cols: terminalSizeRef.current?.cols,
+        sessionId: activeSessionId,
       });
     } catch (e: any) {
       selfUpdateActiveRef.current = false;

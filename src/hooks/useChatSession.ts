@@ -7,6 +7,7 @@ import { createSingleFlight } from "../lib/singleFlight";
 import { getLang } from "../lib/language";
 import { subscribeToTauriEvent } from "../lib/tauriListener";
 import { isTauri, webClient } from "../lib/webClient";
+import { DEFAULT_SESSION_ID, SessionOutputEvent, SessionPromptEvent, SessionStatusEvent, isForSession } from "../lib/sessions";
 
 export interface PtyPrompt {
   prompt_type: "confirm" | "path" | "login";
@@ -19,6 +20,9 @@ export interface PtyPrompt {
 }
 
 export interface UseChatSessionOptions {
+  /** Which backend session (tab) this hook drives; "main" = the default
+   *  single session (lib/sessions.ts). */
+  sessionId?: string;
   command: string;
   defaultArgs?: string[];
   initialCwd?: string;
@@ -36,6 +40,7 @@ export interface UseChatSessionOptions {
 }
 
 export function useChatSession({
+  sessionId = DEFAULT_SESSION_ID,
   command,
   defaultArgs = [],
   initialCwd = "",
@@ -246,6 +251,7 @@ export function useChatSession({
           cwd: targetCwd || null,
           rows: size?.rows,
           cols: size?.cols,
+          sessionId,
         });
         setStatus("running");
         setCwd(targetCwd);
@@ -259,7 +265,7 @@ export function useChatSession({
         );
       }
     },
-    [command, defaultArgs, showStatusMessage, getTerminalSize, preLaunchCommand, preLaunchArgs, preLaunchRequired]
+    [sessionId, command, defaultArgs, showStatusMessage, getTerminalSize, preLaunchCommand, preLaunchArgs, preLaunchRequired]
   );
 
   const startSession = useCallback(
@@ -288,7 +294,7 @@ export function useChatSession({
       return;
     }
     try {
-      await invoke("stop_pty");
+      await invoke("stop_pty", { sessionId });
       setStatus("idle");
       showStatusMessage(
         isJa ? "ユーザーによってセッションが停止されました。" : "Session stopped by user."
@@ -296,7 +302,7 @@ export function useChatSession({
     } catch (e: any) {
       console.error("Failed to stop PTY:", e);
     }
-  }, [showStatusMessage]);
+  }, [sessionId, showStatusMessage]);
 
   // Send input query to PTY
   const sendMessage = useCallback(async (text: string) => {
@@ -306,11 +312,11 @@ export function useChatSession({
       return;
     }
     try {
-      await invoke("write_to_pty", { input: text + "\r" });
+      await invoke("write_to_pty", { input: text + "\r", sessionId });
     } catch (e: any) {
       console.error("Failed to send message to PTY:", e);
     }
-  }, []);
+  }, [sessionId]);
 
   // Respond to an interactive PTY prompt (button clicks or path selection)
   const respondToPrompt = useCallback(async (responseText: string, rawInput?: string) => {
@@ -325,11 +331,11 @@ export function useChatSession({
     }
 
     try {
-      await invoke("write_to_pty", { input: inputToSend });
+      await invoke("write_to_pty", { input: inputToSend, sessionId });
     } catch (e: any) {
       console.error("Failed to write response to PTY:", e);
     }
-  }, [markPromptAnswered]);
+  }, [sessionId, markPromptAnswered]);
 
   // Change working directory and restart PTY
   const changeCwd = useCallback(
@@ -372,22 +378,26 @@ export function useChatSession({
       };
     }
 
-    // Tauri Desktop Listeners
+    // Tauri Desktop Listeners: this session's events only (pty.rs
+    // session-output / session-prompt / session-status carry the id).
     const unsubOutput = subscribeToTauriEvent(
-      listen<{ data: number[] }>("pty-output", (event) => {
+      listen<SessionOutputEvent>("session-output", (event) => {
+        if (!isForSession(event.payload, sessionId)) return;
         onRawOutput?.(new Uint8Array(event.payload.data));
       })
     );
 
     const unsubPrompt = subscribeToTauriEvent(
-      listen<PtyPrompt>("pty-prompt", (event) => {
-        showPromptUnlessEcho(event.payload);
+      listen<SessionPromptEvent<PtyPrompt>>("session-prompt", (event) => {
+        if (!isForSession(event.payload, sessionId)) return;
+        showPromptUnlessEcho(event.payload.prompt);
       })
     );
 
     const unsubStatus = subscribeToTauriEvent(
-      listen<string>("pty-status", (event) => {
-        if (event.payload === "terminated") {
+      listen<SessionStatusEvent>("session-status", (event) => {
+        if (!isForSession(event.payload, sessionId)) return;
+        if (event.payload.status === "terminated") {
           setStatus("idle");
         }
       })
@@ -398,9 +408,10 @@ export function useChatSession({
       unsubStatus();
       unsubPrompt();
     };
-  }, [onRawOutput, showPromptUnlessEcho]);
+  }, [sessionId, onRawOutput, showPromptUnlessEcho]);
 
   return {
+    sessionId,
     cwd,
     status,
     isStarting,
