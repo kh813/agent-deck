@@ -45,3 +45,10 @@ def test_app_writes_the_same_files_back():
     rs = (ROOT / "src-tauri" / "src" / "root_files.rs").read_text(encoding="utf-8")
     assert 'rel: "AGENTS.md", bytes: include_bytes!("../../release/AGENTS.release.md")' in rs
     assert 'rel: "CLAUDE.md", bytes: include_bytes!("../../release/CLAUDE.release.md")' in rs
+
+
+def test_release_files_are_lf_on_every_checkout():
+    attrs = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "release/*.release.md text eol=lf" in attrs
+    for name in ("AGENTS.release.md", "CLAUDE.release.md"):
+        assert b"\r" not in (RELEASE / name).read_bytes(), name

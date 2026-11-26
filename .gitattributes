@@ -20,3 +20,6 @@
 # CRLF keeps them consistent with the .bat convention above, though `type`
 # itself isn't sensitive to this the way cmd.exe's own parser is.
 messages/*.txt  text  eol=crlf
+# Shipped as-is at the release root and embedded by root_files.rs: the
+# same bytes on every platform (a CRLF checkout broke the CLAUDE.md check).
+release/*.release.md text eol=lf
