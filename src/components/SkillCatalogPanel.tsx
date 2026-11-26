@@ -35,6 +35,7 @@ import {
   pickExportPath,
   pickImportFile,
   sortLocal,
+  splitLocal,
 } from "../lib/skillCatalog";
 import { EditorMode, SkillEditor } from "./SkillEditor";
 
@@ -47,6 +48,8 @@ interface Props {
   onAskAgent?: (prompt: string) => boolean;
 }
 
+type Tab = "catalog" | "mine" | "installed";
+const TAB_LABEL = { catalog: "tabCatalog", mine: "tabMine", installed: "tabInstalled" } as const;
 type Notice = { kind: "info" | "error" | "ok"; text: string } | null;
 type Editor = { mode: EditorMode; doc?: SkillDoc } | null;
 
@@ -55,7 +58,7 @@ const CATALOG_ACTIONS: ReadonlySet<LocalAction> = new Set(["share", "reshare", "
 
 export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: Props) {
   const T = useCallback((k: Parameters<typeof catalogText>[1], v?: Record<string, string>) => catalogText(lang, k, v), [lang]);
-  const [tab, setTab] = useState<"catalog" | "mine">("catalog");
+  const [tab, setTab] = useState<Tab>("catalog");
   const [query, setQuery] = useState("");
   const [owner, setOwner] = useState("");
   const [catalog, setCatalog] = useState<CatalogSkill[] | null>(null);
@@ -120,7 +123,7 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
 
   useEffect(() => {
     if (tab === "catalog" && catalog === null && !noCatalog) void loadCatalog();
-    if (tab === "mine" && local === null) void loadLocal();
+    if (tab !== "catalog" && local === null) void loadLocal();
   }, [tab, catalog, local, noCatalog, loadCatalog, loadLocal]);
 
   // Rebuild so the agents see the change, then refresh both lists.
@@ -180,6 +183,7 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
       r = await callImport(path, true);
     }
     if (!r || "exists" in r) return;
+    setTab("mine");
     if (!(await finish("import-file"))) return;
     const shadowed = r.shadowed.length ? T("importShadowed", { names: r.shadowed.join(", ") }) : "";
     setNotice({ kind: "ok", text: T("importedFiles", { names: r.names.join(", ") }) + shadowed });
@@ -250,7 +254,7 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
     () => (catalog ? filterSkills(filterByOwner(catalog, owner), query) : null),
     [catalog, owner, query],
   );
-  const shownLocal = useMemo(() => (local ? filterSkills(local, query) : null), [local, query]);
+  const shownLocal = useMemo(() => (local ? splitLocal(filterSkills(local, query)) : null), [local, query]);
   const ownerLabel = (o: string) => (o === AUTO_SYNC_OWNER ? T("ownerDefault") : o);
 
   const disabled = busy !== null;
@@ -258,7 +262,44 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
     fontSize: "0.7rem", padding: "1px 6px", borderRadius: "4px", background: bg, color: fg, marginLeft: "6px",
   });
   const smallBtn = { padding: "4px 10px", fontSize: "0.75rem" } as const;
-  const listCount = tab === "catalog" ? shownCatalog?.length : shownLocal?.length;
+  const listCount = tab === "catalog" ? shownCatalog?.length
+    : tab === "mine" ? shownLocal?.mine.length
+    : shownLocal ? shownLocal.added.length + shownLocal.builtin.length : undefined;
+
+  const sectionHead = { fontSize: "0.8rem", fontWeight: 600, color: "var(--text-muted)", margin: "6px 0 2px" } as const;
+  const localCard = (s: LocalSkill) => (
+    <div key={`${s.root}/${s.name}`} className="catalog-card" style={{
+      border: "1px solid var(--input-border)", borderRadius: "8px", padding: "10px 12px",
+      opacity: s.enabled ? 1 : 0.6,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+        <div style={{ minWidth: 0 }}>
+          <strong>{s.name}</strong>
+          {s.owner && (s.root === "catalog" || !s.mine) && (
+            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginLeft: "8px" }}>{T("authorBy", { owner: s.owner })}</span>
+          )}
+          {s.auto_sync && <span style={tagStyle("rgba(148,163,184,0.2)", "var(--text-muted)")}>{T("autoSyncTag")}</span>}
+          {s.shared && <span style={tagStyle("rgba(168,85,247,0.15)", "#a855f7")}>{T("sharedTag")}</span>}
+          {!s.enabled && <span style={tagStyle("rgba(239,68,68,0.12)", "#ef4444")}>{T("disabledTag")}</span>}
+        </div>
+        <div style={{ display: "flex", gap: "6px", flexShrink: 0, flexWrap: "wrap" }}>
+          {localActions(s).filter((a) => !noCatalog || !CATALOG_ACTIONS.has(a)).map((a) => (
+            <button key={a} className={a === "share" || a === "edit" ? "primary" : "secondary"} disabled={disabled}
+              style={{ ...smallBtn, ...(DANGER.has(a) ? { color: "#ef4444" } : {}) }}
+              onClick={() => void onLocalAction(s, a)}>
+              {T(a)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{
+        fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "6px",
+        display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
+      }}>
+        {s.description}
+      </div>
+    </div>
+  );
 
   return (
     <div className="skill-catalog-overlay" style={{
@@ -301,10 +342,10 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
         ) : (
           <>
             <div style={{ display: "flex", gap: "8px", marginBottom: "12px", flexWrap: "wrap" }}>
-              {(noCatalog ? (["mine"] as const) : (["catalog", "mine"] as const)).map((k) => (
+              {((noCatalog ? ["mine", "installed"] : ["catalog", "mine", "installed"]) as Tab[]).map((k) => (
                 <button key={k} className={tab === k ? "primary" : "secondary"} disabled={disabled}
                   onClick={() => setTab(k)} style={{ padding: "6px 14px" }}>
-                  {T(k === "catalog" ? "tabCatalog" : "tabMine")}
+                  {T(TAB_LABEL[k])}
                 </button>
               ))}
               {tab === "mine" && (
@@ -352,7 +393,7 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
             )}
 
             <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "8px" }}>
-              {listCount === 0 && <div style={{ color: "var(--text-muted)" }}>{T("empty")}</div>}
+              {listCount === 0 && (tab !== "mine" || query) && <div style={{ color: "var(--text-muted)" }}>{T("empty")}</div>}
               {tab === "catalog" && shownCatalog?.map((s) => {
                 const action = catalogCardAction(s);
                 const key = `${s.owner}/${s.name}`;
@@ -400,39 +441,30 @@ export function SkillCatalogPanel({ lang, onClose, onBusyChange, onAskAgent }: P
                 );
               })}
 
-              {tab === "mine" && shownLocal?.map((s) => (
-                <div key={`${s.root}/${s.name}`} className="catalog-card" style={{
-                  border: "1px solid var(--input-border)", borderRadius: "8px", padding: "10px 12px",
-                  opacity: s.enabled ? 1 : 0.6,
-                }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                    <div style={{ minWidth: 0 }}>
-                      <strong>{s.name}</strong>
-                      {s.mine && <span style={tagStyle("rgba(59,130,246,0.15)", "#3b82f6")}>{T("mine")}</span>}
-                      {s.root === "catalog" && <span style={tagStyle("rgba(16,185,129,0.15)", "#10b981")}>{T("imported")}{s.owner ? ` · ${s.owner}` : ""}</span>}
-                      {s.auto_sync && <span style={tagStyle("rgba(148,163,184,0.2)", "var(--text-muted)")}>{T("autoSyncTag")}</span>}
-                      {s.root === "common" && <span style={tagStyle("rgba(148,163,184,0.2)", "var(--text-muted)")}>{T("builtinTag")}</span>}
-                      {s.shared && <span style={tagStyle("rgba(168,85,247,0.15)", "#a855f7")}>{T("sharedTag")}</span>}
-                      {!s.enabled && <span style={tagStyle("rgba(239,68,68,0.12)", "#ef4444")}>{T("disabledTag")}</span>}
-                    </div>
-                    <div style={{ display: "flex", gap: "6px", flexShrink: 0, flexWrap: "wrap" }}>
-                      {localActions(s).filter((a) => !noCatalog || !CATALOG_ACTIONS.has(a)).map((a) => (
-                        <button key={a} className={a === "share" || a === "edit" ? "primary" : "secondary"} disabled={disabled}
-                          style={{ ...smallBtn, ...(DANGER.has(a) ? { color: "#ef4444" } : {}) }}
-                          onClick={() => void onLocalAction(s, a)}>
-                          {T(a)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div style={{
-                    fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "6px",
-                    display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
-                  }}>
-                    {s.description}
-                  </div>
-                </div>
-              ))}
+              {tab === "mine" && shownLocal && (
+                shownLocal.mine.length ? shownLocal.mine.map(localCard)
+                  : !query && <div style={{ color: "var(--text-muted)" }}>{T("mineEmpty")}</div>
+              )}
+
+              {tab === "installed" && shownLocal && (
+                <>
+                  {shownLocal.added.length > 0 && (
+                    <section aria-label={T("sectionAdded")} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      <div style={sectionHead}>{T("sectionAdded")} ({shownLocal.added.length})</div>
+                      {shownLocal.added.map(localCard)}
+                    </section>
+                  )}
+                  {shownLocal.builtin.length > 0 && (
+                    // Many and read-only: folded unless you're searching.
+                    <details open={!!query} aria-label={T("sectionBuiltin")}>
+                      <summary style={{ ...sectionHead, cursor: "pointer" }}>{T("sectionBuiltin")} ({shownLocal.builtin.length})</summary>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }}>
+                        {shownLocal.builtin.map(localCard)}
+                      </div>
+                    </details>
+                  )}
+                </>
+              )}
             </div>
           </>
         )}

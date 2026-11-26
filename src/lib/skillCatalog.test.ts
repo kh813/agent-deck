@@ -209,3 +209,20 @@ describe("export / import helpers", () => {
     expect(t).toEqual([{ name: "a", root: "personal" }, { name: "b", root: "personal" }]);
   });
 });
+
+describe("splitLocal", () => {
+  it("My Skills = personal; Installed = added from catalog + built-in", () => {
+    const r = m.splitLocal([
+      loc({ name: "b" }), loc({ name: "a", mine: false, owner: "taro" }),
+      loc({ name: "c", root: "catalog", mine: false }), loc({ name: "d", root: "common", mine: false }),
+    ]);
+    expect(r.mine.map((s) => s.name)).toEqual(["b", "a"]); // yours first, then others' files
+    expect(r.added.map((s) => s.name)).toEqual(["c"]);
+    expect(r.builtin.map((s) => s.name)).toEqual(["d"]);
+  });
+  it("catalog button wording: 追加 / 最新版に更新", () => {
+    expect(m.catalogText("ja", "import")).toBe("追加");
+    expect(m.catalogText("ja", "reimport")).toBe("最新版に更新");
+    expect(m.catalogText("en", "tabInstalled")).toBe("Installed");
+  });
+});

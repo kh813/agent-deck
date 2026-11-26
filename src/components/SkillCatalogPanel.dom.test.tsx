@@ -104,6 +104,12 @@ async function openMine() {
   await idle();
 }
 
+async function openInstalled() {
+  await openMine();
+  fireEvent.click(screen.getByRole("button", { name: "インストール済み" }));
+  await screen.findByText("expense-check", { selector: "strong" });
+}
+
 beforeEach(() => {
   calls.length = 0;
   dialogCalls.length = 0;
@@ -159,7 +165,7 @@ describe("catalog tab", () => {
     render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
     await screen.findByText("expense-check");
     await idle();
-    fireEvent.click(btnIn(card("expense-check"), "インポート"));
+    fireEvent.click(btnIn(card("expense-check"), "追加"));
     await screen.findByText(/完了しました/);
     await idle();
     expect(calls.find((c) => c.op === "import")!.args).toEqual(["taro/expense-check"]);
@@ -168,25 +174,75 @@ describe("catalog tab", () => {
   });
 });
 
-describe("my skills tab: buttons per kind", () => {
-  it("own / shared / imported / org / built-in", async () => {
+describe("tabs: マイスキル = yours only, インストール済み = added + built-in", () => {
+  const labels = (n: string) => [...card(n).querySelectorAll("button")].map((b) => b.textContent);
+  it("three tabs in order", async () => {
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await screen.findByText("expense-check");
+    const tabs = screen.getAllByRole("button").map((b) => b.textContent).filter((t) => ["カタログ", "マイスキル", "インストール済み"].includes(t!));
+    expect(tabs).toEqual(["カタログ", "マイスキル", "インストール済み"]);
+  });
+  it("マイスキル: only skills-personal/, with its toolbar", async () => {
     render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
     await openMine();
-    const labels = (n: string) => [...card(n).querySelectorAll("button")].map((b) => b.textContent);
     expect(labels("my-skill")).toEqual(["編集", "カタログに共有", "無効にする", "エクスポート", "削除"]);
     expect(labels("my-shared")).toEqual(["編集", "カタログの版を更新", "共有を取り下げ", "無効にする", "エクスポート", "削除"]);
+    for (const other of ["expense-check", "slide-generator", "setup"]) {
+      expect(screen.queryByText(other, { selector: "strong" })).toBeNull();
+    }
+    expect(screen.getByRole("button", { name: "＋ 新しいスキル" })).toBeTruthy();
+    expect(screen.getByText("2 件")).toBeTruthy();
+  });
+  it("someone else's skill in マイスキル shows its author", async () => {
+    local.push({ name: "from-taro", description: "x", root: "personal", enabled: true, owner: "taro", mine: false, shared: false });
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openMine();
+    expect(card("from-taro").textContent).toContain("作成: taro");
+    expect(card("my-skill").textContent).not.toContain("作成:");
+  });
+  it("empty マイスキル explains how to start", async () => {
+    local = local.filter((x) => x.root !== "personal");
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await screen.findByText("expense-check");
+    await idle();
+    fireEvent.click(screen.getByRole("button", { name: "マイスキル" }));
+    await screen.findByText(/まだ自分のスキルはありません/);
+  });
+  it("インストール済み: sections, buttons; no own skills, no toolbar", async () => {
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openInstalled();
+    expect(screen.getByText("カタログから追加したスキル (2)")).toBeTruthy();
+    expect(screen.getByText("標準スキル (1)")).toBeTruthy();
+    expect(screen.queryByText("my-skill", { selector: "strong" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "＋ 新しいスキル" })).toBeNull();
+    expect(card("expense-check").textContent).toContain("作成: taro");
+    expect(card("setup").closest("details")).not.toBeNull(); // built-ins folded
+    expect(screen.getByText("3 件")).toBeTruthy();
     expect(labels("expense-check")).toEqual(["中身を見る", "無効にする", "エクスポート", "アンインストール"]);
     expect(labels("slide-generator")).toEqual(["中身を見る", "無効にする", "エクスポート"]);
     expect(labels("setup")).toEqual(["中身を見る"]);
     expect(card("slide-generator").textContent).toContain("全員に配布");
   });
 
-  it("the filter box works on this tab too", async () => {
+  it("the filter box works on these tabs too", async () => {
     render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
     await openMine();
     fireEvent.change(screen.getByPlaceholderText(/名前・作成者・説明/), { target: { value: "shared" } });
     expect(screen.getByText("my-shared")).toBeTruthy();
     expect(screen.queryByText("my-skill", { selector: "strong" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "インストール済み" }));
+    fireEvent.change(screen.getByPlaceholderText(/名前・作成者・説明/), { target: { value: "taro" } });
+    expect(screen.getByText("expense-check", { selector: "strong" })).toBeTruthy();
+    expect(screen.queryByText("setup", { selector: "strong" })).toBeNull();
+  });
+
+  it("a search opens the folded built-in section", async () => {
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openInstalled();
+    const det = () => card("setup").closest("details") as HTMLDetailsElement;
+    expect(det().open).toBe(false);
+    fireEvent.change(screen.getByPlaceholderText(/名前・作成者・説明/), { target: { value: "setup" } });
+    expect(det().open).toBe(true);
   });
 });
 
@@ -307,7 +363,7 @@ describe("edit", () => {
 
   it("imported/built-in skills open read-only", async () => {
     render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
-    await openMine();
+    await openInstalled();
     fireEvent.click(btnIn(card("expense-check"), "中身を見る"));
     const body = (await screen.findByLabelText("手順（AI への指示）")) as HTMLTextAreaElement;
     expect(body.readOnly).toBe(true);
@@ -336,7 +392,7 @@ describe("share / delete / uninstall", () => {
     ["my-skill", "無効にする", ["disable", "rebuild", "local"]],
   ])("%s: %s -> %j after confirming", async (name, label, expected) => {
     render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
-    await openMine();
+    await (name === "expense-check" ? openInstalled() : openMine());
     const n = calls.length;
     fireEvent.click(btnIn(card(name), label));
     await waitFor(() => expect(opsSince(n)).toEqual(expected));
@@ -350,7 +406,7 @@ describe("share / delete / uninstall", () => {
     ["my-skill", "カタログに共有"],
   ])("%s: %s does nothing when not confirmed", async (name, label) => {
     render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
-    await openMine();
+    await (name === "expense-check" ? openInstalled() : openMine());
     const n = calls.length;
     answers = [false];
     await act(async () => fireEvent.click(btnIn(card(name), label)));
@@ -402,6 +458,7 @@ describe("public install (no org catalog)", () => {
     await screen.findByText("my-skill", { selector: "strong" });
     await idle();
     expect(screen.queryByRole("button", { name: "カタログ" })).toBeNull();
+    expect(screen.getByRole("button", { name: "インストール済み" })).toBeTruthy();
     expect(screen.getByText(/共有スキルカタログがありません/)).toBeTruthy();
     const labels = (n: string) => [...card(n).querySelectorAll("button")].map((b) => b.textContent);
     expect(labels("my-skill")).toEqual(["編集", "無効にする", "エクスポート", "削除"]);
@@ -428,7 +485,7 @@ describe("export / import files", () => {
   it("export all = your own skills in one file", async () => {
     render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
     await openMine();
-    fireEvent.click(screen.getByRole("button", { name: "📤 自作スキルをすべてエクスポート" }));
+    fireEvent.click(screen.getByRole("button", { name: "📤 マイスキルをすべてエクスポート" }));
     await screen.findByText(/保存しました/);
     const exp = calls.find((c) => c.op === "export")!;
     expect((exp.input as { skills: { name: string }[] }).skills.map((x) => x.name)).toEqual(["my-shared", "my-skill"]);
