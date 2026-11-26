@@ -11,6 +11,7 @@ Run:
 
 import json
 import subprocess
+import os
 import sys
 import zipfile
 from pathlib import Path
@@ -1049,3 +1050,55 @@ class TestNewestPrerelease:
     def test_package_release_resolves_through_it(self):
         src = (Path(__file__).resolve().parents[1] / "scripts" / "tools" / "package_release.py").read_text(encoding="utf-8")
         assert "su._fetch_release(channel)" in src
+
+
+class TestRealFileLocks:
+    """The same update with files ACTUALLY held open (no simulated errors).
+    The Windows CI is the one that matters: there, an open file makes its
+    folder immovable and itself undeletable -- the real cause of the
+    half-finished update (2026-11-26). On macOS these just pass."""
+
+    def _install(self, project_root, tmp_path):
+        py = project_root / "python"
+        files = {
+            "scripts/setup/skills_catalog.py": "old",
+            "scripts/setup/stale_in_use.py": "stale",
+            "scripts/automation/ChromeUserData/Default/Cookies": "keep",
+            "scripts/automation/logs/run.log": "keep",
+            "skills-personal/mine/SKILL.md": "keep",
+        }
+        for rel, text in files.items():
+            (py / rel).parent.mkdir(parents=True, exist_ok=True)
+            (py / rel).write_text(text, encoding="utf-8")
+        st = tmp_path / "staging"
+        for rel in ("scripts/setup/skills_catalog.py", "skills/translator/SKILL.md"):
+            (st / "python" / rel).parent.mkdir(parents=True, exist_ok=True)
+            (st / "python" / rel).write_text("new", encoding="utf-8")
+        return py, st
+
+    def test_update_succeeds_while_chrome_profile_and_log_are_open(self, project_root, tmp_path):
+        py, st = self._install(project_root, tmp_path)
+        cookies = open(py / "scripts/automation/ChromeUserData/Default/Cookies", "rb")
+        log = open(py / "scripts/automation/logs/run.log", "ab")
+        stale = open(py / "scripts/setup/stale_in_use.py", "rb")
+        try:
+            su._install_python_payload(st)  # must not raise
+            assert (py / "scripts/setup/skills_catalog.py").read_text(encoding="utf-8") == "new"
+            assert (py / "skills/translator/SKILL.md").exists()
+            assert (py / "skills-personal/mine/SKILL.md").read_text(encoding="utf-8") == "keep"
+        finally:
+            cookies.close(); log.close(); stale.close()
+        assert (py / "scripts/automation/ChromeUserData/Default/Cookies").read_text(encoding="utf-8") == "keep"
+        assert (py / "scripts/automation/logs/run.log").read_text(encoding="utf-8") == "keep"
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows file-locking semantics")
+    def test_windows_really_refuses_to_move_a_folder_with_an_open_file(self, tmp_path):
+        """Proof the test above exercises the real failure: the old update
+        moved this folder aside, and Windows says no while a file is open."""
+        folder = tmp_path / "ChromeUserData"
+        (folder / "Default").mkdir(parents=True)
+        (folder / "Default" / "Cookies").write_text("x")
+        with open(folder / "Default" / "Cookies", "rb"):
+            with pytest.raises(OSError):
+                os.rename(folder, tmp_path / "moved")
+        os.rename(folder, tmp_path / "moved")  # fine once closed
