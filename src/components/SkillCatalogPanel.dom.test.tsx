@@ -636,3 +636,37 @@ describe("catalog: cached list first, fresh one in the background", () => {
     expect(select.options[2].value).toBe("taro");
   });
 });
+
+describe("new-skill template language", () => {
+  const bodyOf = () => (screen.getByLabelText(/手順（AI への指示）|Instructions \(for the AI\)/) as HTMLTextAreaElement).value;
+
+  it("Japanese UI -> Japanese template; English UI -> English template", async () => {
+    render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openMine();
+    fireEvent.click(screen.getByRole("button", { name: "＋ 新しいスキル" }));
+    expect(bodyOf()).toContain("## 概要・目的");
+    cleanup();
+    render(<SkillCatalogPanel lang="en" onClose={() => {}} />);
+    await screen.findByText("expense-check");
+    await idle();
+    fireEvent.click(screen.getByRole("button", { name: "My Skills" }));
+    await screen.findByText("my-skill", { selector: "strong" });
+    await idle();
+    fireEvent.click(screen.getByRole("button", { name: "+ New skill" }));
+    expect(bodyOf()).toContain("## Purpose");
+    expect(bodyOf()).not.toContain("概要");
+  });
+
+  it("switching the language with the form open swaps an untouched template, keeps edits", async () => {
+    const { rerender } = render(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await openMine();
+    fireEvent.click(screen.getByRole("button", { name: "＋ 新しいスキル" }));
+    fireEvent.change(screen.getByLabelText("スキル名"), { target: { value: "weekly" } });
+    rerender(<SkillCatalogPanel lang="en" onClose={() => {}} />);
+    await waitFor(() => expect(bodyOf().startsWith("# weekly\n\n## Purpose")).toBe(true));
+    fireEvent.change(screen.getByLabelText("Instructions (for the AI)"), { target: { value: "my own steps" } });
+    rerender(<SkillCatalogPanel lang="ja" onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText("手順（AI への指示）")).toBeTruthy());
+    expect(bodyOf()).toBe("my own steps");
+  });
+});

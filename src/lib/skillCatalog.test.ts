@@ -275,3 +275,13 @@ describe("script_outdated", () => {
     expect(m.describeError("en", { code: "script_outdated", message: "/x/skills_catalog.py" })).toContain("update");
   });
 });
+
+describe("template language follows the display language", () => {
+  it("untouched template switches language; edited text is kept", () => {
+    const ja = m.skillTemplate("ja", "weekly");
+    expect(m.relocalizeTemplate(ja, "en", "weekly")).toBe(m.skillTemplate("en", "weekly"));
+    expect(m.relocalizeTemplate(m.skillTemplate("en", "weekly"), "ja", "weekly")).toBe(ja);
+    expect(m.relocalizeTemplate(ja + "追記", "en", "weekly")).toBe(ja + "追記");
+    expect(m.relocalizeTemplate(ja, "ja", "weekly")).toBe(ja);
+  });
+});

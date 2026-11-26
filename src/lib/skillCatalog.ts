@@ -579,3 +579,11 @@ export function splitLocal(skills: readonly LocalSkill[]) {
   const by = (root: LocalSkill["root"]) => sortLocal(skills.filter((s) => s.root === root));
   return { mine: by("personal"), added: by("catalog"), builtin: by("common") };
 }
+
+/** The untouched template, re-written in the current display language
+ *  (language switched while the new-skill form is open). Edited bodies
+ *  are returned unchanged. */
+export function relocalizeTemplate(body: string, lang: Lang, name: string): string {
+  const other: Lang = lang === "ja" ? "en" : "ja";
+  return body === skillTemplate(other, name) ? skillTemplate(lang, name) : body;
+}

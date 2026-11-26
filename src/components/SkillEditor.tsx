@@ -2,7 +2,7 @@
 // a raw file editor: name (new skills only), description (the frontmatter
 // line the AI uses to decide when to run the skill) and the instructions
 // body. Other frontmatter (author/email) is kept by the script on save.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Lang } from "../utils/i18n";
 import {
   DraftProblem,
@@ -11,6 +11,7 @@ import {
   catalogText,
   confirmDialog,
   draftProblem,
+  relocalizeTemplate,
   retitleTemplate,
   skillTemplate,
 } from "../lib/skillCatalog";
@@ -46,6 +47,14 @@ export function SkillEditor({ lang, mode, doc, busy, onSave, onCancel, onAskAgen
   const [draft, setDraft] = useState<SkillDraft>(start);
   const [problem, setProblem] = useState<DraftProblem>(null);
   const readOnly = mode === "view";
+  // New skill: the template follows the display language (until edited).
+  useEffect(() => {
+    if (mode !== "new") return;
+    setDraft((d) => {
+      const body = relocalizeTemplate(d.body, lang, d.name);
+      return body === d.body ? d : { ...d, body };
+    });
+  }, [lang, mode]);
   const set = (k: keyof SkillDraft) => (e: { target: { value: string } }) => {
     if (k === "name") {
       const name = e.target.value.trim().toLowerCase();
