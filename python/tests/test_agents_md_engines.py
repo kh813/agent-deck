@@ -3,7 +3,7 @@ the release ZIP's `@AGENTS.md` CLAUDE.md stub), so its instructions must
 work for either engine."""
 from pathlib import Path
 
-AGENTS_MD = (Path(__file__).resolve().parents[2] / "AGENTS.md").read_text(encoding="utf-8")
+AGENTS_MD = (Path(__file__).resolve().parents[2] / "release" / "AGENTS.release.md").read_text(encoding="utf-8")
 
 
 def test_names_each_engines_question_tool():

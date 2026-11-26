@@ -102,3 +102,7 @@ python/skills/skill-catalog/catalog-index.md
 /files/*
 !/files/.gitkeep
 /tmp/
+
+# The product guardrails ship from release/*.release.md (release/README.md);
+# a real-named copy at the root would apply them to development here.
+/AGENTS.md

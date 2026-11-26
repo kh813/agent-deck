@@ -59,7 +59,7 @@ Git-tracked files and `.gitignore`d org-specific files share the same tree.
 
 ```
 agent-deck/
-├── AGENTS.md                     # agy 用プロジェクト指示（機密情報なし、公開・git 管理下。Claude Code 等も自動/@import で読める共通形式）
+├── AGENTS.md                     # 製品のガードレール（agy が直接読む。Claude Code は CLAUDE.md の @AGENTS.md 経由）。リポジトリでは release/AGENTS.release.md（下記）
 ├── CLAUDE.md                    # ★Claude Code 向け開発ルール（release へのタグ付けは要許可、等。git 除外・個人/組織ローカル）
 ├── README.md
 ├── config/
@@ -142,6 +142,9 @@ The launch-time catalog sync is skipped on installs without `config.toml` (the p
 標準スキルをカタログに一元化しない理由 / Why the standard skills aren't moved into the catalog: (1) 標準スキルは同梱の `python/scripts/` を呼ぶため、アプリと同じ版で配る必要がある / they call the bundled `python/scripts/`, so they must ship with the matching app version; (2) カタログ未設定・未認証・オフラインの環境でもスキルが使える / they work without a configured catalog, Google auth or network; (3) リリースのテスト→本番昇格の流れに乗る（`publish` は即時に全端末へ配信される）/ they go through the release test-then-promote flow, whereas `publish` reaches every machine immediately.
 
 #### スキルの書き方（agy / Claude Code 共通）/ Authoring Skills for Both Engines
+
+> **AGENTS.md / CLAUDE.md の置き場所 (v0.2.8-rc11〜)**: 製品のガードレールである `AGENTS.md` と `CLAUDE.md`（中身は `@AGENTS.md`）は、リポジトリでは `release/AGENTS.release.md` / `release/CLAUDE.release.md` という名前で管理し、リリース ZIP の直下に本来の名前でコピーします（`release.yml`。アプリも起動時に書き戻します）。リポジトリ直下に本来の名前で置くと、agent-deck 自体の開発中に agy がそのガードレールに従ってしまい開発ができないためです。
+> **Where AGENTS.md / CLAUDE.md live (v0.2.8-rc11+)**: the product's guardrails are kept as `release/AGENTS.release.md` / `release/CLAUDE.release.md` and copied to the release ZIP's root under their real names (release.yml; the app also writes them back at startup). Under their real names at the repo root, agy would apply them while developing agent-deck itself and block the work.
 
 SKILL.md の原本は 1 つで、エンジンごとの別版は作りません。インストール時の変換（`setup.py render_skill_md()`）と `AGENTS.md` の読み替えで、両エンジンに同じスキルを配ります。
 

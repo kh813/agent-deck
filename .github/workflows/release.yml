@@ -101,17 +101,17 @@ jobs:
           codesign --force --deep --sign - src-tauri/target/aarch64-apple-darwin/release/bundle/macos/agent-deck.app
           codesign --verify --deep --strict src-tauri/target/aarch64-apple-darwin/release/bundle/macos/agent-deck.app
 
-      - name: generate release CLAUDE.md stub
+      - name: put the product's AGENTS.md / CLAUDE.md at the root
         shell: bash
-        # AGENTS.md (agy's project instructions, see docs/admin_guide.md
-        # §15) is public/git-tracked and secret-free, so it ships as-is.
-        # This repo's own root CLAUDE.md is NOT this file -- it's
-        # gitignored, dev-of-agent-deck-itself rules, never shipped. This
-        # generated stub instead lets Claude Code pick up the same
-        # AGENTS.md instructions (via its own @-import support) when
-        # someone opens an extracted install/distribution with Claude Code
-        # (e.g. to author/test a skill's SKILL.md locally).
-        run: echo '@AGENTS.md' > CLAUDE.md
+        # The installed product's guardrails (agy reads AGENTS.md; Claude
+        # Code reads CLAUDE.md = `@AGENTS.md`). They live in release/ under
+        # non-standard names so they don't apply while developing agent-deck
+        # itself (release/README.md); this repo's own root CLAUDE.md is the
+        # gitignored dev rules and is replaced here, in the CI checkout only.
+        run: |
+          cp release/AGENTS.release.md AGENTS.md
+          cp release/CLAUDE.release.md CLAUDE.md
+          test "$(cat CLAUDE.md)" = "@AGENTS.md"
 
       - name: package macOS app to zip
         if: matrix.platform == 'macos-latest'

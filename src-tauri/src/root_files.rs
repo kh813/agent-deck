@@ -24,14 +24,12 @@ struct Shipped {
     windows_only: Option<bool>,
 }
 
-const CLAUDE_MD_STUB: &[u8] = b"@AGENTS.md\n";
-
 const SHIPPED: &[Shipped] = &[
     Shipped { rel: "agent_config.json", bytes: include_bytes!("../../agent_config.json"), windows_only: None },
-    Shipped { rel: "AGENTS.md", bytes: include_bytes!("../../AGENTS.md"), windows_only: None },
-    // The repo's own root CLAUDE.md is gitignored dev-only rules; what ships
-    // is release.yml's generated `@AGENTS.md` stub.
-    Shipped { rel: "CLAUDE.md", bytes: CLAUDE_MD_STUB, windows_only: None },
+    // The product's guardrails. Kept under release/ with non-standard names
+    // so they don't apply while developing agent-deck itself (release/README.md).
+    Shipped { rel: "AGENTS.md", bytes: include_bytes!("../../release/AGENTS.release.md"), windows_only: None },
+    Shipped { rel: "CLAUDE.md", bytes: include_bytes!("../../release/CLAUDE.release.md"), windows_only: None },
     Shipped { rel: "messages/no_python.txt", bytes: include_bytes!("../../messages/no_python.txt"), windows_only: None },
     Shipped { rel: "messages/setup_failed.txt", bytes: include_bytes!("../../messages/setup_failed.txt"), windows_only: None },
     Shipped { rel: "preflight.sh", bytes: include_bytes!("../../preflight.sh"), windows_only: Some(false) },
@@ -125,7 +123,7 @@ mod tests {
         assert!(written.contains(&"messages/no_python.txt".to_string()));
         assert!(!written.contains(&"preflight.bat".to_string()), "no .bat on macOS");
         assert_eq!(fs::read(root.join("preflight.sh")).unwrap(), include_bytes!("../../preflight.sh"));
-        assert_eq!(fs::read(root.join("CLAUDE.md")).unwrap(), CLAUDE_MD_STUB);
+        assert_eq!(fs::read(root.join("CLAUDE.md")).unwrap(), b"@AGENTS.md\n");
         assert_eq!(fs::read_to_string(root.join("agent_config.json.prev")).unwrap(), "{\"old\": true}");
         let _ = fs::remove_dir_all(&root);
     }
