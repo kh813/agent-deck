@@ -153,3 +153,23 @@ describe("skill catalog wiring", () => {
     expect(m![1]).toMatch(/if \(status !== "running"\) return false;\s*sendMessage\(prompt\);\s*return true;/);
   });
 });
+
+describe("input bar: images sent with the text", () => {
+  const app = readFileSync(join(__dirname, "..", "App.tsx"), "utf8");
+  it("Send composes text + attached image paths and clears both", () => {
+    const send = app.slice(app.indexOf("const handleSend = "), app.indexOf("const hasActivePrompt"));
+    expect(send).toContain("canSend(input, attachments)");
+    expect(send).toContain("sendMessage(composeMessage(input, attachments))");
+    expect(send).toContain("setAttachments([])");
+  });
+  it("the Send button is enabled by text OR images", () => {
+    expect(app).toMatch(/disabled=\{status !== "running" \|\| !canSend\(input, attachments\)\}/);
+  });
+  it("🖼 button sits before Send; chips above the input; pasting into the input attaches", () => {
+    const form = app.slice(app.indexOf('<form onSubmit={handleSend} className="input-form">'));
+    expect(form.indexOf("<AttachmentChips")).toBeLessThan(form.indexOf("<input"));
+    expect(form.indexOf("<ImageAttachButton")).toBeLessThan(form.indexOf('type="submit"'));
+    const paste = app.slice(app.indexOf("const handleInputPaste"), app.indexOf("const handleInputPaste") + 600);
+    expect(paste).toContain('addInputAttachments([path], "pasted")');
+  });
+});

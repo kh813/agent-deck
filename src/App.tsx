@@ -15,6 +15,8 @@ import "./App.css";
 import { loadSavedEngine, pickEngine, saveEngine } from "./lib/engineSelection";
 import { isNewerInstalled, isTestKind, isUpdateBannerVisible, lastCheckStore, shouldApplyBackgroundResult, startUpdatePolling, type BackgroundKind, type SelfUpdateKind } from "./lib/updatePolling";
 import { baseName, pickImageFile, promptTextForPaths, saveClipboardImage, saveImageBlob } from "./lib/imageAttach";
+import { Attachment, AttachmentKind, MAX_ATTACHMENTS, addAttachments, canSend, composeMessage, removeAttachment } from "./lib/attachments";
+import { AttachmentChips, ImageAttachButton } from "./components/ImageAttachButton";
 import { loadLangChoice, parseLangChoice, resolveLang, saveLangChoice, setCurrentLang, type LangChoice } from "./lib/language";
 import { stopAndWaitForExit } from "./lib/ptyHandover";
 import {
@@ -64,6 +66,8 @@ function App() {
   const [shellPath, setShellPath] = useState(defaultShell);
   const [shellArgs, setShellArgs] = useState("");
   const [input, setInput] = useState("");
+  // Images attached from the input bar (🖼 button / paste), sent with the text.
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
 
   // CWD History State
   const [recentCwds, setRecentCwds] = useState<string[]>(() => {
@@ -1020,9 +1024,10 @@ function App() {
 
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || status !== "running") return;
-    sendMessage(input);
+    if (!canSend(input, attachments) || status !== "running") return;
+    sendMessage(composeMessage(input, attachments));
     setInput("");
+    setAttachments([]);
   };
 
   const hasActivePrompt = activePrompt !== null;
@@ -1070,23 +1075,26 @@ function App() {
       return true;
     }
   }, [cwd, requireRunning, typeIntoTerminal, reportAttached, reportAttachError]);
-  // Paste into the input bar: an image becomes its quoted path at the cursor.
+  // Images for the next message (🖼 button, or pasted into the input bar).
+  const addInputAttachments = useCallback((paths: string[], kind: AttachmentKind) => {
+    setAttachments((cur) => {
+      const { list, overLimit } = addAttachments(cur, paths, kind);
+      if (overLimit) showStatusMessage(t("attachLimit").replace("{max}", String(MAX_ATTACHMENTS)));
+      return list;
+    });
+  }, [showStatusMessage, lang]);
+  // Paste into the input bar: an image becomes an attachment chip.
   const handleInputPaste = useCallback(async (e: React.ClipboardEvent<HTMLInputElement>) => {
     const file = pickImageFile(e.clipboardData?.items);
     if (!file || !isTauri()) return;
     e.preventDefault();
-    const el = e.currentTarget;
-    const start = el.selectionStart ?? input.length;
-    const end = el.selectionEnd ?? input.length;
     try {
       const path = await saveImageBlob(file, cwd);
-      const text = promptTextForPaths([path]);
-      setInput((cur) => cur.slice(0, start) + text + cur.slice(end));
-      reportAttached(path);
+      addInputAttachments([path], "pasted");
     } catch (err) {
       reportAttachError(err);
     }
-  }, [input, cwd, reportAttached, reportAttachError]);
+  }, [cwd, addInputAttachments, reportAttachError]);
   // Files dropped on the window: their paths are typed into the terminal
   // (any file type -- the CLIs read files by path; images aren't copied).
   const dropHandlerRef = useRef<(paths: string[]) => void>(() => {});
@@ -1616,6 +1624,8 @@ function App() {
 
               {/* Form Input Bar */}
               <form onSubmit={handleSend} className="input-form">
+                <AttachmentChips lang={lang} attachments={attachments} disabled={status !== "running"}
+                  onRemove={(path) => setAttachments((cur) => removeAttachment(cur, path))} />
                 <input
                   className="input-field"
                   type="text"
@@ -1631,10 +1641,15 @@ function App() {
                   }
                   disabled={status !== "running" || hasActivePrompt}
                 />
+                {isTauri() && (
+                  <ImageAttachButton lang={lang} cwd={cwd} disabled={status !== "running" || hasActivePrompt}
+                    onAdd={addInputAttachments}
+                    onError={(msg) => showStatusMessage(msg)} />
+                )}
                 <button
                   type="submit"
                   className="primary"
-                  disabled={status !== "running" || !input.trim()}
+                  disabled={status !== "running" || !canSend(input, attachments)}
                 >
                   {t("send")}
                 </button>

@@ -497,6 +497,8 @@ button:disabled {
 /* Chat Input Bar */
 .input-form {
   display: flex;
+  flex-wrap: wrap; /* attachment chips take their own row above the input */
+  align-items: center;
   gap: 12px;
   background: var(--input-bg);
   border: 1px solid var(--input-border);
@@ -681,4 +683,89 @@ button:active {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: 10px center;
+}
+
+/* Input bar: 🖼 attach button, its menu, and the attached-image chips. */
+.attach-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.attach-button {
+  white-space: nowrap;
+}
+
+.attach-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  min-width: 230px;
+  padding: 4px;
+  background: var(--input-bg);
+  border: 1px solid var(--field-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.attach-menu-item {
+  justify-content: flex-start;
+  background: transparent;
+  color: var(--text-color);
+  box-shadow: none;
+  font-weight: 500;
+  padding: 8px 10px;
+}
+
+.attach-menu-item:hover {
+  background: var(--btn-secondary-hover);
+  transform: none;
+}
+
+.attach-chips {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 320px;
+  padding: 3px 4px 3px 10px;
+  font-size: 0.8rem;
+  border-radius: 999px;
+  background: var(--field-bg);
+  border: 1px solid var(--field-border);
+  color: var(--field-text);
+}
+
+/* Only the name shrinks (…); the × stays visible. */
+.attach-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-chip-remove {
+  flex-shrink: 0;
+  padding: 0 6px;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.attach-chip-remove:hover:not(:disabled) {
+  background: var(--btn-secondary-hover);
+  transform: none;
 }
