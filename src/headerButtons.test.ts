@@ -34,7 +34,8 @@ describe("header Stop is an outline, not a solid red block", () => {
     expect(rule).toMatch(/background: rgba\(239, 68, 68, 0\.\d+\)/);
     expect(rule).toContain("border: 1px solid");
     expect(rule).toContain("box-shadow: none");
-    // declared after the generic solid button.danger, so it wins
-    expect(i).toBeGreaterThan(css.indexOf("button.danger {"));
+    // two classes (0,2,0) beat the generic solid `button.danger` (0,1,1)
+    // wherever it sits in the file -- no !important / ordering needed
+    expect(rule).not.toContain("!important");
   });
 });
