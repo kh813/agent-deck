@@ -412,7 +412,8 @@ mod tests {
 
     #[test]
     fn start_command_checks_the_gate_before_starting() {
-        let src = include_str!("web_server.rs");
+        // CRLF on a Windows checkout
+        let src = include_str!("web_server.rs").replace("\r\n", "\n");
         let f = &src[src.find("pub async fn start_web_server(").unwrap()..];
         let f = &f[..f.find("\n}\n").unwrap()];
         let gate = f.find("if !web_ui_enabled()").expect("gate");
