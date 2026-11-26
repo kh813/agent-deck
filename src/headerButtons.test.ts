@@ -25,3 +25,16 @@ describe("header buttons share one height", () => {
     expect(rule).toContain("line-height: 1");
   });
 });
+
+describe("header Stop is an outline, not a solid red block", () => {
+  it("faint fill + red border + red text, no shadow", () => {
+    const i = css.indexOf(".header-btn.danger {");
+    expect(i).toBeGreaterThan(-1);
+    const rule = css.slice(i, css.indexOf("}", i));
+    expect(rule).toMatch(/background: rgba\(239, 68, 68, 0\.\d+\)/);
+    expect(rule).toContain("border: 1px solid");
+    expect(rule).toContain("box-shadow: none");
+    // declared after the generic solid button.danger, so it wins
+    expect(i).toBeGreaterThan(css.indexOf("button.danger {"));
+  });
+});

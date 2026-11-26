@@ -360,6 +360,29 @@ body {
   line-height: 1;
 }
 
+/* Stop in the header: an outline (red border + red text on a faint red
+   fill) like the chips beside it, not a solid red block -- at the same
+   33px the solid fill + shadow still read as bigger and too loud
+   (confirmed on the real Mac window, 2026-11-26). */
+.header-btn.danger {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #dc2626;
+  box-shadow: none;
+}
+
+.header-btn.danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.16);
+  box-shadow: none;
+}
+
+body.theme-dark .header-btn.danger,
+body.theme-dracula .header-btn.danger,
+body.theme-oneDark .header-btn.danger,
+body.theme-solarizedDark .header-btn.danger {
+  color: #f87171;
+}
+
 /* The working-folder chip is a button (click = pick folder) but keeps the
    chip look instead of the global button styling. */
 .cwd-button {
