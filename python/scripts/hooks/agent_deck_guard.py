@@ -107,7 +107,7 @@ _SHELL_SENSITIVE_RE = re.compile(
     r"(?:\.(?:ssh|aws|gnupg|kube|vault|terraform|anthropic|openai|config|netrc|npmrc|pypirc|gitconfig|env|envrc|"
     r"bashrc|bash_profile|zshrc|zprofile|profile)(?:[/\\\"\'\s;|$]|$)|"
     r"\.(?:gemini|claude)[/\\](?!skills(?:[/\\]|$))|"
-    r"Library[/\\]|AppData[/\\])|"
+    r"Library[/\\]|AppData[/\\](?!Local[/\\]Temp(?:[/\\]|$)))|"
     r"%APPDATA%|%LOCALAPPDATA%)",
     re.I,
 )
@@ -153,7 +153,12 @@ def is_sensitive_path(path: str, mode: str, case_insensitive: bool) -> bool:
     if not home or home == "~":
         return False
     for name in _SENSITIVE_HOME_DIRS:
-        if is_within(path, os.path.join(home, name), case_insensitive):
+        base = os.path.join(home, name)
+        if is_within(path, base, case_insensitive):
+            # Windows OS temp folder (%TEMP% = ~/AppData/Local/Temp) is analogous
+            # to macOS /var/folders and must not trigger false AppData denies.
+            if name == "AppData" and is_within(path, os.path.join(base, "Local", "Temp"), case_insensitive):
+                return False
             return True
     for name in _SENSITIVE_HOME_FILES:
         if is_within(path, os.path.join(home, name), case_insensitive):

@@ -146,6 +146,9 @@ class TestDecisions:
         assert json.loads(g.run("agy", agy_input("read_file", root / "python" / "scripts" / "automation" / "ChromeUserData" / "Default" / "Cookies", me), env))["decision"] == "deny"
         # reading installed skills under ~/.gemini/skills/ is still allowed
         assert g.run("agy", agy_input("read_file", fake_home / ".gemini" / "skills" / "demo" / "SKILL.md", me), env) == ""
+        # Windows AppData/Roaming is denied, while AppData/Local/Temp (OS temp) is not treated as credential dir
+        assert g.is_sensitive_path(str(fake_home / "AppData" / "Roaming" / "secret.json"), "read", True)
+        assert not g.is_sensitive_path(str(fake_home / "AppData" / "Local" / "Temp" / "work" / "ok.txt"), "write", True)
         # system directories denied
         assert json.loads(g.run("agy", agy_input("write_file", "/etc/hosts", me), env))["decision"] == "deny"
         assert g.is_system_write_path("C:/Windows/System32/drivers/etc/hosts", True)
