@@ -159,8 +159,11 @@ export function useChatSession({
               })
             );
             try {
+              // Preflight always runs in the install root (cwd: ""), never an
+              // arbitrary tab's working directory (prevents executing untrusted
+              // scripts and avoids failing when the restored tab is outside the install).
               await invoke("start_pre_launch_command", {
-                cwd: targetCwd || "",
+                cwd: "",
                 command: preLaunchCommand,
                 args: preLaunchArgs,
               });

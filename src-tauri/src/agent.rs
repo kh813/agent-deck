@@ -623,12 +623,21 @@ pub struct PreLaunchStatusPayload {
 #[tauri::command]
 pub async fn start_pre_launch_command<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
-    cwd: String,
-    command: String,
-    args: Vec<String>,
+    _cwd: String,
+    _command: String,
+    _args: Vec<String>,
     state: tauri::State<'_, PtyState>,
 ) -> Result<(), String> {
-    start_pre_launch_command_internal(app, cwd, command, args, Some(&state))
+    // Security (5.7.4): preflight operates on the agent-deck install itself,
+    // never on an arbitrary tab's working directory. Always load the command
+    // from the trusted install config and run it in the install root so an
+    // external folder containing preflight.sh/.bat can never be executed.
+    let cfg = crate::config::get_app_config(None);
+    let command = cfg
+        .pre_launch_command
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| "pre_launch_command is not configured".to_string())?;
+    start_pre_launch_command_internal(app, String::new(), command, cfg.pre_launch_args, Some(&state))
 }
 
 pub fn start_pre_launch_command_internal<R: tauri::Runtime>(

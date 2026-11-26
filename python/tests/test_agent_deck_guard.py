@@ -90,6 +90,90 @@ class TestDecisions:
         link.symlink_to(other)
         assert json.loads(g.run("agy", agy_input("write_file", link / "x.txt", me), env))["decision"] == "deny"
 
+    def test_tilde_paths_cannot_bypass_guard(self, world, monkeypatch):
+        _, me, other, _, env = world
+        monkeypatch.setenv("HOME", str(other.parent))
+        monkeypatch.setenv("USERPROFILE", str(other.parent))
+        # ~/proj-b/x.txt must expand to other/x.txt (not me/~/proj-b/x.txt)
+        out = json.loads(g.run("agy", agy_input("write_file", "~/proj-b/x.txt", me), env))
+        assert out["decision"] == "deny"
+        out = json.loads(g.run("claude", claude_input("Write", "~/.ssh/authorized_keys", me), env))
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_apply_patch_move_to_is_checked(self, world):
+        _, me, other, _, env = world
+        patch = f"*** Begin Patch\n*** Update File: {me / 'f.py'}\n*** Move to: {other / 'f.py'}\n@@\n-a\n+b\n*** End Patch"
+        data = json.dumps({"toolCall": {"name": "apply_patch", "args": {"input": patch}}, "cwd": str(me)})
+        assert json.loads(g.run("agy", data, env))["decision"] == "deny"
+
+    def test_protected_install_paths_denied_even_from_root_tab(self, world):
+        root, me, _, _, env = world
+        root_env = {"AGENT_DECK_SESSION_ID": "main", "AGENT_DECK_ROOT": str(root)}
+        protected = [
+            root / "tmp" / g.REGISTRY_NAME,
+            root / "tmp" / "screenshots" / "shot.png",
+            root / "tmp" / "sessions" / "tab-b" / "out.txt",
+            root / "python" / "scripts" / "hooks" / "agent_deck_guard.py",
+            root / "python" / "skills" / "attendance" / "SKILL.md",
+            root / "agent_config.json",
+            root / "AGENTS.md",
+            root / "config" / "config.toml",
+            root / ".claude" / "agent-deck-settings.json",
+        ]
+        for target in protected:
+            out = json.loads(g.run("agy", agy_input("write_file", target, me), env))
+            assert out["decision"] == "deny", f"expected deny from tab-a for {target}"
+            out_main = json.loads(g.run("claude", claude_input("Write", target, root), root_env))
+            assert out_main["hookSpecificOutput"]["permissionDecision"] == "deny", f"expected deny from main for {target}"
+        # Allowed install subdirs remain writable; screenshots stay readable
+        assert g.run("agy", agy_input("write_file", root / "files" / "ok.txt", me), env) == ""
+        assert g.run("agy", agy_input("write_file", root / "tmp" / "sessions" / "tab-a" / "ok.txt", me), env) == ""
+        assert g.run("agy", agy_input("write_file", root / "python" / "skills-personal" / "mine" / "SKILL.md", me), env) == ""
+        assert g.run("agy", agy_input("read_file", root / "tmp" / "screenshots" / "shot.png", me), env) == ""
+
+    def test_sensitive_and_system_paths_denied(self, world, monkeypatch, tmp_path):
+        root, me, _, _, env = world
+        fake_home = tmp_path / "home"
+        (fake_home / ".ssh").mkdir(parents=True)
+        (fake_home / ".gemini" / "config").mkdir(parents=True)
+        (fake_home / ".gemini" / "skills" / "demo").mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(fake_home))
+
+        # agy read & write on credentials / hooks.json denied
+        assert json.loads(g.run("agy", agy_input("read_file", fake_home / ".ssh" / "id_rsa", me), env))["decision"] == "deny"
+        assert json.loads(g.run("agy", agy_input("write_file", fake_home / ".gemini" / "config" / "hooks.json", me), env))["decision"] == "deny"
+        assert json.loads(g.run("agy", agy_input("read_file", root / "python" / "scripts" / "automation" / "ChromeUserData" / "Default" / "Cookies", me), env))["decision"] == "deny"
+        # reading installed skills under ~/.gemini/skills/ is still allowed
+        assert g.run("agy", agy_input("read_file", fake_home / ".gemini" / "skills" / "demo" / "SKILL.md", me), env) == ""
+        # system directories denied
+        assert json.loads(g.run("agy", agy_input("write_file", "/etc/hosts", me), env))["decision"] == "deny"
+        assert g.is_system_write_path("C:/Windows/System32/drivers/etc/hosts", True)
+
+    def test_shell_tool_guards_bypass_attempts_without_blocking_skills(self, world):
+        root, me, other, _, env = world
+
+        def bash(cmd):
+            return json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(me)})
+
+        def agy_sh(cmd):
+            return json.dumps({"toolCall": {"name": "run_shell_command", "args": {"command": cmd}}, "cwd": str(me)})
+
+        # Guard & registry tampering denied
+        assert json.loads(g.run("claude", bash(f"rm {root / 'tmp' / g.REGISTRY_NAME}"), env))["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert json.loads(g.run("agy", agy_sh("cat ~/.gemini/config/hooks.json"), env))["decision"] == "deny"
+        # Sensitive files denied
+        assert json.loads(g.run("claude", bash("cat ~/.ssh/id_rsa"), env))["hookSpecificOutput"]["permissionDecision"] == "deny"
+        # Another tab's folder denied
+        assert json.loads(g.run("claude", bash(f"echo hi > {other / 'pwn.txt'}"), env))["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert json.loads(g.run("agy", agy_sh(f"cp a.txt {other / 'a.txt'}"), env))["decision"] == "deny"
+        # Mutating protected install files denied
+        assert json.loads(g.run("claude", bash(f"echo bad > {root / 'AGENTS.md'}"), env))["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert json.loads(g.run("agy", agy_sh(f"rm {root / 'python' / 'scripts' / 'setup' / 'setup.py'}"), env))["decision"] == "deny"
+        # Normal skill execution (including redirecting stdout into own folder) passes!
+        assert g.run("claude", bash(f'python3 "{root}/python/scripts/automation/automate.py" calendar > out.txt'), env) == ""
+        assert g.run("agy", agy_sh(f'python3 "{root}/python/scripts/automation/automate.py" calendar'), env) == ""
+
 
 class TestOnlyInsideAgentDeck:
     def test_no_session_env_no_opinion(self, world):

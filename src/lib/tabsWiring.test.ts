@@ -21,7 +21,7 @@ describe("tabs wiring", () => {
   it("creating: conflict check first, then the tab starts with the chosen agent (not an engine-change auto-start)", () => {
     const f = slice("const createTab = useCallback", "const handleCloseTab");
     expect(f.indexOf("resolveFolderFor(dir)")).toBeLessThan(f.indexOf("addTab("));
-    expect(f).toContain("engineId }));");
+    expect(f).toContain("engineId })");
     expect(f).toContain("setStartOnMountIds");
     expect(f.indexOf("previousAgentIdRef.current = engineId")).toBeLessThan(f.indexOf("setSelectedAgentId(engineId)"));
   });
@@ -60,5 +60,12 @@ describe("restore, registry, notifications wiring", () => {
   it("prompt notifications use the decision helper and the OS plugin", () => {
     expect(app).toContain("promptNotifications(runtimeStates, activeSessionId, document.hasFocus()");
     expect(app).toContain('import("@tauri-apps/plugin-notification")');
+  });
+  it("drafts and attachments are isolated per tab; self-update stops other sessions; config never loads from untrusted cwd", () => {
+    expect(app).toContain("draftsByTab");
+    expect(app).toContain("attachmentsByTab");
+    expect(app).toContain('invoke("stop_other_sessions"');
+    expect(app).toContain('invoke<AppConfig>("get_app_config", { cwd: null })');
+    expect(app).toContain("Object.values(runtimeStates).some((s) => s.isStarting)");
   });
 });

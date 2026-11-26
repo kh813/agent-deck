@@ -15,12 +15,6 @@
       "name": "Claude Code",
       "command": "claude",
       "args": ["--settings", "${PROJECT_ROOT}/.claude/agent-deck-settings.json", "--append-system-prompt", "${GUARDRAILS}"]
-    },
-    {
-      "id": "codex",
-      "name": "Codex",
-      "command": "codex",
-      "args": []
     }
   ],
   "pre_launch_macos": {

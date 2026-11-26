@@ -407,9 +407,15 @@ CLAUDE_SETTINGS_NAME = "agent-deck-settings.json"
 # another agent-deck tab's folder and asks before writes outside the tab's
 # own folder. Matchers mirror the hook's AGY_MATCHER / CLAUDE_MATCHER.
 GUARD_HOOK_NAME = "agent-deck-guard"
-GUARD_AGY_MATCHER = ("write_file|write_to_file|replace_file_content|multi_replace_file_content|"
-                     "edit_file|create_file|delete_file|apply_patch|edit_notebook|rename_file")
-GUARD_CLAUDE_MATCHER = "Write|Edit|MultiEdit|NotebookEdit"
+GUARD_AGY_MATCHER = (
+    "write_file|write_to_file|replace_file_content|multi_replace_file_content|"
+    "edit_file|create_file|delete_file|apply_patch|edit_notebook|rename_file|"
+    "replace|move_file|patch_file|notebook_edit|"
+    "read_file|view_file|view_file_outline|view_code_item|"
+    "list_dir|find_by_name|grep_search|read_notebook|"
+    "run_shell_command|run_command"
+)
+GUARD_CLAUDE_MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Bash"
 
 
 def _guard_python(project_root):
@@ -451,7 +457,11 @@ def install_agy_guard_hook(project_root=None, hooks_path=None):
             if not isinstance(data, dict):
                 raise ValueError("not an object")
         except (OSError, ValueError) as e:
-            print(f"  [WARN] {hooks_path} is not valid JSON ({e}); agent-deck's guard hook was not added.")
+            print(
+                f"  [ERROR] {hooks_path} is not valid JSON ({e}); agent-deck's guard hook was NOT installed. "
+                "Fix or remove that file so multi-session protection can run.",
+                file=sys.stderr,
+            )
             return None
     data[GUARD_HOOK_NAME] = {"PreToolUse": [{
         "matcher": GUARD_AGY_MATCHER,

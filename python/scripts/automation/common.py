@@ -411,20 +411,20 @@ def get_chrome_context(p, lang='ja-JP', headless=False):
     acquire_browser_lock()
     try:
         context = p.chromium.launch_persistent_context(get_user_data_dir(), **launch)
+        page = context.pages[0] if context.pages else context.new_page()
+        if headless and executable is None:
+            # The bundled Chromium's headless UA says "HeadlessChrome", which
+            # Google services may treat as a bot. Relaunch with the same UA
+            # minus that marker (version etc. stay accurate).
+            ua = page.evaluate("navigator.userAgent")
+            if 'HeadlessChrome' in ua:
+                context.close()
+                context = p.chromium.launch_persistent_context(
+                    get_user_data_dir(), user_agent=ua.replace('HeadlessChrome', 'Chrome'), **launch)
+                page = context.pages[0] if context.pages else context.new_page()
     except Exception:
         release_browser_lock()
         raise
-    page = context.pages[0] if context.pages else context.new_page()
-    if headless and executable is None:
-        # The bundled Chromium's headless UA says "HeadlessChrome", which
-        # Google services may treat as a bot. Relaunch with the same UA
-        # minus that marker (version etc. stay accurate).
-        ua = page.evaluate("navigator.userAgent")
-        if 'HeadlessChrome' in ua:
-            context.close()
-            context = p.chromium.launch_persistent_context(
-                get_user_data_dir(), user_agent=ua.replace('HeadlessChrome', 'Chrome'), **launch)
-            page = context.pages[0] if context.pages else context.new_page()
     return _release_on_close(context), page
 
 

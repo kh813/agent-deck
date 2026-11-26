@@ -72,9 +72,11 @@ interface UpdateStatus {
 
 function App() {
 
-  const [input, setInput] = useState("");
-  // Images attached from the input bar (🖼 button / paste), sent with the text.
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Per-tab input draft & image attachments (app_specs.md 5.7.4): never shared
+  // across tabs, so text/screenshots for one project are never accidentally
+  // sent into another tab's session after switching.
+  const [draftsByTab, setDraftsByTab] = useState<Record<string, string>>({});
+  const [attachmentsByTab, setAttachmentsByTab] = useState<Record<string, Attachment[]>>({});
 
   // CWD History State
   const [recentCwds, setRecentCwds] = useState<string[]>(() => {
@@ -352,6 +354,30 @@ function App() {
   // runtimeStates and its controls registered in runtimesRef.
   const [tabs, setTabs] = useState<Tab[]>(() => (restoredTabs ?? defaultTabs(selectedAgentId)).tabs);
   const [activeSessionId, setActiveSessionId] = useState(() => (restoredTabs ?? defaultTabs(selectedAgentId)).activeId);
+  const input = draftsByTab[activeSessionId] ?? "";
+  const setInput = useCallback(
+    (value: string) => {
+      setDraftsByTab((prev) => ({ ...prev, [activeSessionId]: value }));
+    },
+    [activeSessionId],
+  );
+  const attachments = attachmentsByTab[activeSessionId] ?? [];
+  const setAttachmentsForTab = useCallback(
+    (tabId: string, updater: Attachment[] | ((cur: Attachment[]) => Attachment[])) => {
+      setAttachmentsByTab((prev) => {
+        const cur = prev[tabId] ?? [];
+        const next = typeof updater === "function" ? updater(cur) : updater;
+        return { ...prev, [tabId]: next };
+      });
+    },
+    [],
+  );
+  const setAttachments = useCallback(
+    (updater: Attachment[] | ((cur: Attachment[]) => Attachment[])) => {
+      setAttachmentsForTab(activeSessionId, updater);
+    },
+    [activeSessionId, setAttachmentsForTab],
+  );
   // Remember the tabs for the next launch.
   useEffect(() => {
     saveTabs({ tabs, activeId: activeSessionId });
@@ -431,7 +457,7 @@ function App() {
   }, [resolveFolderFor]);
   const changeCwd = useCallback(async (dir: string) => {
     const folder = await checkFolderFree(dir, activeSessionId);
-    if (folder) await changeCwdUnchecked(dir);
+    if (folder) await changeCwdUnchecked(folder);
   }, [checkFolderFree, activeSessionId, changeCwdUnchecked]);
   const showStatusMessage = useCallback((text: string, autoClear = true) => {
     const rt = activeRuntime();
@@ -620,11 +646,12 @@ function App() {
     });
   }, [autoCheckUpdate]);
 
-  // 1. Load dynamic configuration
+  // 1. Load dynamic configuration once from the install root (never from an
+  // arbitrary tab's working directory).
   useEffect(() => {
     const loadAppConfig = async () => {
       try {
-        const cfg = await invoke<AppConfig>("get_app_config", { cwd: cwd || null });
+        const cfg = await invoke<AppConfig>("get_app_config", { cwd: null });
         setAppConfig(cfg);
         
         const savedTheme = localStorage.getItem("agent-ui-theme");
@@ -636,7 +663,7 @@ function App() {
       }
     };
     loadAppConfig();
-  }, [cwd]);
+  }, []);
 
   // 2. Trigger status detection when configuration loads or refreshes
   useEffect(() => {
@@ -673,11 +700,27 @@ function App() {
   // agent/skill is detected on the Rust side from terminal output.)
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
   const [catalogBusy, setCatalogBusy] = useState(false);
-  const quitGuardBusy = isStarting || isSelfUpdating || isUpdating || isInstalling || catalogBusy;
+  const anyTabStarting = Object.values(runtimeStates).some((s) => s.isStarting);
+  const quitGuardBusy = anyTabStarting || isSelfUpdating || isUpdating || isInstalling || catalogBusy;
   useEffect(() => {
     if (!isTauri()) return;
     invoke("set_quit_guard_busy", { busy: quitGuardBusy }).catch(() => {});
   }, [quitGuardBusy]);
+
+  // Surface backend guardrail warnings (e.g. missing Claude settings file)
+  // rather than letting a session start silently without full protections.
+  useEffect(() => {
+    if (!isTauri()) return;
+    return subscribeToTauriEvent(
+      listen<{ session_id?: string; message?: string }>("guardrail-warning", (event) => {
+        const msg = event.payload?.message;
+        if (!msg) return;
+        const target = event.payload?.session_id ? runtimesRef.current[event.payload.session_id] : activeRuntime();
+        if (target) target.showStatusMessage(`⚠️ ${msg}`, false);
+        else showStatusMessage(`⚠️ ${msg}`, false);
+      }),
+    );
+  }, [activeRuntime, showStatusMessage]);
 
   checkUpdateStatusRef.current = checkUpdateStatus;
   engineInstalledRef.current = currentAgentStatus.installed;
@@ -760,28 +803,36 @@ function App() {
     }
   }, [showStatusMessage, lang]);
 
+  // Track which tab owns an in-flight install / update / self-update so
+  // switching tabs never drops its completion status event.
+  const maintenanceSessionIdRef = useRef<string | null>(null);
+
   // Listen to PTY termination during installation and updates
   useEffect(() => {
     const unsubStatus = subscribeToTauriEvent(
       listen<SessionStatusEvent>("session-status", (raw) => {
-        if (!isForSession(raw.payload, activeSessionId)) return;
+        const expectedId = maintenanceSessionIdRef.current ?? activeSessionId;
+        if (!isForSession(raw.payload, expectedId)) return;
         const event = { payload: raw.payload.status };
         // An agent-deck update's session can also end with "error" (the
         // pipe broke instead of closing, Windows): it's over either way --
         // check whether it installed and restart.
         if (event.payload === "error" && isSelfUpdating && selfUpdateActiveRef.current) {
           selfUpdateActiveRef.current = false;
+          maintenanceSessionIdRef.current = null;
           setIsSelfUpdating(false);
           void finishSelfUpdate(selfUpdateStartedAtRef.current);
           return;
         }
         if (event.payload === "terminated") {
           if (isInstalling) {
+            maintenanceSessionIdRef.current = null;
             setIsInstalling(false);
             checkAgentStatus();
           }
           if (isUpdating && agentUpdateActiveRef.current) {
             agentUpdateActiveRef.current = false;
+            maintenanceSessionIdRef.current = null;
             setIsUpdating(false);
             checkAgentStatus().then(() => {
               checkUpdateStatus();
@@ -789,6 +840,7 @@ function App() {
           }
           if (isSelfUpdating && selfUpdateActiveRef.current) {
             selfUpdateActiveRef.current = false;
+            maintenanceSessionIdRef.current = null;
             // Unlike agy above, there's no "re-detect" step that makes sense
             // here: the running process's own version can't change without
             // an actual restart, so self_update.py apply's own completion
@@ -801,7 +853,7 @@ function App() {
     );
 
     return unsubStatus;
-  }, [isInstalling, isUpdating, isSelfUpdating, checkAgentStatus, checkUpdateStatus, showStatusMessage, finishSelfUpdate]);
+  }, [activeSessionId, isInstalling, isUpdating, isSelfUpdating, checkAgentStatus, checkUpdateStatus, showStatusMessage, finishSelfUpdate]);
 
   // Poll for install/update completion independent of the PTY session ever
   // reporting "terminated".
@@ -854,6 +906,7 @@ function App() {
 
       const appBundleDir = await invoke<string>("get_app_bundle_dir");
 
+      maintenanceSessionIdRef.current = activeSessionId;
       await invoke("start_pty", {
         command: installCmd.command,
         args: installCmd.args,
@@ -863,6 +916,7 @@ function App() {
         sessionId: activeSessionId,
       });
     } catch (e: any) {
+      maintenanceSessionIdRef.current = null;
       setIsInstalling(false);
       console.error("Installation failed to launch:", e);
       alert(`${t("failedToInstall")}: ${e.toString()}`);
@@ -895,6 +949,7 @@ function App() {
 
       await handOverPty();
       agentUpdateActiveRef.current = true;
+      maintenanceSessionIdRef.current = activeSessionId;
       await invoke("start_pty", {
         command: updateCmd.command,
         args: updateCmd.args,
@@ -905,6 +960,7 @@ function App() {
       });
     } catch (e: any) {
       agentUpdateActiveRef.current = false;
+      maintenanceSessionIdRef.current = null;
       setIsUpdating(false);
       console.error("Update failed to launch:", e);
       alert(`${t("failedToUpdate")}: ${e.toString()}`);
@@ -923,8 +979,11 @@ function App() {
         kind: selfUpdateKind,
       });
 
+      // Stop every other tab's session before self-update replaces files on disk.
+      await invoke("stop_other_sessions", { keepSessionId: activeSessionId }).catch(() => {});
       await handOverPty();
       selfUpdateActiveRef.current = true;
+      maintenanceSessionIdRef.current = activeSessionId;
       selfUpdateStartedAtRef.current = Date.now();
       showStatusMessage(t("selfUpdateStarted"), false);
       await invoke("start_pty", {
@@ -936,6 +995,7 @@ function App() {
       });
     } catch (e: any) {
       selfUpdateActiveRef.current = false;
+      maintenanceSessionIdRef.current = null;
       setIsSelfUpdating(false);
       showStatusMessage("", true);
       console.error("agent-deck update failed to launch:", e);
@@ -1133,9 +1193,9 @@ function App() {
   const hasActivePrompt = activePrompt !== null;
 
   // ── Images (screenshots) -> a file path in the prompt (lib/imageAttach.ts) ──
-  // Saved under <working folder>/tmp/screenshots/ by the Rust side; the
-  // quoted path is typed into the terminal (not sent), so the user can add
-  // the instruction and press Enter.
+  // Saved under <agent-deck install>/tmp/screenshots/ by the Rust side (never
+  // dirtying the tab's working folder); the quoted path is typed into the
+  // terminal (not sent), so the user can add the instruction and press Enter.
   const reportAttached = useCallback((path: string) => {
     showStatusMessage(t("imageAttached").replace("{name}", baseName(path)));
   }, [showStatusMessage, lang]);
@@ -1177,25 +1237,29 @@ function App() {
     }
   }, [cwd, requireRunning, typeIntoTerminal, reportAttached, reportAttachError]);
   // Images for the next message (🖼 button, or pasted into the input bar).
-  const addInputAttachments = useCallback((paths: string[], kind: AttachmentKind) => {
-    setAttachments((cur) => {
+  const addInputAttachmentsForTab = useCallback((tabId: string, paths: string[], kind: AttachmentKind) => {
+    setAttachmentsForTab(tabId, (cur) => {
       const { list, overLimit } = addAttachments(cur, paths, kind);
       if (overLimit) showStatusMessage(t("attachLimit").replace("{max}", String(MAX_ATTACHMENTS)));
       return list;
     });
-  }, [showStatusMessage, lang]);
+  }, [setAttachmentsForTab, showStatusMessage, lang]);
+  const addInputAttachments = useCallback((paths: string[], kind: AttachmentKind) => {
+    addInputAttachmentsForTab(activeSessionId, paths, kind);
+  }, [addInputAttachmentsForTab, activeSessionId]);
   // Paste into the input bar: an image becomes an attachment chip.
   const handleInputPaste = useCallback(async (e: React.ClipboardEvent<HTMLInputElement>) => {
     const file = pickImageFile(e.clipboardData?.items);
     if (!file || !isTauri()) return;
     e.preventDefault();
+    const targetTabId = activeSessionId;
     try {
       const path = await saveImageBlob(file, cwd);
-      addInputAttachments([path], "pasted");
+      addInputAttachmentsForTab(targetTabId, [path], "pasted");
     } catch (err) {
       reportAttachError(err);
     }
-  }, [cwd, addInputAttachments, reportAttachError]);
+  }, [activeSessionId, cwd, addInputAttachmentsForTab, reportAttachError]);
   // Files dropped on the window: their paths are typed into the terminal
   // (any file type -- the CLIs read files by path; images aren't copied).
   const dropHandlerRef = useRef<(paths: string[]) => void>(() => {});
@@ -1265,7 +1329,14 @@ function App() {
     const { folder, error } = await resolveFolderFor(dir);
     if (error) return error;
     const id = newSessionId(tabs.map((tb) => tb.id));
-    setTabs((prev) => addTab(prev, { id, name: "", cwd: folder, engineId }));
+    const nextTabs = addTab(tabs, { id, name: "", cwd: folder, engineId });
+    // Flush the updated registry to disk BEFORE the new tab's PTY spawns so
+    // the guard hook already knows about this tab on its very first tool call.
+    if (isTauri()) {
+      const entries = nextTabs.map((tb) => ({ id: tb.id, label: tabLabel(tb, t("appLocationShort")), cwd: tb.cwd }));
+      await invoke("set_session_registry", { entries }).catch((e) => console.warn("set_session_registry failed:", e));
+    }
+    setTabs(nextTabs);
     setStartOnMountIds((prev) => new Set(prev).add(id));
     // Not an engine *change* (no auto-start effect): the new tab starts itself.
     previousAgentIdRef.current = engineId;
@@ -1293,6 +1364,16 @@ function App() {
     if (next && next !== activeSessionId) switchToTab(next);
     setTabs((prev) => removeTab(prev, id));
     setRuntimeStates((prev) => {
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+    setDraftsByTab((prev) => {
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+    setAttachmentsByTab((prev) => {
       const copy = { ...prev };
       delete copy[id];
       return copy;

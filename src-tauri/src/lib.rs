@@ -28,9 +28,11 @@ pub fn run() {
     // them -- self-update never replaces them (see root_files.rs). Skipped
     // when running from a dev build (target/).
     if let Ok(exe_path) = std::env::current_exe() {
+        let root = pty::resolve_project_root(exe_path.clone());
         if !pty::is_development_mode(&exe_path) {
-            root_files::sync_root_files(&pty::resolve_project_root(exe_path));
+            root_files::sync_root_files(&root);
         }
+        image_attach::prune_screenshots_on_startup(&root);
     }
 
     let pty_state = PtyState::default();
@@ -106,6 +108,7 @@ pub fn run() {
             menu::set_language_menu_state,
             pty::force_kill_pty,
             pty::close_pty_session,
+            pty::stop_other_sessions,
             pty::resolve_session_folder,
             pty::set_session_registry,
             web_server::start_web_server,
@@ -122,11 +125,23 @@ pub fn run() {
             // Exit requests from outside our own Quit item (e.g. the Dock's
             // Quit, the last window closing). `code` is Some only for our own
             // app.exit() after the guard already said yes.
-            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
-                if code.is_none() && !quit_guard::exit_confirmed() && quit_guard::is_busy() {
-                    api.prevent_exit();
-                    quit_guard::request_quit(app);
+            match event {
+                tauri::RunEvent::ExitRequested { api, code, .. } => {
+                    if code.is_none() && !quit_guard::exit_confirmed() && quit_guard::is_busy() {
+                        api.prevent_exit();
+                        quit_guard::request_quit(app);
+                    }
                 }
+                tauri::RunEvent::Exit => {
+                    // Kill every running tab's PTY child and clear the session
+                    // registry so no orphan agents or stale registry linger.
+                    use tauri::Manager;
+                    if let Some(state) = app.try_state::<PtyState>() {
+                        state.kill_all_sessions_blocking();
+                    }
+                    pty::clear_session_registry_on_exit();
+                }
+                _ => {}
             }
         });
 }

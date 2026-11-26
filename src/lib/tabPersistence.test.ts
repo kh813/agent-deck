@@ -30,11 +30,25 @@ describe("tab restore", () => {
     expect(r.activeId).toBe("ok");
   });
   it("never more than 6; garbage -> nothing", () => {
-    const many = { tabs: Array.from({ length: 9 }, (_, i) => ({ id: `t${i}` })), activeId: "t0" };
+    const many = { tabs: Array.from({ length: 9 }, (_, i) => ({ id: `t${i}`, cwd: `/p/dir-${i}` })), activeId: "t0" };
     expect(sanitizeSavedTabs(many, "agy")!.tabs).toHaveLength(6);
     for (const bad of [null, 1, "x", { tabs: "x" }, { tabs: [] }]) expect(sanitizeSavedTabs(bad, "agy")).toBeNull();
     expect(loadSavedTabs("agy", { getItem: () => "{not json" })).toBeNull();
     expect(loadSavedTabs("agy", null)).toBeNull();
+  });
+  it("drops overlapping or duplicate folders when restoring tabs", () => {
+    const r = sanitizeSavedTabs({
+      tabs: [
+        { id: "main", cwd: "", engineId: "agy" },
+        { id: "dup-default", cwd: "", engineId: "claude" },
+        { id: "t1", cwd: "/work/proj", engineId: "agy" },
+        { id: "t2", cwd: "/work/proj/sub", engineId: "claude" },
+        { id: "t3", cwd: "/work/other", engineId: "claude" },
+      ],
+      activeId: "t2",
+    }, "agy", true)!;
+    expect(r.tabs.map((t) => t.id)).toEqual(["main", "t1", "t3"]);
+    expect(r.activeId).toBe("main");
   });
   it("default is one main tab", () => {
     expect(defaultTabs("claude")).toEqual({ tabs: [{ id: "main", name: "", cwd: "", engineId: "claude" }], activeId: "main" });

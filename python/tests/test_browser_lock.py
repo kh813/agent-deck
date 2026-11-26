@@ -90,3 +90,11 @@ def test_get_chrome_context_takes_the_lock_before_launching():
     body = src[src.index("def get_chrome_context("):]
     assert body.index("acquire_browser_lock()") < body.index("launch_persistent_context(")
     assert "return _release_on_close(context), page" in body
+    # Headless relaunch must stay inside the same try/except that releases the lock on failure.
+    assert body.index("HeadlessChrome") < body.index("release_browser_lock()")
+
+
+def test_chrome_login_also_acquires_and_releases_browser_lock():
+    src = (AUTOMATION / "chrome_login.py").read_text(encoding="utf-8")
+    assert src.index("acquire_browser_lock()") < src.index("launch_persistent_context(")
+    assert "finally:" in src and "release_browser_lock()" in src

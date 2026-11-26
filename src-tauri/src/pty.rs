@@ -36,6 +36,9 @@ pub struct PtySession {
     pub session: Arc<Mutex<Option<Box<dyn portable_pty::MasterPty + Send>>>>,
     pub writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
     pub child: Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>,
+    /// Canonical working directory while this session is running (for backend
+    /// overlap enforcement).
+    pub cwd: Arc<std::sync::Mutex<Option<String>>>,
     /// Bumped on every start: lets a session's output task tell its own
     /// child from a newer one's (see child-exit watching below).
     pub generation: Arc<std::sync::atomic::AtomicU64>,
@@ -47,10 +50,14 @@ impl Default for PtySession {
             session: Arc::new(Mutex::new(None)),
             writer: Arc::new(Mutex::new(None)),
             child: Arc::new(Mutex::new(None)),
+            cwd: Arc::new(std::sync::Mutex::new(None)),
             generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 }
+
+/// Maximum concurrent sessions enforced by the backend (mirrors frontend MAX_TABS).
+pub const MAX_SESSIONS: usize = 6;
 
 /// The session a command without a session id means: the single-session UI
 /// (and the Web UI) keep working unchanged while tabs are being added.
@@ -59,6 +66,42 @@ pub const DEFAULT_SESSION: &str = "main";
 /// Session ids come from the frontend: short, no path/control characters.
 pub(crate) fn valid_session_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+pub(crate) fn normalize_folder_for_cmp(path: &str, case_insensitive: bool) -> String {
+    let mut p = path.replace('\\', "/");
+    while p.len() > 1 && p.ends_with('/') {
+        let is_win_root = p.len() == 3 && p.as_bytes()[1] == b':' && p.as_bytes()[2] == b'/';
+        if is_win_root {
+            break;
+        }
+        p.pop();
+    }
+    if case_insensitive { p.to_ascii_lowercase() } else { p }
+}
+
+/// True if two folders are identical or one is nested inside the other.
+pub(crate) fn folders_overlap(a: &str, b: &str, case_insensitive: bool) -> bool {
+    let x = normalize_folder_for_cmp(a, case_insensitive);
+    let y = normalize_folder_for_cmp(b, case_insensitive);
+    if x.is_empty() || y.is_empty() {
+        return false;
+    }
+    if x == y {
+        return true;
+    }
+    let within = |inner: &str, outer: &str| {
+        if outer.ends_with('/') {
+            inner.starts_with(outer)
+        } else {
+            inner.starts_with(outer) && inner.as_bytes().get(outer.len()) == Some(&b'/')
+        }
+    };
+    within(&x, &y) || within(&y, &x)
+}
+
+fn case_insensitive_fs() -> bool {
+    cfg!(any(target_os = "windows", target_os = "macos"))
 }
 
 /// Every session by id (tabs), plus the Web UI broadcast channel.
@@ -96,6 +139,54 @@ impl PtyState {
     pub fn remove(&self, id: &str) {
         let mut map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         map.remove(id);
+    }
+
+    /// Backend enforcement for multi-session invariants (5.7.4):
+    ///   - at most MAX_SESSIONS concurrent sessions
+    ///   - no two running sessions on the same or nested working folder
+    pub fn check_can_start(&self, session_id: &str, cwd: Option<&str>) -> Result<(), String> {
+        let map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        if !map.contains_key(session_id) && map.len() >= MAX_SESSIONS {
+            return Err(format!("Cannot start more than {MAX_SESSIONS} concurrent sessions."));
+        }
+        let target = canonical_folder(cwd.unwrap_or("")).unwrap_or_else(|_| cwd.unwrap_or("").to_string());
+        let ci = case_insensitive_fs();
+        for (other_id, other_sess) in map.iter() {
+            if other_id == session_id {
+                continue;
+            }
+            if let Some(ref other_cwd) = *other_sess.cwd.lock().unwrap_or_else(|e| e.into_inner()) {
+                if folders_overlap(&target, other_cwd, ci) {
+                    return Err(format!(
+                        "Working folder '{target}' overlaps with another running session ('{other_id}': '{other_cwd}')."
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Synchronously kill every running PTY child process (called on app exit
+    /// so no orphan agents or browser-holding subprocesses outlive the app).
+    pub fn kill_all_sessions_blocking(&self) {
+        let sessions: Vec<PtySession> = {
+            let map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            map.values().cloned().collect()
+        };
+        for sess in sessions {
+            *sess.cwd.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            if let Ok(mut child_guard) = sess.child.try_lock() {
+                if let Some(mut child) = child_guard.take() {
+                    let _ = child.kill();
+                }
+            }
+            if let Ok(mut writer_guard) = sess.writer.try_lock() {
+                *writer_guard = None;
+            }
+            if let Ok(mut master_guard) = sess.session.try_lock() {
+                *master_guard = None;
+            }
+        }
     }
 }
 
@@ -139,25 +230,41 @@ fn emit_status<R: tauri::Runtime>(
     }
 }
 
-// TEMPORARY: shared path for the raw PTY byte log used to diagnose rendering
-// bugs in the upstream CLI's own output. See start_pty_internal (truncates
-// it fresh per session) and resize_pty_internal (appends a marker so a
-// mid-session resize can be correlated against the byte stream around it -
-// suspected of desyncing the upstream CLI's own relative-cursor redraw math
-// from what's actually on screen).
-fn debug_log_path() -> PathBuf {
-    std::env::var("HOME")
+// Opt-in raw PTY byte log for diagnosing rendering bugs. Disabled by default
+// so production sessions never write sensitive PTY output (tokens, prompts,
+// file contents) to disk. Enable with `AGENT_DECK_PTY_DEBUG=1`.
+fn debug_log_path(session_id: &str) -> Option<PathBuf> {
+    if std::env::var("AGENT_DECK_PTY_DEBUG").ok().as_deref() != Some("1") {
+        return None;
+    }
+    let id = if valid_session_id(session_id) { session_id } else { DEFAULT_SESSION };
+    let base = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("agent-deck-pty-debug.log")
+        .unwrap_or_else(|_| std::env::temp_dir());
+    Some(base.join(format!("agent-deck-pty-debug-{id}.log")))
 }
 
-fn debug_log_marker(text: &str) {
+fn open_debug_log_append(path: &Path) -> Option<std::fs::File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path).ok()
+}
+
+fn debug_log_marker(session_id: &str, text: &str) {
+    let Some(path) = debug_log_path(session_id) else {
+        return;
+    };
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(debug_log_path()) {
+    if let Some(mut f) = open_debug_log_append(&path) {
         use std::io::Write as _;
         let _ = writeln!(f, "\n[agent-ui @ {millis}ms] {text}");
     }
@@ -258,6 +365,32 @@ fn detect_numbered_menu(text: &str) -> Option<PtyPromptPayload> {
     })
 }
 
+/// Allowlist of authentication hosts that may be auto-opened in the OS browser
+/// when detected in PTY output. Prevents arbitrary URLs containing "auth" /
+/// "oauth" / "device" (e.g. from untrusted repo output or web search results
+/// in a background tab) from launching phishing pages automatically.
+pub(crate) fn is_allowed_login_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // Reject userinfo (`https://accounts.google.com@evil.com/...`).
+    if authority.contains('@') || authority.is_empty() {
+        return false;
+    }
+    let host = authority.split(':').next().unwrap_or("").to_ascii_lowercase();
+    const ALLOWED_HOSTS: &[&str] = &[
+        "accounts.google.com",
+        "oauth2.googleapis.com",
+        "claude.ai",
+        "console.anthropic.com",
+        "auth.anthropic.com",
+        "login.microsoftonline.com",
+        "github.com",
+    ];
+    ALLOWED_HOSTS.iter().any(|allowed| host == *allowed)
+}
+
 // Detect prompts (y/n, folder path, login oauth url) from text
 pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
     // 0. Generic "[y/N]"-style tool permission prompt
@@ -271,16 +404,19 @@ pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
         });
     }
 
-    // 1. Login/Authentication URL (Google OAuth or device login url)
-    let login_re = Regex::new(r"https://[a-zA-Z0-9./?=&_-]*(oauth|auth|device)[a-zA-Z0-9./?=&_-]*").unwrap();
+    // 1. Login/Authentication URL (Google OAuth / Claude / GitHub / Microsoft device login)
+    let login_re = Regex::new(r"https://[a-zA-Z0-9./?=&_%:-]*(oauth|auth|device)[a-zA-Z0-9./?=&_%:-]*").unwrap();
     if let Some(mat) = login_re.find(text) {
-        return Some(PtyPromptPayload {
-            prompt_type: "login".to_string(),
-            message: "Authentication login requested. The URL has been opened in your browser.".to_string(),
-            options: None,
-            url: Some(mat.as_str().to_string()),
-            inputs: None,
-        });
+        let candidate = mat.as_str();
+        if is_allowed_login_url(candidate) {
+            return Some(PtyPromptPayload {
+                prompt_type: "login".to_string(),
+                message: "Authentication login requested. The URL has been opened in your browser.".to_string(),
+                options: None,
+                url: Some(candidate.to_string()),
+                inputs: None,
+            });
+        }
     }
 
     // 2. Folder Trust Check. agy: "Do you trust the contents of this
@@ -438,21 +574,46 @@ fn peel_to_container(mut path: PathBuf) -> (PathBuf, bool) {
 /// Confirmed 2026-11-26: Claude Code honours `--append-system-prompt`;
 /// agy loads AGENTS.md from an `--add-dir` folder instead.
 pub(crate) const GUARDRAILS_PLACEHOLDER: &str = "${GUARDRAILS}";
+const EMBEDDED_GUARDRAILS: &str = include_str!("../../release/AGENTS.release.md");
 
-pub(crate) fn guardrails_text(project_root: &Path) -> Option<String> {
-    let body = std::fs::read_to_string(project_root.join("AGENTS.md")).ok()?;
+fn format_guardrails(project_root: &Path, body: &str) -> String {
     let root = project_root.to_string_lossy();
-    Some(format!(
+    format!(
         "# agent-deck guardrails\n\nThe rules below come from {root}/AGENTS.md (the agent-deck install folder, {root}). \
 \"This project\" and paths like files/, tmp/ and python/ in them mean that folder, not your working folder. \
 Your working folder is the current directory: keep your file changes inside it (or in the locations the rules allow), \
 and never touch folders other agent-deck tabs are working in.\n\n{body}"
-    ))
+    )
 }
 
-pub(crate) fn resolve_launch_args(args: Vec<String>, project_root: &Path) -> Vec<String> {
+pub(crate) fn guardrails_text(project_root: &Path) -> Option<String> {
+    let body = std::fs::read_to_string(project_root.join("AGENTS.md")).ok()?;
+    Some(format_guardrails(project_root, &body))
+}
+
+/// Like `resolve_launch_args`, but used by live sessions:
+/// - falls back to the embedded `AGENTS.release.md` if `<root>/AGENTS.md` is
+///   missing so prompt guardrails are never silently dropped,
+/// - returns warnings whenever a `--settings <file>` file had to be skipped so
+///   the UI can alert the user instead of silently running without settings.
+pub(crate) fn resolve_launch_args_checked(
+    args: Vec<String>,
+    project_root: &Path,
+    use_embedded_guardrails_fallback: bool,
+) -> (Vec<String>, Vec<String>) {
     let root = project_root.to_string_lossy();
-    let guardrails = if args.iter().any(|a| a == GUARDRAILS_PLACEHOLDER) { guardrails_text(project_root) } else { None };
+    let mut warnings = Vec::new();
+    let guardrails = if args.iter().any(|a| a == GUARDRAILS_PLACEHOLDER) {
+        guardrails_text(project_root).or_else(|| {
+            if use_embedded_guardrails_fallback {
+                Some(format_guardrails(project_root, EMBEDDED_GUARDRAILS))
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
     let mut expanded: Vec<String> = Vec::with_capacity(args.len());
     for a in args {
         if a == GUARDRAILS_PLACEHOLDER {
@@ -472,6 +633,7 @@ pub(crate) fn resolve_launch_args(args: Vec<String>, project_root: &Path) -> Vec
             if let Some(val) = expanded.get(i + 1) {
                 let looks_like_json = val.trim_start().starts_with('{');
                 if !looks_like_json && !Path::new(val).exists() {
+                    warnings.push(format!("Guardrail settings file not found (skipped --settings): {val}"));
                     i += 2;
                     continue;
                 }
@@ -480,7 +642,11 @@ pub(crate) fn resolve_launch_args(args: Vec<String>, project_root: &Path) -> Vec
         out.push(expanded[i].clone());
         i += 1;
     }
-    out
+    (out, warnings)
+}
+
+pub(crate) fn resolve_launch_args(args: Vec<String>, project_root: &Path) -> Vec<String> {
+    resolve_launch_args_checked(args, project_root, false).0
 }
 
 // Directories that CLI agents' official installers put binaries in but that a
@@ -646,10 +812,12 @@ fn emit_output<R: tauri::Runtime>(
     // Clean text and check prompt pattern
     let clean_text = strip_ansi_rust(&raw_data);
     if let Some(prompt) = detect_prompts(&clean_text) {
-        // If it's a login link, open default OS browser
+        // If it's a login link from an allowlisted auth host, open default OS browser
         if prompt.prompt_type == "login" {
             if let Some(ref url) = prompt.url {
-                let _ = app.opener().open_path(url, None::<String>);
+                if is_allowed_login_url(url) {
+                    let _ = app.opener().open_path(url, None::<String>);
+                }
             }
         }
         
@@ -712,7 +880,14 @@ pub async fn start_session_internal<R: tauri::Runtime>(
     let project_root = std::env::current_exe()
         .map(resolve_project_root)
         .unwrap_or_else(|_| get_default_cwd());
-    let args = resolve_launch_args(args, &project_root);
+    let (args, guardrail_warnings) = resolve_launch_args_checked(args, &project_root, true);
+    for w in &guardrail_warnings {
+        eprintln!("[guardrails] {w}");
+        let _ = app.emit("guardrail-warning", serde_json::json!({
+            "session_id": &session_id,
+            "message": w,
+        }));
+    }
 
     let mut cmd = CommandBuilder::new(&command);
     cmd.args(args);
@@ -742,15 +917,13 @@ pub async fn start_session_internal<R: tauri::Runtime>(
     // agy or claude are directly accessible inside the PTY shell.
     cmd.env("PATH", child_path_env());
 
-    if let Some(cwd_path) = cwd {
-        if !cwd_path.is_empty() {
-            cmd.cwd(PathBuf::from(cwd_path));
-        } else {
-            cmd.cwd(get_default_cwd());
-        }
-    } else {
-        cmd.cwd(get_default_cwd());
-    }
+    let effective_cwd = match cwd {
+        Some(ref cwd_path) if !cwd_path.is_empty() => PathBuf::from(cwd_path),
+        _ => get_default_cwd(),
+    };
+    let canonical_cwd = canonical_folder(&effective_cwd.to_string_lossy())
+        .unwrap_or_else(|_| effective_cwd.to_string_lossy().into_owned());
+    cmd.cwd(effective_cwd);
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
 
@@ -760,15 +933,20 @@ pub async fn start_session_internal<R: tauri::Runtime>(
     *sess.session.lock().await = Some(pair.master);
     *sess.writer.lock().await = Some(writer);
     *sess.child.lock().await = Some(child);
+    *sess.cwd.lock().unwrap_or_else(|e| e.into_inner()) = Some(canonical_cwd);
     let my_generation = sess.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     let child_handle = sess.child.clone();
+    let cwd_handle = sess.cwd.clone();
     let generation_handle = sess.generation.clone();
 
-    // TEMPORARY: raw PTY byte log for diagnosing rendering bugs in the
-    // upstream CLI's own output. Truncated fresh on every session start.
-    let debug_log_path = debug_log_path();
-    let _ = std::fs::write(&debug_log_path, b"");
-    debug_log_marker(&format!("start_pty rows={rows} cols={cols}"));
+    // Opt-in raw PTY byte log (only written when AGENT_DECK_PTY_DEBUG=1).
+    let debug_log_path = debug_log_path(&session_id);
+    if let Some(ref p) = debug_log_path {
+        if let Some(f) = open_debug_log_append(p) {
+            let _ = f.set_len(0);
+        }
+        debug_log_marker(&session_id, &format!("start_pty rows={rows} cols={cols}"));
+    }
 
     let app_clone = app.clone();
     let broadcast_tx = state.broadcast_tx.read().await.clone();
@@ -786,9 +964,11 @@ pub async fn start_session_internal<R: tauri::Runtime>(
                     break;
                 }
                 Ok(n) => {
-                    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&debug_log_path_clone) {
-                        use std::io::Write as _;
-                        let _ = f.write_all(&buffer[..n]);
+                    if let Some(ref p) = debug_log_path_clone {
+                        if let Some(mut f) = open_debug_log_append(p) {
+                            use std::io::Write as _;
+                            let _ = f.write_all(&buffer[..n]);
+                        }
                     }
 
                     if tx.blocking_send(PtyMessage::Output(buffer[..n].to_vec())).is_err() {
@@ -833,12 +1013,18 @@ pub async fn start_session_internal<R: tauri::Runtime>(
                     if !accumulated.is_empty() {
                         emit_output(&app_clone, &broadcast_tx, &session_id, &accumulated);
                     }
+                    if generation_handle.load(std::sync::atomic::Ordering::SeqCst) == my_generation {
+                        *cwd_handle.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    }
                     emit_status(&app_clone, &broadcast_tx, &session_id, "terminated");
                     break;
                 }
                 Ok(Some(PtyMessage::Error)) => {
                     if !accumulated.is_empty() {
                         emit_output(&app_clone, &broadcast_tx, &session_id, &accumulated);
+                    }
+                    if generation_handle.load(std::sync::atomic::Ordering::SeqCst) == my_generation {
+                        *cwd_handle.lock().unwrap_or_else(|e| e.into_inner()) = None;
                     }
                     emit_status(&app_clone, &broadcast_tx, &session_id, "error");
                     break;
@@ -865,6 +1051,7 @@ pub async fn start_session_internal<R: tauri::Runtime>(
                             // the session as if the pipe had closed.
                             Some(t) if t.elapsed() >= CHILD_EXIT_GRACE => {
                                 if generation_handle.load(std::sync::atomic::Ordering::SeqCst) == my_generation {
+                                    *cwd_handle.lock().unwrap_or_else(|e| e.into_inner()) = None;
                                     emit_status(&app_clone, &broadcast_tx, &session_id, "terminated");
                                 }
                                 break;
@@ -916,6 +1103,8 @@ pub async fn stop_pty_internal(state: &PtyState) -> Result<(), String> {
 }
 
 pub async fn stop_session(sess: &PtySession) -> Result<(), String> {
+    *sess.cwd.lock().unwrap_or_else(|e| e.into_inner()) = None;
+
     let mut child_guard = sess.child.lock().await;
     if let Some(mut child) = child_guard.take() {
         let _ = child.kill();
@@ -948,13 +1137,13 @@ pub async fn write_to_session(input: String, sess: &PtySession) -> Result<(), St
 }
 
 pub async fn resize_pty_internal(rows: u16, cols: u16, state: &PtyState) -> Result<(), String> {
-    resize_session(rows, cols, &state.session(DEFAULT_SESSION)).await
+    resize_session(DEFAULT_SESSION, rows, cols, &state.session(DEFAULT_SESSION)).await
 }
 
-pub async fn resize_session(rows: u16, cols: u16, sess: &PtySession) -> Result<(), String> {
+pub async fn resize_session(session_id: &str, rows: u16, cols: u16, sess: &PtySession) -> Result<(), String> {
     let session_guard = sess.session.lock().await;
     if let Some(ref master) = *session_guard {
-        debug_log_marker(&format!("resize_pty rows={rows} cols={cols}"));
+        debug_log_marker(session_id, &format!("resize_pty rows={rows} cols={cols}"));
         master
             .resize(PtySize {
                 rows,
@@ -982,6 +1171,7 @@ pub async fn start_pty(
     state: State<'_, PtyState>,
 ) -> Result<(), String> {
     let id = resolve_session_id(session_id)?;
+    state.check_can_start(&id, cwd.as_deref())?;
     start_session_internal(&id, command, args, cwd, rows, cols, app, &state).await
 }
 
@@ -993,7 +1183,7 @@ pub async fn resize_pty(
     state: State<'_, PtyState>,
 ) -> Result<(), String> {
     let id = resolve_session_id(session_id)?;
-    resize_session(rows, cols, &state.session(&id)).await
+    resize_session(&id, rows, cols, &state.session(&id)).await
 }
 
 #[tauri::command]
@@ -1012,12 +1202,40 @@ pub async fn stop_pty(session_id: Option<String>, state: State<'_, PtyState>) ->
     stop_session(&state.session(&id)).await
 }
 
+/// Remove a closed session's per-tab temp directory (`<root>/tmp/sessions/<id>`).
+pub(crate) fn remove_session_tmp(project_root: &Path, session_id: &str) {
+    if !valid_session_id(session_id) {
+        return;
+    }
+    let dir = project_root.join("tmp").join("sessions").join(session_id);
+    if dir.exists() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// Stop a session and forget it (its tab was closed).
 #[tauri::command]
 pub async fn close_pty_session(session_id: String, state: State<'_, PtyState>) -> Result<(), String> {
     let id = resolve_session_id(Some(session_id))?;
     stop_session(&state.session(&id)).await?;
     state.remove(&id);
+    crate::quit_guard::forget_session(&id);
+    if let Ok(exe) = std::env::current_exe() {
+        remove_session_tmp(&resolve_project_root(exe), &id);
+    }
+    Ok(())
+}
+
+/// Stop every running session except `keep_session_id` (used before self-update
+/// so other tabs don't race with file replacement or keep files locked).
+#[tauri::command]
+pub async fn stop_other_sessions(keep_session_id: String, state: State<'_, PtyState>) -> Result<(), String> {
+    let keep = resolve_session_id(Some(keep_session_id))?;
+    for id in state.session_ids() {
+        if id != keep {
+            let _ = stop_session(&state.session(&id)).await;
+        }
+    }
     Ok(())
 }
 
@@ -1050,6 +1268,7 @@ pub async fn force_kill_pty(session_id: Option<String>, app: AppHandle, state: S
     }
     drop(child_guard);
 
+    *sess.cwd.lock().unwrap_or_else(|e| e.into_inner()) = None;
     let mut writer_guard = sess.writer.lock().await;
     *writer_guard = None;
     drop(writer_guard);
@@ -1081,8 +1300,29 @@ pub(crate) fn write_session_registry(root: &Path, entries: &[SessionEntry]) -> s
     std::fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(&serde_json::json!({ "sessions": entries })).unwrap_or_default();
     let tmp = dir.join(format!("{SESSION_REGISTRY_FILE}.tmp"));
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, dir.join(SESSION_REGISTRY_FILE))
+    let dest = dir.join(SESSION_REGISTRY_FILE);
+    std::fs::write(&tmp, &json)?;
+    // On Windows, a guard hook reading the registry at the exact instant we
+    // rename can transiently cause a sharing violation; retry briefly.
+    let mut last_err = None;
+    for attempt in 0..5 {
+        match std::fs::rename(&tmp, &dest) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(20 * (attempt + 1)));
+            }
+        }
+    }
+    Err(last_err.unwrap())
+}
+
+/// Clear the session registry on app exit so stale tab entries never linger.
+pub fn clear_session_registry_on_exit() {
+    if let Ok(exe) = std::env::current_exe() {
+        let root = resolve_project_root(exe);
+        let _ = write_session_registry(&root, &[]);
+    }
 }
 
 #[tauri::command]
@@ -1484,6 +1724,77 @@ mod tests {
         let p = prompt.unwrap();
         assert_eq!(p.prompt_type, "login");
         assert_eq!(p.url.unwrap(), "https://accounts.google.com/o/oauth2/device/auth?user_code=ABCD-EFGH");
+    }
+
+    #[test]
+    fn test_login_url_rejects_untrusted_hosts() {
+        assert!(is_allowed_login_url("https://accounts.google.com/o/oauth2/auth"));
+        assert!(is_allowed_login_url("https://claude.ai/oauth/authorize"));
+        assert!(!is_allowed_login_url("https://evil.example.com/oauth/steal"));
+        assert!(!is_allowed_login_url("https://accounts.google.com@evil.example.com/oauth"));
+        assert!(!is_allowed_login_url("http://accounts.google.com/oauth"));
+        // Untrusted URLs in PTY output (e.g. repo docs or web results) must not trigger login open
+        assert!(detect_prompts("See https://evil.example.com/oauth/login for details").is_none());
+        assert!(detect_prompts("Bio at https://blog.example.com/author/alice").is_none());
+    }
+
+    #[test]
+    fn test_backend_enforces_session_limit_and_folder_overlap() {
+        let state = PtyState::default();
+        let base = std::env::temp_dir().join(format!("agentdeck-overlap-{}", std::process::id()));
+        let sub = base.join("child");
+        let other = std::env::temp_dir().join(format!("agentdeck-other-{}", std::process::id()));
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+
+        let s1 = state.session("tab-1");
+        *s1.cwd.lock().unwrap() = Some(canonical_folder(base.to_str().unwrap()).unwrap());
+        // Same or nested folder must be rejected for another session
+        assert!(state.check_can_start("tab-2", Some(base.to_str().unwrap())).is_err());
+        assert!(state.check_can_start("tab-2", Some(sub.to_str().unwrap())).is_err());
+        // Unrelated folder is fine, and restarting the same session is fine
+        assert!(state.check_can_start("tab-2", Some(other.to_str().unwrap())).is_ok());
+        assert!(state.check_can_start("tab-1", Some(base.to_str().unwrap())).is_ok());
+
+        // Reaching MAX_SESSIONS rejects a 7th distinct session
+        for i in 2..=MAX_SESSIONS {
+            let _ = state.session(&format!("tab-{i}"));
+        }
+        assert!(state.check_can_start("tab-7", Some(other.to_str().unwrap())).is_err());
+
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn test_resolve_launch_args_checked_fallbacks_and_warns() {
+        let dir = std::env::temp_dir().join(format!("agentdeck-checked-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let args = vec![
+            "--settings".into(),
+            "${PROJECT_ROOT}/.claude/missing.json".into(),
+            "--append-system-prompt".into(),
+            GUARDRAILS_PLACEHOLDER.into(),
+        ];
+        let (out, warnings) = resolve_launch_args_checked(args, &dir, true);
+        assert_eq!(warnings.len(), 1, "missing --settings must emit a warning");
+        assert_eq!(out[0], "--append-system-prompt");
+        assert!(out[1].contains("File Access Policy"), "embedded AGENTS.release.md fallback must apply");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_debug_log_is_disabled_by_default_and_tmp_is_cleaned() {
+        if std::env::var("AGENT_DECK_PTY_DEBUG").is_err() {
+            assert!(debug_log_path("main").is_none());
+        }
+        let dir = std::env::temp_dir().join(format!("agentdeck-tmpclean-{}", std::process::id()));
+        let sess_tmp = dir.join("tmp").join("sessions").join("tab-1");
+        std::fs::create_dir_all(&sess_tmp).unwrap();
+        std::fs::write(sess_tmp.join("scratch.txt"), "secret").unwrap();
+        remove_session_tmp(&dir, "tab-1");
+        assert!(!sess_tmp.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

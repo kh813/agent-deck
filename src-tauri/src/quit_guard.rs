@@ -56,6 +56,17 @@ pub fn set_session_labels(labels: std::collections::HashMap<String, String>) {
     *SESSION_LABELS.lock().unwrap_or_else(|e| e.into_inner()) = Some(labels);
 }
 
+/// Remove a closed session from busy tracking so it never shows up in the quit
+/// dialog after its tab has already been closed.
+pub fn forget_session(session_id: &str) {
+    if let Some(ref mut map) = *SESSION_OUTPUT_MS.lock().unwrap_or_else(|e| e.into_inner()) {
+        map.remove(session_id);
+    }
+    if let Some(ref mut map) = *SESSION_LABELS.lock().unwrap_or_else(|e| e.into_inner()) {
+        map.remove(session_id);
+    }
+}
+
 /// Names of the tabs with output in the last BUSY_OUTPUT_WINDOW_MS, sorted.
 pub(crate) fn busy_tab_names(
     outputs: &std::collections::HashMap<String, u64>,
@@ -286,6 +297,18 @@ mod tests {
         assert_eq!(confirm_message(&[]), CONFIRM_MESSAGE);
         // unknown label -> the id
         assert_eq!(busy_tab_names(&out, &Default::default(), 10_500), vec!["main".to_string(), "tab-2".to_string()]);
+    }
+
+    #[test]
+    fn forget_session_removes_closed_tab_from_busy_list() {
+        note_output_for("closed-tab-test");
+        set_session_labels(std::collections::HashMap::from([
+            ("closed-tab-test".to_string(), "ClosedTab".to_string()),
+        ]));
+        assert!(current_busy_tabs().contains(&"ClosedTab".to_string()));
+        forget_session("closed-tab-test");
+        assert!(!current_busy_tabs().contains(&"ClosedTab".to_string()));
+        assert!(!current_busy_tabs().contains(&"closed-tab-test".to_string()));
     }
 
     #[test]

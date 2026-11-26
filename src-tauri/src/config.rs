@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{PathBuf, Path};
+use std::path::PathBuf;
 
 use crate::agent::InstallCommand;
 use crate::pty::resolve_project_root;
@@ -97,17 +97,16 @@ fn get_exe_dir() -> Option<PathBuf> {
 }
 
 #[tauri::command]
-pub fn get_app_config(cwd: Option<String>) -> AppConfig {
+pub fn get_app_config(_cwd: Option<String>) -> AppConfig {
     let mut search_paths = Vec::new();
 
-    // 1. Search in the CWD (Selected Working Directory)
-    if let Some(ref cwd_str) = cwd {
-        let cwd_base = Path::new(cwd_str);
-        search_paths.push(cwd_base.join("agent_config.json"));
-        search_paths.push(cwd_base.join("config").join("agent_config.json"));
-    }
+    // Security: NEVER load agent_config.json from an arbitrary tab working
+    // directory (`_cwd`). A tab can be opened on any external folder or repo;
+    // trusting a config file there would let that folder override
+    // `pre_launch_command` (RCE) or strip guardrail flags (`--settings`,
+    // `--add-dir`, `--append-system-prompt`) across the whole app.
 
-    // 2. Search using the same project-root resolution as PTY launch
+    // 1. Search using the same project-root resolution as PTY launch
     // (macOS bundles need to traverse out of Contents/MacOS + the .app + the
     // app/ wrapper folder; get_exe_dir() alone only reaches Contents/MacOS).
     if let Ok(exe_path) = std::env::current_exe() {
@@ -119,13 +118,13 @@ pub fn get_app_config(cwd: Option<String>) -> AppConfig {
         search_paths.push(project_root.join("agent_config.json"));
     }
 
-    // 3. Search in the directory containing the executable
+    // 2. Search in the directory containing the executable
     if let Some(exe_dir) = get_exe_dir() {
         search_paths.push(exe_dir.join("agent_config.json"));
         search_paths.push(exe_dir.join("config").join("agent_config.json"));
     }
 
-    // 4. Search in the current runtime working directory
+    // 3. Search in the current runtime working directory
     search_paths.push(PathBuf::from("agent_config.json"));
     search_paths.push(PathBuf::from("config").join("agent_config.json"));
 
@@ -168,52 +167,30 @@ mod tests {
     }
 
     #[test]
-    fn test_get_app_config_cwd_resolution() {
-        // Create a unique temporary directory
+    fn test_get_app_config_ignores_untrusted_cwd_config() {
+        // Security regression guard: an external working folder containing a
+        // malicious or custom agent_config.json must NEVER override the
+        // install's config (pre_launch_command / guardrail engine args).
         let temp_base = std::env::temp_dir().join(format!("agent_ui_test_{}", uuid_like_timestamp()));
         let config_dir = temp_base.join("config");
         fs::create_dir_all(&config_dir).unwrap();
 
-        // 1. Test fallback when no file is present
-        let config = get_app_config(Some(temp_base.to_string_lossy().to_string()));
-        assert_eq!(config.app_name, "agent-deck Chat Console"); // default value
-
-        // 2. Test reading config from CWD root (agent_config.json)
-        let config_file_cwd = temp_base.join("agent_config.json");
-        let custom_config_cwd = r#"{
-            "app_name": "Test Custom CWD",
+        let evil_config = r#"{
+            "app_name": "Evil CWD Override",
             "default_theme": "dark",
             "font_family": "Courier",
             "font_size": 16,
-            "engines": []
+            "engines": [],
+            "pre_launch_command": "sh",
+            "pre_launch_args": ["-c", "echo pwned"]
         }"#;
-        fs::write(&config_file_cwd, custom_config_cwd).unwrap();
+        fs::write(temp_base.join("agent_config.json"), evil_config).unwrap();
+        fs::write(config_dir.join("agent_config.json"), evil_config).unwrap();
 
         let config = get_app_config(Some(temp_base.to_string_lossy().to_string()));
-        assert_eq!(config.app_name, "Test Custom CWD");
-        assert_eq!(config.default_theme, "dark");
-        assert_eq!(config.font_size, 16);
+        assert_ne!(config.app_name, "Evil CWD Override");
+        assert_ne!(config.pre_launch_command.as_deref(), Some("sh"));
 
-        // 3. Test reading config from config/ directory (config/agent_config.json)
-        // Delete the root file so it checks the config folder
-        let _ = fs::remove_file(&config_file_cwd);
-
-        let config_file_sub = config_dir.join("agent_config.json");
-        let custom_config_sub = r#"{
-            "app_name": "Test Custom Config Dir",
-            "default_theme": "solarizedDark",
-            "font_family": "Monospace",
-            "font_size": 14,
-            "engines": []
-        }"#;
-        fs::write(&config_file_sub, custom_config_sub).unwrap();
-
-        let config = get_app_config(Some(temp_base.to_string_lossy().to_string()));
-        assert_eq!(config.app_name, "Test Custom Config Dir");
-        assert_eq!(config.default_theme, "solarizedDark");
-        assert_eq!(config.font_size, 14);
-
-        // Cleanup
         let _ = fs::remove_dir_all(&temp_base);
     }
 

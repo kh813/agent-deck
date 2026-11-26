@@ -82,7 +82,8 @@ describe("quit guard wiring", () => {
   const app = readFileSync(join(__dirname, "..", "App.tsx"), "utf8");
 
   it("reports session start, self-update, engine update and install as busy", () => {
-    expect(app).toMatch(/const quitGuardBusy = isStarting \|\| isSelfUpdating \|\| isUpdating \|\| isInstalling \|\| catalogBusy;/);
+    expect(app).toMatch(/const anyTabStarting = Object\.values\(runtimeStates\)\.some\(\(s\) => s\.isStarting\);/);
+    expect(app).toMatch(/const quitGuardBusy = anyTabStarting \|\| isSelfUpdating \|\| isUpdating \|\| isInstalling \|\| catalogBusy;/);
     expect(app).toMatch(/invoke\("set_quit_guard_busy", \{ busy: quitGuardBusy \}\)/);
   });
 });
@@ -173,6 +174,6 @@ describe("input bar: images sent with the text", () => {
     expect(form.indexOf("<AttachmentChips")).toBeLessThan(form.indexOf("<input"));
     expect(form.indexOf("<ImageAttachButton")).toBeLessThan(form.indexOf('type="submit"'));
     const paste = app.slice(app.indexOf("const handleInputPaste"), app.indexOf("const handleInputPaste") + 600);
-    expect(paste).toContain('addInputAttachments([path], "pasted")');
+    expect(paste).toContain('addInputAttachmentsForTab(targetTabId, [path], "pasted")');
   });
 });

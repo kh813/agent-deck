@@ -3,10 +3,13 @@
 // path, while neither CLI's own image paste works through xterm.js
 // (app_specs.md 5.7.2).
 //
-// Saved under <working folder>/tmp/screenshots/ (tmp/ is the scratch area
-// AGENTS.md allows skills and agents to use). The same image pasted twice is
-// stored once, very large images are scaled down (tokens), and files older
-// than RETENTION are pruned whenever a new one is saved.
+// Saved under <agent-deck install>/tmp/screenshots/ (always the install root,
+// never the tab's working folder, so external repos/folders are never dirtied
+// with temporary screenshots, and both agy and Claude Code can always read
+// them without colliding with OS temp-folder deny rules such as Windows
+// AppData/ or macOS /var/ & /private/). The same image pasted twice is stored
+// once, very large images are scaled down (tokens), and files older than
+// RETENTION are pruned on app startup and whenever a new one is saved.
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -165,8 +168,23 @@ pub(crate) fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Raw-body command: body = image bytes; headers x-cwd / x-mime / x-name
-/// (percent-encoded). Returns the saved file's absolute path.
+/// Always store pasted screenshots under the agent-deck install root so
+/// arbitrary tab working folders (e.g. Git repositories) are never modified
+/// and both engines can read them under the install's tmp/ policy.
+pub(crate) fn screenshot_root() -> PathBuf {
+    crate::pty::get_default_cwd()
+}
+
+/// Prune screenshots older than RETENTION in `<project_root>/tmp/screenshots/`.
+/// Called on app startup in addition to each save, so old files are cleaned up
+/// even when the user hasn't pasted a new screenshot recently.
+pub fn prune_screenshots_on_startup(project_root: &Path) -> usize {
+    prune_old(&project_root.join(SCREENSHOT_DIR), SystemTime::now(), RETENTION)
+}
+
+/// Raw-body command: body = image bytes; headers x-mime / x-name
+/// (percent-encoded; x-cwd is ignored — screenshots always go under the
+/// install root's tmp/screenshots/). Returns the saved file's absolute path.
 #[tauri::command]
 pub fn save_pasted_image(request: tauri::ipc::Request<'_>) -> Result<String, String> {
     let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
@@ -180,8 +198,7 @@ pub fn save_pasted_image(request: tauri::ipc::Request<'_>) -> Result<String, Str
             .map(percent_decode)
             .unwrap_or_default()
     };
-    let cwd = header("x-cwd");
-    let project_dir = if cwd.is_empty() { crate::pty::get_default_cwd() } else { PathBuf::from(cwd) };
+    let project_dir = screenshot_root();
     let path = save_image(&project_dir, data, &header("x-mime"), &header("x-name"))?;
     Ok(path.to_string_lossy().into_owned())
 }
@@ -200,7 +217,7 @@ pub(crate) fn rgba_to_png(width: usize, height: usize, rgba: &[u8]) -> Option<Ve
 /// no paste event ever reaches the page, and as the macOS fallback when the
 /// webview's paste event carries no image data.
 #[tauri::command]
-pub async fn save_clipboard_image(cwd: String, name_hint: String) -> Result<Option<String>, String> {
+pub async fn save_clipboard_image(_cwd: String, name_hint: String) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let Ok(mut clipboard) = arboard::Clipboard::new() else {
             return Ok(None);
@@ -210,7 +227,7 @@ pub async fn save_clipboard_image(cwd: String, name_hint: String) -> Result<Opti
         };
         let png = rgba_to_png(img.width, img.height, &img.bytes)
             .ok_or_else(|| "could not encode the clipboard image".to_string())?;
-        let project_dir = if cwd.is_empty() { crate::pty::get_default_cwd() } else { PathBuf::from(cwd) };
+        let project_dir = screenshot_root();
         let path = save_image(&project_dir, &png, "image/png", &name_hint)?;
         Ok(Some(path.to_string_lossy().into_owned()))
     })
@@ -360,5 +377,19 @@ mod tests {
         assert_eq!(percent_decode("%4"), "%4");
         // never slices inside a UTF-8 char; a lone byte decodes lossily
         assert_eq!(percent_decode("%あ%E3"), "%あ\u{FFFD}");
+    }
+
+    #[test]
+    fn screenshot_root_is_always_install_root_and_startup_prune_works() {
+        assert_eq!(screenshot_root(), crate::pty::get_default_cwd());
+        let root = tmpdir();
+        // No tmp/screenshots/ yet -> 0 removed, no error
+        assert_eq!(prune_screenshots_on_startup(&root), 0);
+        let dir = root.join(SCREENSHOT_DIR);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("fresh.png"), &png(5, 5)).unwrap();
+        assert_eq!(prune_screenshots_on_startup(&root), 0);
+        assert!(dir.join("fresh.png").exists());
+        fs::remove_dir_all(root).ok();
     }
 }

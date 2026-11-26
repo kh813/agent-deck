@@ -2,7 +2,7 @@
 // engines and order come back; sessions are NOT started (only the visible
 // tab auto-starts, as a single session always has). Stored per machine in
 // localStorage; anything malformed is dropped rather than trusted.
-import { DEFAULT_SESSION_ID, MAX_TABS, SESSION_ID_RE, Tab } from "./sessions";
+import { DEFAULT_SESSION_ID, MAX_TABS, SESSION_ID_RE, Tab, foldersOverlap } from "./sessions";
 
 export const TABS_STORAGE_KEY = "agent-deck-tabs";
 
@@ -11,22 +11,38 @@ export interface SavedTabs {
   activeId: string;
 }
 
-export function sanitizeSavedTabs(raw: unknown, fallbackEngine: string): SavedTabs | null {
+const defaultCaseInsensitive = () =>
+  typeof navigator !== "undefined" && /Mac|Win/i.test(navigator.userAgent);
+
+export function sanitizeSavedTabs(
+  raw: unknown,
+  fallbackEngine: string,
+  caseInsensitive: boolean = defaultCaseInsensitive(),
+): SavedTabs | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as { tabs?: unknown; activeId?: unknown };
   if (!Array.isArray(r.tabs)) return null;
   const seen = new Set<string>();
   const tabs: Tab[] = [];
+  let hasDefaultFolder = false;
   for (const t of r.tabs) {
     if (!t || typeof t !== "object") continue;
     const x = t as Record<string, unknown>;
     const id = typeof x.id === "string" ? x.id : "";
     if (!SESSION_ID_RE.test(id) || seen.has(id)) continue;
+    const cwd = typeof x.cwd === "string" ? x.cwd : "";
+    // Never restore two tabs on the same or nested folder (or two default-folder tabs).
+    if (!cwd) {
+      if (hasDefaultFolder) continue;
+      hasDefaultFolder = true;
+    } else if (tabs.some((prev) => prev.cwd && foldersOverlap(prev.cwd, cwd, caseInsensitive))) {
+      continue;
+    }
     seen.add(id);
     tabs.push({
       id,
       name: typeof x.name === "string" ? x.name.slice(0, 60) : "",
-      cwd: typeof x.cwd === "string" ? x.cwd : "",
+      cwd,
       engineId: typeof x.engineId === "string" && x.engineId ? x.engineId : fallbackEngine,
     });
     if (tabs.length >= MAX_TABS) break;
