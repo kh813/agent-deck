@@ -962,3 +962,8 @@ button:active {
   width: 100%;
   justify-content: flex-start;
 }
+
+/* Native selects ignore vertical padding in WebKit: match the text fields. */
+select.dialog-field {
+  height: 36px;
+}

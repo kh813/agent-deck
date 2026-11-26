@@ -11,12 +11,19 @@ describe("tabs wiring", () => {
     const f = slice("const switchToTab = useCallback", "}, [tabs]);");
     expect(f.indexOf("previousAgentIdRef.current = tab.engineId")).toBeLessThan(f.indexOf("setSelectedAgentId(tab.engineId)"));
   });
-  it("new tab: limit, folder picked, conflict check, then start in it", () => {
-    const f = slice("const handleNewTab = useCallback", "const handleCloseTab");
+  it("new tab: limit check, then the dialog (agent + folder)", () => {
+    const f = slice("const handleNewTab = useCallback", "const pickNewTabFolder");
     expect(f).toContain("canAddTab(tabs)");
-    expect(f).toContain("await checkFolderFree(picked)");
-    expect(f.indexOf("checkFolderFree")).toBeLessThan(f.indexOf("addTab("));
+    expect(f).toContain("setIsNewTabOpen(true)");
+    expect(app).toMatch(/<NewTabDialog[\s\S]{0,400}defaultEngineId=\{selectedAgentId\}/);
+    expect(app).toMatch(/engines=\{\(appConfig\?\.engines \?\? \[\]\)\.filter\(\(e\) => agentStatuses\[e\.id\]\?\.installed\)/);
+  });
+  it("creating: conflict check first, then the tab starts with the chosen agent (not an engine-change auto-start)", () => {
+    const f = slice("const createTab = useCallback", "const handleCloseTab");
+    expect(f.indexOf("resolveFolderFor(dir)")).toBeLessThan(f.indexOf("addTab("));
+    expect(f).toContain("engineId }));");
     expect(f).toContain("setStartOnMountIds");
+    expect(f.indexOf("previousAgentIdRef.current = engineId")).toBeLessThan(f.indexOf("setSelectedAgentId(engineId)"));
   });
   it("changing a tab's folder is checked too (ignoring that tab)", () => {
     const f = slice("const changeCwd = useCallback", "]);");

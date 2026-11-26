@@ -24,6 +24,7 @@ import {
 import { sameSet, tabShortcutTarget } from "./lib/tabShortcuts";
 import { workingSessions } from "./lib/sessionLights";
 import { TabSidebar } from "./components/TabSidebar";
+import { NewTabDialog } from "./components/NewTabDialog";
 import { IDLE_RUNTIME_STATE, RuntimeApi, RuntimeState, SessionRuntime } from "./components/SessionRuntime";
 import { loadLangChoice, parseLangChoice, resolveLang, saveLangChoice, setCurrentLang, type LangChoice } from "./lib/language";
 import { stopAndWaitForExit } from "./lib/ptyHandover";
@@ -400,21 +401,25 @@ function App() {
   const caseInsensitiveFs = typeof navigator !== "undefined" && /Mac|Win/i.test(navigator.userAgent);
   // Resolve a folder (and every other tab's) and refuse one already in use
   // by another tab, or nested with one (5.7.4). Returns the resolved path.
-  const checkFolderFree = useCallback(async (dir: string, forTabId?: string): Promise<string | null> => {
-    if (!isTauri()) return dir;
+  const resolveFolderFor = useCallback(async (dir: string, forTabId?: string): Promise<{ folder: string; error: string | null }> => {
+    if (!isTauri()) return { folder: dir, error: null };
     const resolve = (p: string) => invoke<string>("resolve_session_folder", { path: p }).catch(() => p);
     const folder = await resolve(dir);
     const others = await Promise.all(tabs.filter((tb) => tb.id !== forTabId).map(async (tb) => ({ ...tb, cwd: await resolve(tb.cwd) })));
     const conflict = findFolderConflict(others, folder, caseInsensitiveFs);
-    if (conflict) {
-      await message(
-        t("folderInUse").replace("{tab}", tabLabel(conflict, t("appLocationShort"))).replace("{folder}", folder),
-        { title: "agent-deck", kind: "warning" },
-      );
+    const error = conflict
+      ? t("folderInUse").replace("{tab}", tabLabel(conflict, t("appLocationShort"))).replace("{folder}", folder)
+      : null;
+    return { folder, error };
+  }, [tabs, caseInsensitiveFs, lang]);
+  const checkFolderFree = useCallback(async (dir: string, forTabId?: string): Promise<string | null> => {
+    const { folder, error } = await resolveFolderFor(dir, forTabId);
+    if (error) {
+      await message(error, { title: "agent-deck", kind: "warning" });
       return null;
     }
     return folder;
-  }, [tabs, caseInsensitiveFs, lang]);
+  }, [resolveFolderFor]);
   const changeCwd = useCallback(async (dir: string) => {
     const folder = await checkFolderFree(dir, activeSessionId);
     if (folder) await changeCwdUnchecked(dir);
@@ -1224,27 +1229,42 @@ function App() {
     setTabs((prev) => prev.map((tb) => (tb.id === activeSessionId && tb.engineId !== selectedAgentId ? { ...tb, engineId: selectedAgentId } : tb)));
   }, [selectedAgentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // "New tab" opens a dialog: agent (default: the one in use) + folder.
+  const [isNewTabOpen, setIsNewTabOpen] = useState(false);
   const handleNewTab = useCallback(async () => {
     if (!isTauri()) return;
     if (!canAddTab(tabs)) {
       showStatusMessage(t("tabLimit").replace("{max}", String(MAX_TABS)));
       return;
     }
-    let picked: string | string[] | null = null;
+    setIsNewTabOpen(true);
+  }, [tabs, showStatusMessage, lang]);
+
+  const pickNewTabFolder = useCallback(async (): Promise<string | null> => {
     try {
-      picked = await open({ directory: true, multiple: false, title: t("newTabPickFolder") });
+      const picked = await open({ directory: true, multiple: false, title: t("newTabPickFolder") });
+      return typeof picked === "string" ? picked : null;
     } catch (e) {
       console.error("Failed to open directory dialog:", e);
+      return null;
     }
-    if (!picked || typeof picked !== "string") return;
-    const folder = await checkFolderFree(picked);
-    if (!folder) return;
+  }, [lang]);
+
+  // Returns an error to show in the dialog, or null once the tab exists.
+  const createTab = useCallback(async (dir: string, engineId: string): Promise<string | null> => {
+    if (!canAddTab(tabs)) return t("tabLimit").replace("{max}", String(MAX_TABS));
+    const { folder, error } = await resolveFolderFor(dir);
+    if (error) return error;
     const id = newSessionId(tabs.map((tb) => tb.id));
-    setTabs((prev) => addTab(prev, { id, name: "", cwd: folder, engineId: selectedAgentId }));
+    setTabs((prev) => addTab(prev, { id, name: "", cwd: folder, engineId }));
     setStartOnMountIds((prev) => new Set(prev).add(id));
-    previousAgentIdRef.current = selectedAgentId;
+    // Not an engine *change* (no auto-start effect): the new tab starts itself.
+    previousAgentIdRef.current = engineId;
+    setSelectedAgentId(engineId);
     setActiveSessionId(id);
-  }, [tabs, checkFolderFree, selectedAgentId, showStatusMessage, lang]);
+    setIsNewTabOpen(false);
+    return null;
+  }, [tabs, resolveFolderFor, lang]);
 
   const handleCloseTab = useCallback(async (id: string = activeSessionId) => {
     if (tabs.length <= 1) {
@@ -1371,6 +1391,16 @@ function App() {
                   🌐 Web UI {webServerStatus.running ? "● ON" : ""}
                 </button>
 </>) : undefined}
+      />
+    )}
+    {isNewTabOpen && (
+      <NewTabDialog
+        lang={lang}
+        engines={(appConfig?.engines ?? []).filter((e) => agentStatuses[e.id]?.installed).map((e) => ({ id: e.id, name: e.name }))}
+        defaultEngineId={selectedAgentId}
+        pickFolder={pickNewTabFolder}
+        onCreate={createTab}
+        onCancel={() => setIsNewTabOpen(false)}
       />
     )}
     <div className="app-container">
