@@ -107,6 +107,7 @@ pub fn run() {
             web_server::start_web_server,
             web_server::stop_web_server,
             web_server::get_web_server_status,
+            web_server::web_ui_available,
             cert::import_ssl_certificate,
             cert::get_ssl_configuration,
             cert::reset_ssl_to_self_signed

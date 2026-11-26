@@ -343,6 +343,28 @@ pub async fn get_web_server_status_internal(hub: &WebServerHub) -> Result<WebSer
     })
 }
 
+/// The Web UI (remote access from another device) is switched off in
+/// releases until its security has been reviewed (2026-11-26: starting it
+/// did nothing visible, and it exposes the agent session over the network).
+/// Developers can still exercise it with AGENT_DECK_WEB_UI=1.
+pub(crate) const WEB_UI_ENV: &str = "AGENT_DECK_WEB_UI";
+
+pub(crate) fn web_ui_enabled_by(env_value: Option<&str>) -> bool {
+    matches!(env_value, Some("1") | Some("true"))
+}
+
+pub fn web_ui_enabled() -> bool {
+    web_ui_enabled_by(std::env::var(WEB_UI_ENV).ok().as_deref())
+}
+
+pub const WEB_UI_DISABLED_MESSAGE: &str =
+    "Web UI は現在準備中のため、この版では使えません / The Web UI is not available in this version yet";
+
+#[tauri::command]
+pub fn web_ui_available() -> bool {
+    web_ui_enabled()
+}
+
 // Tauri commands
 #[tauri::command]
 pub async fn start_web_server(
@@ -352,6 +374,10 @@ pub async fn start_web_server(
     app: tauri::AppHandle,
 ) -> Result<WebServerStatus, String> {
     use tauri::Manager;
+    if !web_ui_enabled() {
+        // Refused here too, not only greyed out on screen.
+        return Err(WEB_UI_DISABLED_MESSAGE.to_string());
+    }
     let app_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     start_web_server_internal(hub.inner().clone(), port, password, app_dir).await
 }
@@ -373,6 +399,26 @@ pub async fn get_web_server_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_ui_is_off_unless_explicitly_enabled() {
+        assert!(!web_ui_enabled_by(None));
+        for v in ["", "0", "false", "yes", "TRUE "] {
+            assert!(!web_ui_enabled_by(Some(v)), "{v:?}");
+        }
+        assert!(web_ui_enabled_by(Some("1")));
+        assert!(web_ui_enabled_by(Some("true")));
+    }
+
+    #[test]
+    fn start_command_checks_the_gate_before_starting() {
+        let src = include_str!("web_server.rs");
+        let f = &src[src.find("pub async fn start_web_server(").unwrap()..];
+        let f = &f[..f.find("\n}\n").unwrap()];
+        let gate = f.find("if !web_ui_enabled()").expect("gate");
+        assert!(gate < f.find("start_web_server_internal(").unwrap());
+        assert!(include_str!("lib.rs").contains("web_server::web_ui_available"));
+    }
 
     #[tokio::test]
     async fn test_password_required_for_web_server() {

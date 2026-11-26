@@ -280,9 +280,22 @@ function App() {
     password_set: false,
   });
   const [isWebUiModalOpen, setIsWebUiModalOpen] = useState(false);
-  const [webUiPasswordInput, setWebUiPasswordInput] = useState(() => {
-    return localStorage.getItem("agent_deck_web_password") || "";
-  });
+  // Not persisted any more: it used to sit in localStorage in plain text.
+  const [webUiPasswordInput, setWebUiPasswordInput] = useState("");
+  useEffect(() => {
+    try {
+      localStorage.removeItem("agent_deck_web_password");
+    } catch {
+      // storage unavailable: nothing stored either
+    }
+  }, []);
+  // Web UI is switched off in releases until its security is reviewed
+  // (web_server.rs web_ui_available; AGENT_DECK_WEB_UI=1 for development).
+  const [webUiAvailable, setWebUiAvailable] = useState(false);
+  useEffect(() => {
+    if (!isTauri()) return;
+    invoke<boolean>("web_ui_available").then(setWebUiAvailable).catch(() => setWebUiAvailable(false));
+  }, []);
   const [webUiPortInput, setWebUiPortInput] = useState<number>(8443);
   const [isWebLoginRequired, setIsWebLoginRequired] = useState(false);
   const [browserLoginPassword, setBrowserLoginPassword] = useState("");
@@ -978,12 +991,12 @@ function App() {
   }, [refreshWebServerStatus]);
 
   const handleStartWebServer = async () => {
+    if (!webUiAvailable) return;
     if (!webUiPasswordInput.trim()) {
       alert(t("webUiPasswordRequiredAlert"));
       return;
     }
     try {
-      localStorage.setItem("agent_deck_web_password", webUiPasswordInput);
       const res = await invoke<any>("start_web_server", {
         port: Number(webUiPortInput) || 8443,
         password: webUiPasswordInput,
@@ -1796,6 +1809,21 @@ function App() {
                 </button>
               </div>
 
+              <>
+                {!webUiAvailable && (
+                  <div role="status" className="webui-unavailable" style={{
+                    padding: "12px 16px", borderRadius: "8px", marginBottom: "16px",
+                    background: "rgba(245, 158, 11, 0.12)", border: "1px solid rgba(245, 158, 11, 0.45)",
+                    color: "var(--text-color)", fontSize: "0.85rem", lineHeight: 1.6,
+                  }}>
+                    <strong>🚧 {t("webUiUnavailableTitle")}</strong>
+                    <div>{t("webUiUnavailableBody")}</div>
+                  </div>
+                )}
+                <fieldset disabled={!webUiAvailable} aria-disabled={!webUiAvailable} style={{
+                  border: "none", padding: 0, margin: 0, minWidth: 0,
+                  opacity: webUiAvailable ? 1 : 0.45, pointerEvents: webUiAvailable ? undefined : "none",
+                }}>
               <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                 <div style={{
                   padding: "12px 16px",
@@ -1973,6 +2001,8 @@ function App() {
                   </div>
                 )}
               </div>
+                </fieldset>
+              </>
             </div>
           </div>
         )}
