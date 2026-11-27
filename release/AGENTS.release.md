@@ -88,7 +88,7 @@ File operations are strictly limited to the locations below. Never access files 
 - Home directory credentials/configs: `~/.ssh`, `~/.aws`, `~/.env`, `~/.bashrc`, `~/.zshrc`, `~/.gemini`, `~/.claude`, `~/.gitconfig`
 - Home directory app config folders: `~/.config/`, `~/Library/` (Mac), `AppData/` (Windows)
 - Renaming or deleting OS-default home folders themselves (Downloads, Documents, etc.)
-- Any path outside the current user's home directory
+- Any path outside the current user's home directory (reading one, e.g. `C:\` or `/var/log`, asks the user first; don't try to get around that)
 
 ---
 

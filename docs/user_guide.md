@@ -754,6 +754,20 @@ This tool runs entirely on your local computer. Access is restricted to the loca
 - **Windows システムフォルダ**（`C:\Windows`、`C:\Program Files` 等）
   Windows system folders
 
+### タブで複数のセッションを使うとき / With several tabs (v0.3.0+)
+
+- 別のタブの作業フォルダには書き込めません（2 つの AI が同じファイルを同時に編集しないため）。同じフォルダ・内側・外側のフォルダを 2 つのタブで開くこともできません。
+  A tab can't write into another tab's working folder, and two tabs can't open the same, an inner or an outer folder.
+- 自分の作業フォルダの外に書き込むときは、確認が表示されます。
+  Writing outside the tab's own working folder asks you first.
+- ホームフォルダの外（`C:\` 直下、`/var/log` など）を読み取ろうとしたときも、確認が表示されます。`Downloads`・`Documents` などホームフォルダ内は読み取れます。
+  Reading outside your home folder (e.g. `C:\`, `/var/log`) asks you first; folders inside your home (Downloads, Documents, ...) can be read.
+- ブラウザを使うスキルは同時に 1 つだけ動きます。別のタブで使用中のときは、終わるまで待つか、少しあとでやり直すよう表示されます。
+  Only one browser-using skill runs at a time; another tab's waits or asks you to retry.
+
+確認が表示されたら、内容を読んで、心当たりがない場合は許可しないでください。
+When asked, read what it wants to do and don't allow it if you didn't expect it.
+
 > **ファイルの送信について / About file transmission:**
 > このツールはローカルで動作します。あなたのファイルが外部サーバーに送信されることはありません（カレンダー取得など、Google API を呼び出すスキルは除きます）。
 > This tool operates locally. Your files are not sent to external servers (except when a skill explicitly calls a Google API).

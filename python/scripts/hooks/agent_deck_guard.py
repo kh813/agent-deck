@@ -22,6 +22,12 @@ set in their environment); your own agy / claude elsewhere is untouched.
   * a write outside this tab's working folder, its workspace folders and
     the install's shared writable areas (files/, tmp/, python/skills-personal/)
     -> ask the user first (agy: force_ask)
+  * a READ outside the user's home folder (C:\\, /etc, other users, other
+    drives...) that isn't the tab's folder, the install, a workspace folder
+    or the OS temp folder -> ask first. File-read tools of both engines, and
+    shell read/list commands (ls, dir, cat, type, Get-ChildItem, ...) naming
+    such a path. Reads inside the home folder (Downloads, Documents...) are
+    allowed, as AGENTS.md says; credentials stay denied above.
   * anything else -> no opinion (normal rules)
 
 Why a hook: agy ignores the Gemini-style ~/.gemini/policies, its Auto mode
@@ -54,8 +60,17 @@ AGY_SHELL_TOOLS = ("run_shell_command", "run_command")
 AGY_MATCHER = "|".join((*AGY_WRITE_TOOLS, *AGY_READ_TOOLS, *AGY_SHELL_TOOLS))
 
 CLAUDE_WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+CLAUDE_READ_TOOLS = ("Read", "Glob", "Grep", "NotebookRead")
 CLAUDE_SHELL_TOOLS = ("Bash",)
-CLAUDE_MATCHER = "|".join((*CLAUDE_WRITE_TOOLS, *CLAUDE_SHELL_TOOLS))
+CLAUDE_MATCHER = "|".join((*CLAUDE_WRITE_TOOLS, *CLAUDE_READ_TOOLS, *CLAUDE_SHELL_TOOLS))
+
+# Shell commands that read or list what they're given (outside-home check).
+_SHELL_READ_CMDS = frozenset({
+    "ls", "dir", "cat", "type", "more", "less", "head", "tail", "find", "tree", "du", "stat",
+    "file", "wc", "grep", "rg", "findstr", "strings", "xxd", "od", "cp", "copy", "robocopy",
+    "get-childitem", "gci", "get-content", "gc", "select-string", "sls", "get-item", "gi",
+})
+_NULL_DEVICES = ("/dev/null", "nul")
 
 _PATCH_FILE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$", re.M)
 _PATH_KEY = re.compile(r"(path|file|target|destination|source)", re.I)
@@ -173,8 +188,12 @@ def is_sensitive_path(path: str, mode: str, case_insensitive: bool) -> bool:
 
 
 def is_system_write_path(path: str, case_insensitive: bool) -> bool:
-    """True if path targets an OS system directory."""
+    """True if path targets an OS system directory. The null device
+    (/dev/null, NUL) is where output is thrown away, not a system write:
+    `cmd > /dev/null` / `2>/dev/null` must keep working (refused in 0.3.0-rc4)."""
     raw = path.replace("\\", "/")
+    if raw.lower() in _NULL_DEVICES or raw.lower().endswith("/nul"):
+        return False
     if _WIN_SYSTEM_RE.match(raw):
         return True
     p = _norm(path, case_insensitive)
@@ -328,8 +347,39 @@ def decide(paths, session_id: str, cwd: str, workspaces, root: str, sessions, ca
     return None, None
 
 
-def decide_read(paths, root: str, case_insensitive: bool):
-    """(decision, reason) or (None, None) for read tools (used for agy)."""
+def _os_temp_dirs() -> list:
+    dirs = list(_POSIX_TEMP_EXCEPTIONS)
+    try:
+        import tempfile
+        dirs.append(tempfile.gettempdir())
+    except Exception:
+        pass
+    return dirs
+
+
+def is_outside_home_read(path: str, cwd: str, root: str, workspaces, case_insensitive: bool) -> bool:
+    """A read target outside the user's home folder that isn't this tab's
+    folder, the install, an agy workspace folder or the OS temp folder."""
+    home = _home_dir()
+    if not path or not home or home == "~":
+        return False
+    if is_within(path, home, case_insensitive):
+        return False
+    for allowed in (cwd, root, *(workspaces or ()), *_os_temp_dirs()):
+        if allowed and is_within(path, allowed, case_insensitive):
+            return False
+    return True
+
+
+def _outside_home_reason(p: str) -> str:
+    return (
+        f"ホームフォルダの外を読み取ろうとしています: {p} — 許可しますか？"
+        f" / This reads outside your home folder: {p}. Allow it?"
+    )
+
+
+def decide_read(paths, root: str, case_insensitive: bool, cwd: str = "", workspaces=()):
+    """(decision, reason) or (None, None) for read tools (both engines)."""
     if not paths:
         return None, None
     for p in paths:
@@ -338,7 +388,35 @@ def decide_read(paths, root: str, case_insensitive: bool):
                 f"認証情報・設定ファイルへのアクセスは禁止されています: {p}"
                 f" / Reading credential or config files is blocked: {p}"
             )
+    for p in paths:
+        if is_outside_home_read(p, cwd, root, workspaces, case_insensitive):
+            return "ask", _outside_home_reason(p)
     return None, None
+
+
+def _shell_read_targets(cmd: str, cwd: str) -> list:
+    """Absolute paths given to read/list commands (ls, dir, cat, Get-ChildItem...)."""
+    out = []
+    for segment in re.split(r"[;&|]+|\n", cmd):
+        toks = _shell_tokens(segment.strip())
+        if not toks:
+            continue
+        name = os.path.basename(toks[0].replace("\\", "/")).lower()
+        if name.endswith(".exe"):
+            name = name[:-4]
+        if name not in _SHELL_READ_CMDS:
+            continue
+        for tok in toks[1:]:
+            t = tok.strip("'\"")
+            if not t or t.startswith("-") or (t.startswith("/") and len(t) == 2):  # -flags, /S style switches
+                continue
+            if t.lower() in _NULL_DEVICES:
+                continue
+            expanded = os.path.expanduser(t)
+            is_abs = os.path.isabs(expanded) or re.match(r"^[A-Za-z]:[/\\]?", expanded) is not None
+            if is_abs:
+                out.append(expanded)
+    return out
 
 
 def _shell_tokens(cmd: str) -> list:
@@ -458,6 +536,10 @@ def decide_shell(cmd: str, session_id: str, cwd: str, root: str, sessions, case_
                         " / Shell access to another tab's temp folder is blocked."
                     )
 
+    for target in _shell_read_targets(cmd, cwd):
+        if is_outside_home_read(target, cwd, root, (), case_insensitive):
+            return "ask", _outside_home_reason(target)
+
     return None, None
 
 
@@ -488,7 +570,7 @@ def run(engine: str, stdin_text: str, env) -> str:
             if tool in AGY_WRITE_TOOLS:
                 decision, reason = decide(target_paths(args, cwd), session_id, cwd, workspaces, root, sessions, ci)
             elif tool in AGY_READ_TOOLS:
-                decision, reason = decide_read(target_paths(args, cwd), root, ci)
+                decision, reason = decide_read(target_paths(args, cwd), root, ci, cwd, workspaces)
             elif tool in AGY_SHELL_TOOLS:
                 decision, reason = decide_shell(extract_shell_command(args), session_id, cwd, root, sessions, ci)
             else:
@@ -501,6 +583,12 @@ def run(engine: str, stdin_text: str, env) -> str:
                 cwd = (own or {}).get("cwd") or ""
             if tool in CLAUDE_WRITE_TOOLS:
                 decision, reason = decide(target_paths(args, cwd), session_id, cwd, [], root, sessions, ci)
+            elif tool in CLAUDE_READ_TOOLS:
+                paths = target_paths(args, cwd)
+                pattern = args.get("pattern") if tool == "Glob" and isinstance(args, dict) else None
+                if isinstance(pattern, str) and (os.path.isabs(pattern) or re.match(r"^[A-Za-z]:[/\\]", pattern)):
+                    paths.append(pattern.split("*", 1)[0] or pattern)
+                decision, reason = decide_read(paths, root, ci, cwd, [])
             elif tool in CLAUDE_SHELL_TOOLS:
                 decision, reason = decide_shell(extract_shell_command(args), session_id, cwd, root, sessions, ci)
             else:

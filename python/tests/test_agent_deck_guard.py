@@ -291,3 +291,84 @@ def test_windows_cmd_runs_the_agy_command(tmp_path, world):
                        capture_output=True, env={**os.environ, **env}, timeout=60, shell=True)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout.decode("utf-8"))["decision"] == "deny"
+
+
+class TestReadsOutsideHome:
+    """Option A (2026-11-27): reads outside the user's home folder (C:\\, /etc,
+    other drives) ask first, for file-read tools and shell read/list
+    commands. Reads inside home (Downloads, Documents...) stay allowed."""
+
+    @pytest.fixture
+    def env2(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        (home / "Downloads").mkdir(parents=True)
+        (home / ".ssh").mkdir()
+        root, cwd, far = tmp_path / "install", tmp_path / "proj", tmp_path / "far" / "away"
+        for d in (root / "tmp", cwd, far):
+            d.mkdir(parents=True)
+        monkeypatch.setattr(g, "_home_dir", lambda: str(home))
+        monkeypatch.setattr(g, "_os_temp_dirs", lambda: [])
+        env = {"AGENT_DECK_SESSION_ID": "tab-a", "AGENT_DECK_ROOT": str(root)}
+        return home, root, cwd, far, env
+
+    def _agy(self, tool, path, cwd, env, workspaces=()):
+        data = json.dumps({"toolCall": {"name": tool, "args": {"DirectoryPath": str(path)}},
+                           "cwd": str(cwd), "workspacePaths": [str(w) for w in workspaces]})
+        out = g.run("agy", data, env)
+        return json.loads(out)["decision"] if out else None
+
+    def _claude(self, tool, args, cwd, env):
+        out = g.run("claude", json.dumps({"tool_name": tool, "tool_input": args, "cwd": str(cwd)}), env)
+        return json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out else None
+
+    def test_outside_home_asks(self, env2):
+        home, root, cwd, far, env = env2
+        assert self._agy("list_dir", far, cwd, env) == "force_ask"
+        assert self._claude("Read", {"file_path": str(far / "x.txt")}, cwd, env) == "ask"
+        assert self._claude("Grep", {"pattern": "x", "path": str(far)}, cwd, env) == "ask"
+        assert self._claude("Glob", {"pattern": str(far) + "/**/*.txt"}, cwd, env) == "ask"
+
+    def test_inside_home_cwd_install_and_workspace_dont_ask(self, env2):
+        home, root, cwd, far, env = env2
+        assert self._agy("list_dir", home / "Downloads", cwd, env) is None  # the Windows report: intended
+        assert self._agy("view_file", cwd / "a.txt", cwd, env) is None
+        assert self._agy("view_file", root / "files" / "a.txt", cwd, env) is None
+        assert self._agy("list_dir", far, cwd, env, workspaces=[far]) is None
+        assert self._claude("Glob", {"pattern": "**/*.py"}, cwd, env) is None
+
+    def test_os_temp_doesnt_ask(self, env2, monkeypatch):
+        home, root, cwd, far, env = env2
+        monkeypatch.setattr(g, "_os_temp_dirs", lambda: [str(far)])
+        assert self._agy("list_dir", far, cwd, env) is None
+
+    def test_credentials_still_denied(self, env2):
+        home, root, cwd, far, env = env2
+        assert self._agy("list_dir", home / ".ssh", cwd, env) == "deny"
+
+    @pytest.mark.parametrize("cmd", ["ls -la {far}", "dir {far}", "cat {far}/a.txt | head", "Get-ChildItem {far}", "type C:\\Windows\\win.ini"])
+    def test_shell_read_commands_outside_home_ask(self, env2, cmd):
+        home, root, cwd, far, env = env2
+        out = g.run("claude", json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd.format(far=far)}, "cwd": str(cwd)}), env)
+        assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask", cmd
+
+    @pytest.mark.parametrize("cmd", [
+        "ls {home}/Downloads", "python3 {far}/tool.py", "cat a.txt > /dev/null", "dir /S", "echo hi",
+        "ls {cwd}",
+    ])
+    def test_other_shell_commands_untouched(self, env2, cmd):
+        home, root, cwd, far, env = env2
+        out = g.run("claude", json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd.format(home=home, far=far, cwd=cwd)}, "cwd": str(cwd)}), env)
+        assert out == "", cmd
+
+
+def test_claude_read_tools_are_hooked():
+    assert {"Read", "Glob", "Grep"} <= set(g.CLAUDE_MATCHER.split("|"))
+
+
+@pytest.mark.parametrize("cmd", ["cat a.txt > /dev/null", "ls 2>/dev/null", "dir > NUL", "make >/dev/null 2>&1"])
+def test_discarding_output_is_not_a_system_write(tmp_path, cmd):
+    """0.3.0-rc4 refused `> /dev/null` as a redirect into a system folder."""
+    env = {"AGENT_DECK_SESSION_ID": "a", "AGENT_DECK_ROOT": str(tmp_path / "root")}
+    out = g.run("claude", json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(tmp_path)}), env)
+    assert out == "", (cmd, out)
+    assert g.is_system_write_path("/dev/sda", False), "other /dev paths stay protected"

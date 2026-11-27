@@ -415,7 +415,7 @@ GUARD_AGY_MATCHER = (
     "list_dir|find_by_name|grep_search|read_notebook|"
     "run_shell_command|run_command"
 )
-GUARD_CLAUDE_MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Bash"
+GUARD_CLAUDE_MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Read|Glob|Grep|NotebookRead|Bash"
 
 
 def _guard_python(project_root):
