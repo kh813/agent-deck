@@ -95,3 +95,24 @@ describe("folder conflicts (same or nested folder)", () => {
     expect(s.findFolderConflict(tabs, "/p/proj", false, "a")).toBeNull();
   });
 });
+
+describe("auto-start (new tab / restored tab)", () => {
+  const base = { active: false, alreadyStarted: false, command: "/bin/claude", status: "idle" as const, isStarting: false };
+  it("a new tab starts right away, shown or not", () => {
+    expect(s.shouldAutoStart({ ...base, startOnMount: true })).toBe(true);
+  });
+  it("a restored tab starts the first time it's shown, not before", () => {
+    expect(s.shouldAutoStart({ ...base, startWhenShown: true, active: false })).toBe(false);
+    expect(s.shouldAutoStart({ ...base, startWhenShown: true, active: true })).toBe(true);
+  });
+  it("never twice; never while running/starting; waits for the engine's command", () => {
+    const shown = { ...base, startWhenShown: true, active: true };
+    expect(s.shouldAutoStart({ ...shown, alreadyStarted: true })).toBe(false); // e.g. the user stopped it later
+    expect(s.shouldAutoStart({ ...shown, status: "running" })).toBe(false);
+    expect(s.shouldAutoStart({ ...shown, isStarting: true })).toBe(false);
+    expect(s.shouldAutoStart({ ...shown, command: "" })).toBe(false);
+  });
+  it("an ordinary tab never starts by itself", () => {
+    expect(s.shouldAutoStart({ ...base, active: true })).toBe(false);
+  });
+});

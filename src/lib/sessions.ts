@@ -114,3 +114,25 @@ export function findFolderConflict(
 ): Tab | null {
   return tabs.find((t) => t.id !== ignoreTabId && t.cwd && foldersOverlap(t.cwd, folder, caseInsensitive)) ?? null;
 }
+
+/**
+ * Should a tab's session start by itself now? (5.7.4)
+ *  - a tab the user just created (startOnMount): right away;
+ *  - a tab restored after a relaunch (startWhenShown): the first time it is
+ *    shown -- not all at launch, so several agents don't start at once;
+ * never twice, never while it's already running/starting, and only once its
+ * engine's command is known. A tab the user stopped isn't restarted.
+ */
+export function shouldAutoStart(o: {
+  startOnMount?: boolean;
+  startWhenShown?: boolean;
+  active: boolean;
+  alreadyStarted: boolean;
+  command: string;
+  status: "idle" | "running" | "error";
+  isStarting: boolean;
+}): boolean {
+  if (o.alreadyStarted || !o.command || o.status === "running" || o.isStarting) return false;
+  if (o.startOnMount) return true;
+  return !!o.startWhenShown && o.active;
+}

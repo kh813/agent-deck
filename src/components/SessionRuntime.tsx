@@ -9,6 +9,7 @@ import type { Terminal } from "@xterm/xterm";
 import { TerminalView } from "./TerminalView";
 import { PtyPrompt, useChatSession } from "../hooks/useChatSession";
 import type { TerminalTheme } from "../utils/themes";
+import { shouldAutoStart } from "../lib/sessions";
 
 export interface RuntimeState {
   status: "idle" | "running" | "error";
@@ -51,6 +52,10 @@ interface Props {
   fontSize?: number;
   /** Start right after mounting (a tab the user just created). */
   startOnMount?: boolean;
+  /** Start the first time this tab is shown (a tab restored after a relaunch). */
+  startWhenShown?: boolean;
+  /** Told once this tab has started by itself (startOnMount / startWhenShown). */
+  onAutoStarted?: (sessionId: string) => void;
   onState: (sessionId: string, state: RuntimeState) => void;
   register: (sessionId: string, api: RuntimeApi | null) => void;
   /** Terminal size reports (shared by every tab: same box). */
@@ -109,13 +114,26 @@ export function SessionRuntime(props: Props) {
     return () => register(sessionId, null);
   }, [sessionId, register]);
 
-  // A tab the user just created starts in its folder right away.
+  // A tab the user just created starts in its folder right away; a tab
+  // restored after a relaunch starts the first time it's shown
+  // (lib/sessions.ts shouldAutoStart).
   const startedRef = useRef(false);
+  const { onAutoStarted } = props;
   useEffect(() => {
-    if (!props.startOnMount || startedRef.current || !props.command) return;
+    if (!shouldAutoStart({
+      startOnMount: props.startOnMount,
+      startWhenShown: props.startWhenShown,
+      active,
+      alreadyStarted: startedRef.current,
+      command: props.command,
+      status: chat.status,
+      isStarting: chat.isStarting,
+    })) return;
     startedRef.current = true;
+    onAutoStarted?.(sessionId);
     void chatRef.current.startSession(props.initialCwd, props.command, props.args);
-  }, [props.startOnMount, props.command, props.args, props.initialCwd]);
+  }, [props.startOnMount, props.startWhenShown, active, props.command, props.args, props.initialCwd,
+      chat.status, chat.isStarting, sessionId, onAutoStarted]);
 
   const onData = useCallback((data: string) => {
     chatRef.current.noteTerminalInput(data);

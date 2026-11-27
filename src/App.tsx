@@ -383,6 +383,19 @@ function App() {
     saveTabs({ tabs, activeId: activeSessionId });
   }, [tabs, activeSessionId]);
   const [startOnMountIds, setStartOnMountIds] = useState<ReadonlySet<string>>(() => new Set());
+  // Tabs restored from the last run, other than the visible one (which
+  // auto-starts as before): each starts the first time it's shown.
+  const [startWhenShownIds, setStartWhenShownIds] = useState<ReadonlySet<string>>(
+    () => new Set(restoredTabs ? restoredTabs.tabs.filter((tb) => tb.id !== restoredTabs.activeId).map((tb) => tb.id) : []),
+  );
+  const handleAutoStarted = useCallback((id: string) => {
+    setStartWhenShownIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
   const runtimesRef = useRef<Record<string, RuntimeApi>>({});
   const [runtimeStates, setRuntimeStates] = useState<Record<string, RuntimeState>>({});
   const registerRuntime = useCallback((id: string, api: RuntimeApi | null) => {
@@ -1901,6 +1914,8 @@ function App() {
                         fontFamily={terminalFont.family}
                         fontSize={terminalFont.size}
                         startOnMount={startOnMountIds.has(tab.id)}
+                        startWhenShown={startWhenShownIds.has(tab.id)}
+                        onAutoStarted={handleAutoStarted}
                         onState={handleRuntimeState}
                         register={registerRuntime}
                         onResize={handleTerminalResize}

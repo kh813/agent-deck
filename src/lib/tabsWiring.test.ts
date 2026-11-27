@@ -69,3 +69,17 @@ describe("restore, registry, notifications wiring", () => {
     expect(app).toContain("Object.values(runtimeStates).some((s) => s.isStarting)");
   });
 });
+
+describe("restored tabs start when first shown (0.3.0 bug: they stayed stopped)", () => {
+  it("every restored tab except the visible one is marked start-when-shown", () => {
+    expect(app).toMatch(/restoredTabs\.tabs\.filter\(\(tb\) => tb\.id !== restoredTabs\.activeId\)\.map\(\(tb\) => tb\.id\)/);
+    expect(app).toContain("startWhenShown={startWhenShownIds.has(tab.id)}");
+    expect(app).toContain("onAutoStarted={handleAutoStarted}");
+  });
+  it("the runtime decides with shouldAutoStart and only once", () => {
+    const rt = readFileSync(join(__dirname, "..", "components", "SessionRuntime.tsx"), "utf8");
+    expect(rt).toContain("shouldAutoStart({");
+    expect(rt).toContain("alreadyStarted: startedRef.current");
+    expect(rt).toContain("startWhenShown: props.startWhenShown");
+  });
+});
