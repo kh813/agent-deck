@@ -38,6 +38,11 @@ import {
   saveFontOverride,
   type FontMenuAction,
 } from "./lib/terminalFont";
+import {
+  installPerfBridge,
+  loadWebglEnabled,
+  saveWebglEnabled,
+} from "./lib/terminalRenderer";
 
 interface AgentStatus {
   installed: boolean;
@@ -197,6 +202,28 @@ function App() {
     const unsub = subscribeToTauriEvent(
       listen<FontMenuAction>("font-menu", (event) => {
         setFontOverride((cur) => applyFontAction(cur, event.payload, fontDefaultsRef.current));
+      })
+    );
+    return unsub;
+  }, []);
+
+  // Hardware-accelerated WebGL terminal renderer (app_specs.md 5.7.5).
+  // Defaults to ON; users can toggle back to DOM from View -> Hardware Acceleration (WebGL).
+  const [webglEnabled, setWebglEnabled] = useState(loadWebglEnabled);
+
+  useEffect(() => {
+    saveWebglEnabled(webglEnabled);
+    if (isTauri()) {
+      invoke("set_webgl_renderer_menu_state", { enabled: webglEnabled }).catch(() => {});
+    }
+  }, [webglEnabled]);
+
+  useEffect(() => {
+    installPerfBridge();
+    if (!isTauri()) return;
+    const unsub = subscribeToTauriEvent(
+      listen<boolean>("webgl-renderer-changed", (event) => {
+        setWebglEnabled(event.payload);
       })
     );
     return unsub;
@@ -1422,6 +1449,9 @@ function App() {
 
   // Which tabs are working (output in the last few seconds), for the lights.
   const lastOutputAtRef = useRef<Record<string, number>>({});
+  const handleOutputActivity = useCallback((sessionId: string) => {
+    lastOutputAtRef.current[sessionId] = Date.now();
+  }, []);
   const [workingIds, setWorkingIds] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => {
     if (!isTauri()) return;
@@ -1877,6 +1907,7 @@ function App() {
                     theme={themes[currentThemeId].terminal}
                     fontFamily={terminalFont.family}
                     fontSize={terminalFont.size}
+                    webglEnabled={webglEnabled}
                     onImagePaste={handleTerminalImagePaste}
                     onNativeImagePaste={handleNativeImagePaste}
                   />
@@ -1913,9 +1944,11 @@ function App() {
                         theme={themes[currentThemeId].terminal}
                         fontFamily={terminalFont.family}
                         fontSize={terminalFont.size}
+                        webglEnabled={webglEnabled}
                         startOnMount={startOnMountIds.has(tab.id)}
                         startWhenShown={startWhenShownIds.has(tab.id)}
                         onAutoStarted={handleAutoStarted}
+                        onOutputActivity={handleOutputActivity}
                         onState={handleRuntimeState}
                         register={registerRuntime}
                         onResize={handleTerminalResize}

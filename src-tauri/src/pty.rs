@@ -3,7 +3,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
@@ -297,17 +297,70 @@ pub struct PtyPromptPayload {
     pub inputs: Option<Vec<String>>,
 }
 
+/// PTY reader chunk size (bytes). Larger than 1 KiB to cut read() syscalls
+/// and heap allocations during high-throughput output (app_specs.md 5.7.5).
+pub(crate) const PTY_READ_BUF_SIZE: usize = 16 * 1024;
+/// High-refresh batching window: 6 ms (~166 Hz) keeps up with 120 Hz (8.33 ms)
+/// and 144 Hz (6.94 ms) displays without flooding IPC.
+pub(crate) const PTY_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(6);
+/// Short idle timeout so interactive key echoes flush with <= 2 ms backend delay.
+pub(crate) const PTY_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2);
+/// Immediate flush size threshold (bytes) during sustained bursts.
+pub(crate) const PTY_FLUSH_MAX_BYTES: usize = 32 * 1024;
+
+// Precompiled regexes for ANSI stripping and prompt detection so hot-path
+// flushes (up to ~166 Hz) never recompile patterns.
+fn re_col_move() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\x1b\[[0-9]*[GC]").unwrap())
+}
+
+fn re_ansi() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"[\x1b\x9b]\[[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]").unwrap()
+    })
+}
+
+fn re_numbered_q() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"Do you want [^?\n]{0,300}\?").unwrap())
+}
+
+fn re_numbered_item() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?:^|\s)(?:❯\s*)?([1-9])\.\s").unwrap())
+}
+
+fn re_login_url() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"https://[a-zA-Z0-9./?=&_%:-]*(oauth|auth|device)[a-zA-Z0-9./?=&_%:-]*").unwrap())
+}
+
+fn re_permission_cmd() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"permission for:\s*\r?\n?\s*([^\r\n]+)").unwrap())
+}
+
+fn re_confirm() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)(confirm|proceed|are you sure|y/n|yes/no)[\s\S]*?\[([yY]/[nN]|[yY]es/[nN]o)\]").unwrap())
+}
+
+fn re_path() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)(enter|select|input)\s+[\s\S]*?(path|folder|directory|destination)").unwrap())
+}
+
 // Strip ANSI helper on backend to parse clean prompt patterns
 pub fn strip_ansi_rust(text: &str) -> String {
     // Claude Code (Ink) draws the gap between words as an absolute/relative
     // cursor column move (ESC[<n>G / ESC[<n>C) rather than a space
     // character, so plain stripping glues "Yes, I trust" into "Yes,Itrust".
     // Turn those moves into a space first so phrase matching still works.
-    let col_move = Regex::new(r"\x1b\[[0-9]*[GC]").unwrap();
-    let text = col_move.replace_all(text, " ");
+    let text = re_col_move().replace_all(text, " ");
     let text = text.as_ref();
-    let re = Regex::new(r"[\x1b\x9b]\[[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]").unwrap();
-    re.replace_all(text, "").to_string()
+    re_ansi().replace_all(text, "").to_string()
 }
 
 const ARROW_DOWN: &str = "\x1b[B";
@@ -323,14 +376,12 @@ fn collapse_ws(s: &str) -> String {
 }
 
 fn detect_numbered_menu(text: &str) -> Option<PtyPromptPayload> {
-    let q_re = Regex::new(r"Do you want [^?\n]{0,300}\?").unwrap();
-    let q = q_re.find_iter(text).last()?;
+    let q = re_numbered_q().find_iter(text).last()?;
     let rest = &text[q.end()..];
     let footer = rest.find("Esc to cancel")?;
     let body = &rest[..footer];
 
-    let item_re = Regex::new(r"(?:^|\s)(?:❯\s*)?([1-9])\.\s").unwrap();
-    let marks: Vec<(usize, usize, u32)> = item_re
+    let marks: Vec<(usize, usize, u32)> = re_numbered_item()
         .captures_iter(body)
         .map(|c| {
             let m = c.get(0).unwrap();
@@ -405,8 +456,7 @@ pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
     }
 
     // 1. Login/Authentication URL (Google OAuth / Claude / GitHub / Microsoft device login)
-    let login_re = Regex::new(r"https://[a-zA-Z0-9./?=&_%:-]*(oauth|auth|device)[a-zA-Z0-9./?=&_%:-]*").unwrap();
-    if let Some(mat) = login_re.find(text) {
+    if let Some(mat) = re_login_url().find(text) {
         let candidate = mat.as_str();
         if is_allowed_login_url(candidate) {
             return Some(PtyPromptPayload {
@@ -453,7 +503,7 @@ pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
     // 3. Tool/Command Permission Request Prompt
     if text.contains("Requesting permission for:") || (text.contains("Do you want to proceed?") && !text.contains("[y/N]")) {
         let mut cmd_name = "command".to_string();
-        if let Some(caps) = Regex::new(r"permission for:\s*\r?\n?\s*([^\r\n]+)").unwrap().captures(text) {
+        if let Some(caps) = re_permission_cmd().captures(text) {
             cmd_name = caps.get(1).map_or("command".to_string(), |m| m.as_str().trim().to_string());
         }
         return Some(PtyPromptPayload {
@@ -472,8 +522,7 @@ pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
 
     // 4. Y/N Confirmation
     // Proceed [y/N], Confirm [yes/no], procedd (y/n), Are you sure? [y/N]
-    let confirm_re = Regex::new(r"(?i)(confirm|proceed|are you sure|y/n|yes/no)[\s\S]*?\[([yY]/[nN]|[yY]es/[nN]o)\]").unwrap();
-    if confirm_re.is_match(text) {
+    if re_confirm().is_match(text) {
         return Some(PtyPromptPayload {
             prompt_type: "confirm".to_string(),
             message: "Interactive confirmation requested.".to_string(),
@@ -484,8 +533,7 @@ pub fn detect_prompts(text: &str) -> Option<PtyPromptPayload> {
     }
 
     // 4. Path Input prompt
-    let path_re = Regex::new(r"(?i)(enter|select|input)\s+[\s\S]*?(path|folder|directory|destination)").unwrap();
-    if path_re.is_match(text) {
+    if re_path().is_match(text) {
         return Some(PtyPromptPayload {
             prompt_type: "path".to_string(),
             message: "Folder path input requested.".to_string(),
@@ -789,27 +837,37 @@ enum PtyMessage {
 fn emit_output<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     broadcast_tx: &Option<tokio::sync::broadcast::Sender<crate::web_server::WsServerEvent>>,
+    output_channel: Option<&tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>>,
     session_id: &str,
     data: &[u8],
 ) {
     crate::quit_guard::note_output_for(session_id);
     let main = session_id == DEFAULT_SESSION;
-    let _ = app.emit("session-output", SessionOutputPayload { session_id: session_id.to_string(), data: data.to_vec() });
-    if main {
-        let _ = app.emit("pty-output", PtyOutputPayload { data: data.to_vec() });
-        if let Some(ref tx) = broadcast_tx {
-            let _ = tx.send(crate::web_server::WsServerEvent::Output(data.to_vec()));
+    if let Some(ch) = output_channel {
+        // High-refresh binary IPC path (app_specs.md 5.7.5): send raw bytes
+        // straight to this session's channel, skipping JSON array serialization
+        // and the legacy duplicate `pty-output` event.
+        let _ = ch.send(tauri::ipc::InvokeResponseBody::Raw(data.to_vec()));
+        if main {
+            if let Some(ref tx) = broadcast_tx {
+                let _ = tx.send(crate::web_server::WsServerEvent::Output(data.to_vec()));
+            }
+        }
+    } else {
+        let _ = app.emit("session-output", SessionOutputPayload { session_id: session_id.to_string(), data: data.to_vec() });
+        if main {
+            let _ = app.emit("pty-output", PtyOutputPayload { data: data.to_vec() });
+            if let Some(ref tx) = broadcast_tx {
+                let _ = tx.send(crate::web_server::WsServerEvent::Output(data.to_vec()));
+            }
         }
     }
 
-    // Lossy-decoding here is fine even if it mangles a
-    // boundary-spanning character: this text is only used
-    // for prompt-pattern matching, not display, so an
-    // occasional stray replacement character has no visible
-    // effect on what the user sees in the terminal.
+    // Prompt detection runs after the bytes have already been dispatched to the
+    // frontend so ANSI stripping / regex matching stays off the render critical path.
+    // Lossy-decoding here is fine even if it mangles a boundary-spanning character:
+    // this text is only used for prompt-pattern matching, not display.
     let raw_data = String::from_utf8_lossy(data).into_owned();
-
-    // Clean text and check prompt pattern
     let clean_text = strip_ansi_rust(&raw_data);
     if let Some(prompt) = detect_prompts(&clean_text) {
         // If it's a login link from an allowlisted auth host, open default OS browser
@@ -831,6 +889,7 @@ fn emit_output<R: tauri::Runtime>(
     }
 }
 
+#[cfg(test)]
 pub async fn start_pty_internal<R: tauri::Runtime>(
     command: String,
     args: Vec<String>,
@@ -843,6 +902,7 @@ pub async fn start_pty_internal<R: tauri::Runtime>(
     start_session_internal(DEFAULT_SESSION, command, args, cwd, rows, cols, app, state).await
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub async fn start_session_internal<R: tauri::Runtime>(
     session_id: &str,
@@ -851,6 +911,21 @@ pub async fn start_session_internal<R: tauri::Runtime>(
     cwd: Option<String>,
     rows: Option<u16>,
     cols: Option<u16>,
+    app: tauri::AppHandle<R>,
+    state: &PtyState,
+) -> Result<(), String> {
+    start_session_with_channel(session_id, command, args, cwd, rows, cols, None, app, state).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn start_session_with_channel<R: tauri::Runtime>(
+    session_id: &str,
+    command: String,
+    args: Vec<String>,
+    cwd: Option<String>,
+    rows: Option<u16>,
+    cols: Option<u16>,
+    output_channel: Option<tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>>,
     app: tauri::AppHandle<R>,
     state: &PtyState,
 ) -> Result<(), String> {
@@ -956,7 +1031,7 @@ pub async fn start_session_internal<R: tauri::Runtime>(
     let debug_log_path_clone = debug_log_path.clone();
     thread::spawn(move || {
         let mut reader = reader;
-        let mut buffer = [0u8; 1024];
+        let mut buffer = vec![0u8; PTY_READ_BUF_SIZE];
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => {
@@ -983,11 +1058,11 @@ pub async fn start_session_internal<R: tauri::Runtime>(
         }
     });
 
-    // Spawn tokio task that flushes accumulated output to the frontend with batching
+    // Spawn tokio task that flushes accumulated output to the frontend with
+    // high-refresh batching (app_specs.md 5.7.5).
     tokio::spawn(async move {
-        let mut accumulated = Vec::new();
-        let mut last_flush = std::time::Instant::now();
-        let flush_interval = std::time::Duration::from_millis(15); // 15ms batching window
+        let mut accumulated = Vec::with_capacity(PTY_FLUSH_MAX_BYTES);
+        let mut last_flush = std::time::Instant::now() - PTY_FLUSH_INTERVAL;
         // The session also ends when its process exits, even if the output
         // pipe never reports EOF. Confirmed on Windows (2026-11-26): ConPTY
         // kept the pipe open after `self_update.py apply` exited, so
@@ -997,21 +1072,29 @@ pub async fn start_session_internal<R: tauri::Runtime>(
         let mut exited_at: Option<std::time::Instant> = None;
 
         loop {
-            match tokio::time::timeout(std::time::Duration::from_millis(5), rx.recv()).await {
+            // Only arm the short 2 ms idle flush timer when bytes are actually
+            // buffered; when completely idle, sleep up to CHILD_EXIT_POLL so
+            // background tabs do not wake tokio hundreds of times per second.
+            let wait = if accumulated.is_empty() {
+                CHILD_EXIT_POLL
+            } else {
+                PTY_IDLE_TIMEOUT
+            };
+            match tokio::time::timeout(wait, rx.recv()).await {
                 Ok(Some(PtyMessage::Output(chunk))) => {
                     accumulated.extend_from_slice(&chunk);
 
-                    // Flush immediately if buffer size is large (>= 16 KB)
-                    // or if the flush interval has elapsed.
-                    if accumulated.len() >= 16384 || last_flush.elapsed() >= flush_interval {
-                        emit_output(&app_clone, &broadcast_tx, &session_id, &accumulated);
+                    // Flush immediately if buffer size is large (>= 32 KB)
+                    // or if the high-refresh flush interval (6 ms) has elapsed.
+                    if accumulated.len() >= PTY_FLUSH_MAX_BYTES || last_flush.elapsed() >= PTY_FLUSH_INTERVAL {
+                        emit_output(&app_clone, &broadcast_tx, output_channel.as_ref(), &session_id, &accumulated);
                         accumulated.clear();
                         last_flush = std::time::Instant::now();
                     }
                 }
                 Ok(Some(PtyMessage::Terminated)) => {
                     if !accumulated.is_empty() {
-                        emit_output(&app_clone, &broadcast_tx, &session_id, &accumulated);
+                        emit_output(&app_clone, &broadcast_tx, output_channel.as_ref(), &session_id, &accumulated);
                     }
                     if generation_handle.load(std::sync::atomic::Ordering::SeqCst) == my_generation {
                         *cwd_handle.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -1021,7 +1104,7 @@ pub async fn start_session_internal<R: tauri::Runtime>(
                 }
                 Ok(Some(PtyMessage::Error)) => {
                     if !accumulated.is_empty() {
-                        emit_output(&app_clone, &broadcast_tx, &session_id, &accumulated);
+                        emit_output(&app_clone, &broadcast_tx, output_channel.as_ref(), &session_id, &accumulated);
                     }
                     if generation_handle.load(std::sync::atomic::Ordering::SeqCst) == my_generation {
                         *cwd_handle.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -1033,9 +1116,10 @@ pub async fn start_session_internal<R: tauri::Runtime>(
                     break;
                 }
                 Err(_) => {
-                    // Timeout (5ms idle). Flush immediately to keep interactive inputs responsive.
+                    // Short idle timeout with buffered bytes -> flush immediately
+                    // to keep interactive inputs responsive.
                     if !accumulated.is_empty() {
-                        emit_output(&app_clone, &broadcast_tx, &session_id, &accumulated);
+                        emit_output(&app_clone, &broadcast_tx, output_channel.as_ref(), &session_id, &accumulated);
                         accumulated.clear();
                         last_flush = std::time::Instant::now();
                     }
@@ -1167,12 +1251,16 @@ pub async fn start_pty(
     rows: Option<u16>,
     cols: Option<u16>,
     session_id: Option<String>,
+    on_output: Option<tauri::ipc::JavaScriptChannelId>,
+    webview: tauri::Webview,
     app: AppHandle,
     state: State<'_, PtyState>,
 ) -> Result<(), String> {
     let id = resolve_session_id(session_id)?;
     state.check_can_start(&id, cwd.as_deref())?;
-    start_session_internal(&id, command, args, cwd, rows, cols, app, &state).await
+    let output_channel = on_output
+        .map(|chan_id| chan_id.channel_on::<tauri::Wry, tauri::ipc::InvokeResponseBody>(webview));
+    start_session_with_channel(&id, command, args, cwd, rows, cols, output_channel, app, &state).await
 }
 
 #[tauri::command]
@@ -2089,5 +2177,74 @@ mod tests {
         // Claude Code's "auto" theme: last field <= 6 or == 8 means dark.
         assert_eq!(colorfgbg(true), "15;0");
         assert_eq!(colorfgbg(false), "0;15");
+    }
+
+    #[test]
+    fn high_refresh_constants_support_120hz_and_above() {
+        // 120 Hz = 8.33 ms, 144 Hz = 6.94 ms -> flush window must stay <= 6 ms.
+        assert!(PTY_FLUSH_INTERVAL <= std::time::Duration::from_millis(6));
+        assert!(PTY_IDLE_TIMEOUT <= std::time::Duration::from_millis(4));
+        assert!(PTY_READ_BUF_SIZE >= 8 * 1024);
+        assert!(PTY_FLUSH_MAX_BYTES >= PTY_READ_BUF_SIZE);
+    }
+
+    #[tokio::test]
+    async fn channel_streams_raw_bytes_without_json_output_events() {
+        use std::sync::Mutex as StdMutex;
+        use tauri::Listener;
+
+        let app = tauri::test::mock_app();
+        let state = PtyState::default();
+        let raw_chunks: Arc<StdMutex<Vec<u8>>> = Arc::default();
+        let json_events: Arc<StdMutex<usize>> = Arc::default();
+        let legacy_events: Arc<StdMutex<usize>> = Arc::default();
+
+        {
+            let j = json_events.clone();
+            app.listen_any("session-output", move |_| *j.lock().unwrap() += 1);
+            let l = legacy_events.clone();
+            app.listen_any("pty-output", move |_| *l.lock().unwrap() += 1);
+        }
+
+        let chunks_cb = raw_chunks.clone();
+        let channel = tauri::ipc::Channel::new(move |body: tauri::ipc::InvokeResponseBody| {
+            if let tauri::ipc::InvokeResponseBody::Raw(bytes) = body {
+                chunks_cb.lock().unwrap().extend_from_slice(&bytes);
+            }
+            Ok(())
+        });
+
+        let (cmd, args): (&str, Vec<String>) = if cfg!(windows) {
+            ("cmd", vec!["/C".into(), "echo CHANNEL-RAW-OK".into()])
+        } else {
+            ("/bin/sh", vec!["-c".into(), "echo CHANNEL-RAW-OK".into()])
+        };
+        let tmp = std::env::temp_dir().to_string_lossy().into_owned();
+        start_session_with_channel(
+            DEFAULT_SESSION,
+            cmd.into(),
+            args,
+            Some(tmp),
+            Some(10),
+            Some(80),
+            Some(channel),
+            app.handle().clone(),
+            &state,
+        )
+        .await
+        .unwrap();
+
+        for _ in 0..100 {
+            let text = String::from_utf8_lossy(&raw_chunks.lock().unwrap()).into_owned();
+            if text.contains("CHANNEL-RAW-OK") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let text = String::from_utf8_lossy(&raw_chunks.lock().unwrap()).into_owned();
+        assert!(text.contains("CHANNEL-RAW-OK"), "got: {text:?}");
+        assert_eq!(*json_events.lock().unwrap(), 0, "channel path skips JSON session-output emit");
+        assert_eq!(*legacy_events.lock().unwrap(), 0, "channel path skips legacy pty-output emit");
+        let _ = stop_pty_internal(&state).await;
     }
 }

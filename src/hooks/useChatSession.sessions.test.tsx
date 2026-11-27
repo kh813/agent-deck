@@ -14,9 +14,18 @@ vi.mock("@tauri-apps/api/event", () => ({
     return () => { handlers[name] = (handlers[name] ?? []).filter((h) => h !== cb); };
   },
 }));
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: async (cmd: string, args: any) => { invokes.push({ cmd, args }); return false; },
-}));
+vi.mock("@tauri-apps/api/core", () => {
+  class MockChannel<T = unknown> {
+    onmessage: (msg: T) => void;
+    constructor(onmessage?: (msg: T) => void) {
+      this.onmessage = onmessage ?? (() => {});
+    }
+  }
+  return {
+    Channel: MockChannel,
+    invoke: async (cmd: string, args: any) => { invokes.push({ cmd, args }); return false; },
+  };
+});
 vi.mock("../lib/webClient", () => ({ isTauri: () => true, webClient: { on: () => () => {}, sendAction: () => {} } }));
 
 const { useChatSession } = await import("./useChatSession");
@@ -72,6 +81,20 @@ describe("useChatSession with session ids", () => {
     await act(async () => { await m.result.current.startSession("/proj"); });
     expect(invokes.find((i) => i.cmd === "start_pty")!.args.sessionId).toBe("main");
     expect(m.result.current.sessionId).toBe("main");
+  });
+
+  it("streams raw binary chunks through the start_pty output Channel", async () => {
+    const out = vi.fn();
+    const a = renderHook(() => useChatSession({ sessionId: "tab-a", command: "agy", onRawOutput: out }));
+    await act(async () => { await a.result.current.startSession("/proj"); });
+
+    const startCall = invokes.find((i) => i.cmd === "start_pty");
+    expect(startCall?.args.onOutput).toBeDefined();
+
+    const buf = new Uint8Array([72, 105]).buffer;
+    await act(async () => { startCall!.args.onOutput.onmessage(buf); });
+    expect(out).toHaveBeenCalledTimes(1);
+    expect(Array.from(out.mock.calls[0][0] as Uint8Array)).toEqual([72, 105]);
   });
 });
 

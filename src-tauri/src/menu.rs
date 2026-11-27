@@ -32,6 +32,8 @@ pub(crate) fn is_predefined_close_text(text: &str) -> bool {
     t == "close window" || t == "close"
 }
 const LANGUAGE_MENU_ID_PREFIX: &str = "language:";
+pub(crate) const WEBGL_RENDERER_MENU_ID: &str = "view:webgl-renderer";
+pub(crate) const WEBGL_RENDERER_LABEL: &str = "Hardware Acceleration (WebGL)";
 const SETTINGS_MENU_LABEL: &str = "Settings";
 /// View -> Language choices: (id, label). "auto" follows the OS
 /// (src/lib/language.ts resolves it); the frontend stores the choice.
@@ -143,6 +145,7 @@ struct FontMenuState {
 }
 struct AutoCheckUpdateMenuState(CheckMenuItem<tauri::Wry>);
 struct LanguageMenuState(Vec<(String, CheckMenuItem<tauri::Wry>)>);
+struct WebglRendererMenuState(CheckMenuItem<tauri::Wry>);
 
 /// Menu id -> language choice ("auto" / "ja" / "en").
 pub(crate) fn language_menu_choice(id: &str) -> Option<&'static str> {
@@ -304,6 +307,15 @@ pub fn build_menu(
     let language_refs: Vec<&dyn IsMenuItem<tauri::Wry>> =
         language_items.iter().map(|(_, i)| i as &dyn IsMenuItem<tauri::Wry>).collect();
     let language_submenu = Submenu::with_items(handle, "Language / 言語", true, &language_refs)?;
+    let webgl_renderer_item = CheckMenuItem::with_id(
+        handle,
+        WEBGL_RENDERER_MENU_ID,
+        WEBGL_RENDERER_LABEL,
+        true,
+        true,
+        None::<&str>,
+    )?;
+    let webgl_sep = PredefinedMenuItem::separator(handle)?;
     // Update items: an org-managed install (config.toml's [drive]
     // org_release_prod_file_id / org_release_test_file_id set -- see
     // package_release.py) should use its own controlled Drive channel
@@ -354,9 +366,16 @@ pub fn build_menu(
             view.append(&theme_submenu)?;
             view.append(&font_submenu)?;
             view.append(&language_submenu)?;
+            view.append(&webgl_sep)?;
+            view.append(&webgl_renderer_item)?;
         }
         None => {
-            let view = Submenu::with_items(handle, "View", true, &[&theme_submenu, &font_submenu, &language_submenu])?;
+            let view = Submenu::with_items(
+                handle,
+                "View",
+                true,
+                &[&theme_submenu, &font_submenu, &language_submenu, &webgl_sep, &webgl_renderer_item],
+            )?;
             let at = top_level_position(&menu, "Edit")?.map(|i| i + 1);
             match at {
                 Some(index) => menu.insert(&view, index)?,
@@ -427,6 +446,7 @@ pub fn build_menu(
     handle.manage(FontMenuState { families: family_items, sizes: size_items });
     handle.manage(AutoCheckUpdateMenuState(auto_check_update_item));
     handle.manage(LanguageMenuState(language_items));
+    handle.manage(WebglRendererMenuState(webgl_renderer_item));
 
     Ok(menu)
 }
@@ -500,6 +520,14 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         return;
     }
 
+    if id == WEBGL_RENDERER_MENU_ID {
+        if let Some(state) = app.try_state::<WebglRendererMenuState>() {
+            let enabled = state.0.is_checked().unwrap_or(true);
+            let _ = app.emit("webgl-renderer-changed", enabled);
+        }
+        return;
+    }
+
     if id == UPDATE_GITHUB_MENU_ID {
         let _ = app.emit("check-self-update-requested", "github");
         return;
@@ -530,6 +558,15 @@ pub fn set_theme(app: AppHandle, theme_id: String, is_dark: Option<bool>) {
 #[tauri::command]
 pub fn set_auto_check_update(app: AppHandle, enabled: bool) {
     set_checked_auto_update(&app, enabled);
+}
+
+// Invoked by the frontend on load (and when the setting changes) so View ->
+// Hardware Acceleration (WebGL) shows the right checkmark.
+#[tauri::command]
+pub fn set_webgl_renderer_menu_state(app: AppHandle, enabled: bool) {
+    if let Some(state) = app.try_state::<WebglRendererMenuState>() {
+        let _ = state.0.set_checked(enabled);
+    }
 }
 
 // Invoked by the frontend whenever the language choice changes (and on
@@ -582,6 +619,14 @@ mod tests {
         assert!(src.contains("CLOSE_TAB_LABEL, true, Some(\"CmdOrCtrl+W\")"));
         assert!(src.contains("app.emit(\"menu-new-tab\""));
         assert!(src.contains("app.emit(\"menu-close-tab\""));
+    }
+
+    #[test]
+    fn webgl_renderer_menu_item_is_wired_under_view() {
+        let src = include_str!("menu.rs").replace("\r\n", "\n");
+        assert!(src.contains("WEBGL_RENDERER_MENU_ID"));
+        assert!(src.contains("app.emit(\"webgl-renderer-changed\""));
+        assert!(src.contains("pub fn set_webgl_renderer_menu_state"));
     }
 
     #[test]

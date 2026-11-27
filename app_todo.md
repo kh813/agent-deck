@@ -301,6 +301,19 @@
 - [ ] **タスク 17-10**: 実機確認: 対話モードで作業フォルダ外への書き込みが確認ダイアログになること（agy / Claude）、別タブのフォルダへの書き込みが拒否されること、2 つのタブでブラウザスキルを同時に動かしたときの待機メッセージ、OS 通知、タブの復元。
 - [ ] **タスク 17-8**: ドキュメント更新、0.3.0-rc で長めに試験運用してから正式版。
 
+### Phase 18: ターミナル高リフレッシュレート・低遅延対応（v0.3.2、ブランチ `feature/high-refresh-rate`）
+*目標: 120Hz/144Hz 環境での高リフレッシュレート描画と 60Hz 環境での 60fps 安定維持・低遅延化を実現する（app_specs.md 5.7.5）。*
+
+- [x] **タスク 18-1**: 計測ベースラインの整備。大量出力・高速スクロール・キー入力エコー時の実効 FPS・フレーム時間・ドロップ率を計測できる検証手順／開発用フック（`window.__agentDeckPerf`）を整備。
+- [x] **タスク 18-2**: Rust バックエンドの前処理最適化（`src-tauri/src/pty.rs`）。`strip_ansi_rust` / `detect_prompts` の正規表現を `std::sync::OnceLock` で事前コンパイルし、PTY 読み取りバッファを 1KB → 16KB に拡大。プロンプト検出を出力送信のクリティカルパスから分離。
+- [x] **タスク 18-3**: レガシーな `pty-output` 二重 `app.emit` の廃止（チャネル配信時）と、出力バッチング間隔の短縮（`flush_interval`: 15ms → 6ms、アイドルタイムアウト: 5ms → 2ms、完全アイドル時は `CHILD_EXIT_POLL` で省電力待機）。
+- [x] **タスク 18-4**: PTY 出力の Tauri v2 バイナリ IPC 移行（`tauri::ipc::Channel` / `InvokeResponseBody::Raw`）。セッション単位のチャネル配信に切り替え、JSON 数値配列化と全タブ一斉ディスパッチのオーバーヘッドを解消。
+- [x] **タスク 18-5**: `@xterm/addon-webgl` の導入と複数タブ向けコンテキスト管理。アクティブタブのみ WebGL を有効化し、非アクティブ化時の解放・`onContextLoss` 時の DOM 自動フォールバック・View メニューからのハードウェアアクセラレーション無効化設定（逃げ道）を実装。
+- [x] **タスク 18-6**: 非アクティブタブの描画負荷抑制（`src/lib/outputScheduler.ts`）。裏タブでの大量ログ出力時に表示中タブのフレーム時間を圧迫しないよう、非表示タブの書き込みを 120ms / 64KB で間引きつつタブ切替時に即座に追従させる。
+- [x] **タスク 18-7**: 表示互換性対策（テーマ／フォント変更時の `clearTextureAtlas()`）と自動テスト（Rust `pty` / `menu`、Vitest `outputScheduler` / `terminalRenderer` / `useChatSession` バイナリチャネル）。
+- [ ] **タスク 18-8**: Windows（WebView2・高 Hz 環境含む）と macOS（WKWebView・ProMotion 環境含む）での実機計測・比較（Before/After の FPS・遅延・CPU/GPU 使用率・複数タブ同時稼働時の安定性、および HiDPI / 日本語フォント幅 / リンク検出の表示確認）。
+- [ ] **タスク 18-9**: ドキュメント（README・ユーザーガイド・app_specs.md）を更新し、v0.3.2-rc で検証後に正式リリースする。
+
 ---
 
 ### 将来のアイディア（未着手）/ Future Ideas (backlog)

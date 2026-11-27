@@ -10,6 +10,8 @@ import { TerminalView } from "./TerminalView";
 import { PtyPrompt, useChatSession } from "../hooks/useChatSession";
 import type { TerminalTheme } from "../utils/themes";
 import { shouldAutoStart } from "../lib/sessions";
+import { createOutputScheduler, OutputScheduler } from "../lib/outputScheduler";
+import { recordOutputChunk } from "../lib/terminalRenderer";
 
 export interface RuntimeState {
   status: "idle" | "running" | "error";
@@ -50,12 +52,15 @@ interface Props {
   theme: TerminalTheme;
   fontFamily?: string;
   fontSize?: number;
+  webglEnabled?: boolean;
   /** Start right after mounting (a tab the user just created). */
   startOnMount?: boolean;
   /** Start the first time this tab is shown (a tab restored after a relaunch). */
   startWhenShown?: boolean;
   /** Told once this tab has started by itself (startOnMount / startWhenShown). */
   onAutoStarted?: (sessionId: string) => void;
+  /** Called on every output chunk (feeds the tab sidebar's working indicator). */
+  onOutputActivity?: (sessionId: string) => void;
   onState: (sessionId: string, state: RuntimeState) => void;
   register: (sessionId: string, api: RuntimeApi | null) => void;
   /** Terminal size reports (shared by every tab: same box). */
@@ -68,10 +73,35 @@ export function SessionRuntime(props: Props) {
   const { sessionId, active, onState, register } = props;
   const terminalRef = useRef<Terminal | null>(null);
   const sizeRef = useRef<{ rows: number; cols: number } | null>(null);
+  const onOutputActivityRef = useRef(props.onOutputActivity);
+  onOutputActivityRef.current = props.onOutputActivity;
+
+  // Active tab writes straight to xterm.js (0 ms delay); hidden tabs coalesce
+  // chunks to keep the visible tab's frame budget free (app_specs.md 5.7.5).
+  const schedulerRef = useRef<OutputScheduler | null>(null);
+  if (schedulerRef.current === null) {
+    schedulerRef.current = createOutputScheduler({
+      active,
+      onFlush: (data) => {
+        terminalRef.current?.write(data);
+      },
+    });
+  }
+  useEffect(() => {
+    schedulerRef.current?.setActive(active);
+  }, [active]);
+  useEffect(() => {
+    return () => {
+      schedulerRef.current?.dispose();
+      schedulerRef.current = null;
+    };
+  }, []);
 
   const onRawOutput = useCallback((raw: Uint8Array) => {
-    terminalRef.current?.write(raw);
-  }, []);
+    onOutputActivityRef.current?.(sessionId);
+    recordOutputChunk(raw.byteLength);
+    schedulerRef.current?.push(raw);
+  }, [sessionId]);
   const getTerminalSize = useCallback(() => sizeRef.current ?? undefined, []);
 
   const chat = useChatSession({
@@ -173,6 +203,8 @@ export function SessionRuntime(props: Props) {
         theme={props.theme}
         fontFamily={props.fontFamily}
         fontSize={props.fontSize}
+        active={active}
+        webglEnabled={props.webglEnabled}
         onImagePaste={active ? props.onImagePaste : undefined}
         onNativeImagePaste={active ? props.onNativeImagePaste : undefined}
       />

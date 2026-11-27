@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { resolvePromptResponseInput } from "../lib/promptResponse";
 import { answersPrompt, isEchoOfAnswered, promptKey } from "../lib/promptSync";
@@ -86,6 +86,8 @@ export function useChatSession({
 
   const statusRef = useRef(status);
   const cwdRef = useRef(cwd);
+  const onRawOutputRef = useRef(onRawOutput);
+  onRawOutputRef.current = onRawOutput;
   const statusMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -257,6 +259,20 @@ export function useChatSession({
         }
 
         const size = getTerminalSize?.();
+        // High-refresh binary IPC channel (app_specs.md 5.7.5): receives raw
+        // ArrayBuffer chunks directly from Rust without JSON array encoding.
+        let outputChannel: Channel<ArrayBuffer | Uint8Array | number[]> | undefined;
+        if (typeof Channel === "function") {
+          outputChannel = new Channel<ArrayBuffer | Uint8Array | number[]>((payload) => {
+            if (payload instanceof ArrayBuffer) {
+              onRawOutputRef.current?.(new Uint8Array(payload));
+            } else if (payload instanceof Uint8Array) {
+              onRawOutputRef.current?.(payload);
+            } else if (Array.isArray(payload)) {
+              onRawOutputRef.current?.(new Uint8Array(payload));
+            }
+          });
+        }
         await invoke("start_pty", {
           command: overrideCommand ?? command,
           args: overrideArgs ?? defaultArgs,
@@ -264,6 +280,7 @@ export function useChatSession({
           rows: size?.rows,
           cols: size?.cols,
           sessionId,
+          ...(outputChannel ? { onOutput: outputChannel } : {}),
         });
         setStatus("running");
         setCwd(targetCwd);

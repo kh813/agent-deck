@@ -100,6 +100,7 @@ pub fn run() {
             menu::set_theme,
             menu::set_auto_check_update,
             menu::set_font_menu_state,
+            menu::set_webgl_renderer_menu_state,
             quit_guard::set_quit_guard_busy,
             locale::get_os_locales,
             image_attach::save_pasted_image,

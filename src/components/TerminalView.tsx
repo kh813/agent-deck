@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -7,6 +7,11 @@ import { computeFitSize } from "../lib/terminalFit";
 import { registerWrappedUrlLinkProvider } from "../lib/wrappedUrlLinkProvider";
 import { MIN_CONTRAST_RATIO, TerminalTheme } from "../utils/themes";
 import { hasText, isManualPasteKey, pickImageFile } from "../lib/imageAttach";
+import {
+  attachWebglRenderer,
+  recordTerminalRender,
+  reportActiveRenderer,
+} from "../lib/terminalRenderer";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
 
@@ -17,6 +22,10 @@ interface TerminalViewProps {
   theme: TerminalTheme;
   fontFamily?: string;
   fontSize?: number;
+  /** Whether this terminal tab is currently visible (only the active tab holds a WebGL context). */
+  active?: boolean;
+  /** Whether hardware-accelerated WebGL rendering is enabled (user fallback toggle). */
+  webglEnabled?: boolean;
   // Image pasted via the webview's paste event (macOS Cmd+V).
   onImagePaste?: (file: File) => void;
   // Save the OS clipboard's image, if any; true = an image was attached
@@ -24,8 +33,20 @@ interface TerminalViewProps {
   onNativeImagePaste?: () => Promise<boolean>;
 }
 
-export function TerminalView({ onData, terminalRef, onResize, theme, fontFamily, fontSize, onImagePaste, onNativeImagePaste }: TerminalViewProps) {
+export function TerminalView({
+  onData,
+  terminalRef,
+  onResize,
+  theme,
+  fontFamily,
+  fontSize,
+  active = true,
+  webglEnabled = true,
+  onImagePaste,
+  onNativeImagePaste,
+}: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [termInstance, setTermInstance] = useState<Terminal | null>(null);
   // Refs, so the terminal (created once) always calls the latest handlers.
   const onImagePasteRef = useRef(onImagePaste);
   onImagePasteRef.current = onImagePaste;
@@ -129,6 +150,11 @@ export function TerminalView({ onData, terminalRef, onResize, theme, fontFamily,
     fitToContentBox(containerRef.current.clientWidth - paddingX, containerRef.current.clientHeight - paddingY);
 
     terminalRef.current = term;
+    setTermInstance(term);
+
+    const renderListener = term.onRender(() => {
+      recordTerminalRender();
+    });
 
     let lastReportedSize = { rows: term.rows, cols: term.cols };
     onResize?.(lastReportedSize);
@@ -204,18 +230,47 @@ export function TerminalView({ onData, terminalRef, onResize, theme, fontFamily,
     return () => {
       pasteTarget.removeEventListener("paste", onPasteEvent, true);
       dataListener.dispose();
+      renderListener.dispose();
       linkProvider.dispose();
       resizeObserver.disconnect();
       if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer);
+      setTermInstance(null);
       term.dispose();
       terminalRef.current = null;
     };
   }, [onData, terminalRef, onResize]);
 
+  // Attach WebGL renderer only while this tab is active and hardware
+  // acceleration is enabled (app_specs.md 5.7.5). Disposing on tab switch
+  // keeps active WebGL contexts <= 1 across up to 6 concurrent tabs.
+  useEffect(() => {
+    if (!termInstance) return;
+    if (!active) return;
+    if (!webglEnabled) {
+      reportActiveRenderer("dom");
+      return;
+    }
+    const handle = attachWebglRenderer(termInstance, {
+      onFallback: (reason, err) => {
+        reportActiveRenderer("dom");
+        if (reason === "context-loss") {
+          console.warn("WebGL terminal context lost; falling back to DOM renderer.");
+        } else if (err) {
+          console.warn("WebGL terminal renderer unavailable; using DOM renderer:", err);
+        }
+      },
+    });
+    reportActiveRenderer(handle.kind);
+    return () => {
+      handle.dispose();
+    };
+  }, [termInstance, active, webglEnabled]);
+
   // Handle dynamic theme changes without re-creating terminal instance
   useEffect(() => {
     if (terminalRef.current && theme) {
       terminalRef.current.options.theme = theme;
+      terminalRef.current.clearTextureAtlas();
     }
   }, [theme, terminalRef]);
 
@@ -232,6 +287,7 @@ export function TerminalView({ onData, terminalRef, onResize, theme, fontFamily,
         changed = true;
       }
       if (changed) {
+        terminalRef.current.clearTextureAtlas();
         // Force refit for new cell metrics
         const style = window.getComputedStyle(containerRef.current);
         const paddingX = parseInt(style.paddingLeft, 10) + parseInt(style.paddingRight, 10);
