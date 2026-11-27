@@ -490,8 +490,8 @@ def _print_restart_notice() -> None:
     and any other ANSI-capable terminal; plain text where escapes would show
     up raw (a classic Windows console without TERM, e.g. the one-time
     migration .bat), or when output isn't a terminal."""
-    ja = "更新が完了しました。新しいバージョンを使うには、agent-deck を一度閉じてから起動し直してください。"
-    en = "Update complete. Close agent-deck and start it again to use the new version."
+    ja = "更新が完了しました。agent-deck が自動で再起動します。自動で再起動しない場合は、agent-deck を一度終了してから起動し直してください。"
+    en = "Update complete. agent-deck restarts by itself; if it doesn't, quit agent-deck and start it again."
     color = sys.stdout.isatty() and (sys.platform != "win32" or bool(os.environ.get("TERM")))
     print()
     for line in (ja, en):
