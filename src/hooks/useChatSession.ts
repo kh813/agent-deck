@@ -4,9 +4,11 @@ import { listen } from "@tauri-apps/api/event";
 import { resolvePromptResponseInput } from "../lib/promptResponse";
 import { answersPrompt, isEchoOfAnswered, promptKey } from "../lib/promptSync";
 import { createSingleFlight } from "../lib/singleFlight";
+import { preflightOnce } from "../lib/preflightOnce";
 import { getLang } from "../lib/language";
 import { subscribeToTauriEvent } from "../lib/tauriListener";
 import { isTauri, webClient } from "../lib/webClient";
+import { DEFAULT_SESSION_ID, SessionOutputEvent, SessionPromptEvent, SessionStatusEvent, isForSession } from "../lib/sessions";
 
 export interface PtyPrompt {
   prompt_type: "confirm" | "path" | "login";
@@ -19,6 +21,9 @@ export interface PtyPrompt {
 }
 
 export interface UseChatSessionOptions {
+  /** Which backend session (tab) this hook drives; "main" = the default
+   *  single session (lib/sessions.ts). */
+  sessionId?: string;
   command: string;
   defaultArgs?: string[];
   initialCwd?: string;
@@ -36,6 +41,7 @@ export interface UseChatSessionOptions {
 }
 
 export function useChatSession({
+  sessionId = DEFAULT_SESSION_ID,
   command,
   defaultArgs = [],
   initialCwd = "",
@@ -131,83 +137,94 @@ export function useChatSession({
 
       try {
         if (preLaunchCommand) {
-          // Config-driven pre-launch check (AppConfig.pre_launch_command)
-          showStatusMessage(
-            isJa ? "起動前処理を実行しています..." : "Running pre-launch checks...",
-            false
-          );
-
-          const unlistenOutput = subscribeToTauriEvent(
-            listen<{ data: number[] }>("pre-launch-output", (event) => {
-              onRawOutput?.(new Uint8Array(event.payload.data));
-            })
-          );
-
-          let resolveStatus: (success: boolean) => void = () => {};
-          const statusPromise = new Promise<boolean>((resolve) => {
-            resolveStatus = resolve;
-          });
-          const unlistenStatus = subscribeToTauriEvent(
-            listen<{ success: boolean }>("pre-launch-status", (event) => {
-              resolveStatus(event.payload.success);
-            })
-          );
-
-          try {
-            await invoke("start_pre_launch_command", {
-              cwd: targetCwd || "",
-              command: preLaunchCommand,
-              args: preLaunchArgs,
-            });
-
-            const timeoutMs = 10 * 60 * 1000;
-            const timeoutPromise = new Promise<boolean>((resolve) =>
-              setTimeout(() => resolve(false), timeoutMs)
+          // Config-driven pre-launch check (AppConfig.pre_launch_command):
+          // once per app launch, shared by every tab (lib/preflightOnce.ts).
+          const runPreLaunch = async (): Promise<boolean> => {
+            showStatusMessage(
+              isJa ? "起動前処理を実行しています..." : "Running pre-launch checks...",
+              false
             );
-            const success = await Promise.race([statusPromise, timeoutPromise]);
-
-            if (!success) {
-              if (preLaunchRequired) {
-                setStatus("error");
-                showStatusMessage(
-                  isJa
-                    ? "起動前処理に失敗しました。セッションを開始できません（詳細は上のログを参照）。"
-                    : "Pre-launch check failed. Session was not started (see the log above for details).",
-                  false
-                );
-                return;
-              }
-              showStatusMessage(
-                isJa
-                  ? "⚠️ 起動前処理に失敗しましたが、セッションをそのまま開始します（詳細は上のログを参照）。"
-                  : "⚠️ Pre-launch check failed. Starting session anyway (see the log above for details).",
-                false
+            const unlistenOutput = subscribeToTauriEvent(
+              listen<{ data: number[] }>("pre-launch-output", (event) => {
+                onRawOutput?.(new Uint8Array(event.payload.data));
+              })
+            );
+            let resolveStatus: (success: boolean) => void = () => {};
+            const statusPromise = new Promise<boolean>((resolve) => {
+              resolveStatus = resolve;
+            });
+            const unlistenStatus = subscribeToTauriEvent(
+              listen<{ success: boolean }>("pre-launch-status", (event) => {
+                resolveStatus(event.payload.success);
+              })
+            );
+            try {
+              // Preflight always runs in the install root (cwd: ""), never an
+              // arbitrary tab's working directory (prevents executing untrusted
+              // scripts and avoids failing when the restored tab is outside the install).
+              await invoke("start_pre_launch_command", {
+                cwd: "",
+                command: preLaunchCommand,
+                args: preLaunchArgs,
+              });
+              const timeoutMs = 10 * 60 * 1000;
+              const timeoutPromise = new Promise<boolean>((resolve) =>
+                setTimeout(() => resolve(false), timeoutMs)
               );
-            } else {
-              showStatusMessage(
-                isJa ? "✓ 起動前処理が完了しました" : "✓ Pre-launch checks complete"
-              );
+              return await Promise.race([statusPromise, timeoutPromise]);
+            } finally {
+              unlistenOutput();
+              unlistenStatus();
             }
-          } catch (preLaunchErr: any) {
+          };
+
+          if (preflightOnce.running) {
+            showStatusMessage(
+              isJa ? "別のタブの起動前処理が終わるのを待っています..." : "Waiting for another tab's pre-launch checks...",
+              false
+            );
+          }
+          const outcome = await preflightOnce.run(runPreLaunch);
+
+          if (outcome.error !== undefined) {
+            const errText = String(outcome.error);
             if (preLaunchRequired) {
               setStatus("error");
               showStatusMessage(
                 isJa
-                  ? `起動前処理を実行できませんでした。セッションを開始できません。\n${preLaunchErr.toString()}`
-                  : `Failed to run pre-launch command. Session was not started.\n${preLaunchErr.toString()}`,
+                  ? `起動前処理を実行できませんでした。セッションを開始できません。\n${errText}`
+                  : `Failed to run pre-launch command. Session was not started.\n${errText}`,
                 false
               );
               return;
             }
             showStatusMessage(
               isJa
-                ? `⚠️ 起動前処理を実行できませんでした。セッションをそのまま開始します。\n${preLaunchErr.toString()}`
-                : `⚠️ Failed to run pre-launch command. Starting session anyway.\n${preLaunchErr.toString()}`,
+                ? `⚠️ 起動前処理を実行できませんでした。セッションをそのまま開始します。\n${errText}`
+                : `⚠️ Failed to run pre-launch command. Starting session anyway.\n${errText}`,
               false
             );
-          } finally {
-            unlistenOutput();
-            unlistenStatus();
+          } else if (!outcome.success) {
+            if (preLaunchRequired) {
+              setStatus("error");
+              showStatusMessage(
+                isJa
+                  ? "起動前処理に失敗しました。セッションを開始できません（詳細は上のログを参照）。"
+                  : "Pre-launch check failed. Session was not started (see the log above for details).",
+                false
+              );
+              return;
+            }
+            showStatusMessage(
+              isJa
+                ? "⚠️ 起動前処理に失敗しましたが、セッションをそのまま開始します（詳細は上のログを参照）。"
+                : "⚠️ Pre-launch check failed. Starting session anyway (see the log above for details).",
+              false
+            );
+          } else if (outcome.ran) {
+            showStatusMessage(
+              isJa ? "✓ 起動前処理が完了しました" : "✓ Pre-launch checks complete"
+            );
           }
         } else {
           // Fallback (Task 9-5 & 9-6): check and auto-rebuild a `skill` folder
@@ -246,6 +263,7 @@ export function useChatSession({
           cwd: targetCwd || null,
           rows: size?.rows,
           cols: size?.cols,
+          sessionId,
         });
         setStatus("running");
         setCwd(targetCwd);
@@ -259,7 +277,7 @@ export function useChatSession({
         );
       }
     },
-    [command, defaultArgs, showStatusMessage, getTerminalSize, preLaunchCommand, preLaunchArgs, preLaunchRequired]
+    [sessionId, command, defaultArgs, showStatusMessage, getTerminalSize, preLaunchCommand, preLaunchArgs, preLaunchRequired]
   );
 
   const startSession = useCallback(
@@ -288,7 +306,7 @@ export function useChatSession({
       return;
     }
     try {
-      await invoke("stop_pty");
+      await invoke("stop_pty", { sessionId });
       setStatus("idle");
       showStatusMessage(
         isJa ? "ユーザーによってセッションが停止されました。" : "Session stopped by user."
@@ -296,7 +314,7 @@ export function useChatSession({
     } catch (e: any) {
       console.error("Failed to stop PTY:", e);
     }
-  }, [showStatusMessage]);
+  }, [sessionId, showStatusMessage]);
 
   // Send input query to PTY
   const sendMessage = useCallback(async (text: string) => {
@@ -306,11 +324,11 @@ export function useChatSession({
       return;
     }
     try {
-      await invoke("write_to_pty", { input: text + "\r" });
+      await invoke("write_to_pty", { input: text + "\r", sessionId });
     } catch (e: any) {
       console.error("Failed to send message to PTY:", e);
     }
-  }, []);
+  }, [sessionId]);
 
   // Respond to an interactive PTY prompt (button clicks or path selection)
   const respondToPrompt = useCallback(async (responseText: string, rawInput?: string) => {
@@ -325,11 +343,11 @@ export function useChatSession({
     }
 
     try {
-      await invoke("write_to_pty", { input: inputToSend });
+      await invoke("write_to_pty", { input: inputToSend, sessionId });
     } catch (e: any) {
       console.error("Failed to write response to PTY:", e);
     }
-  }, [markPromptAnswered]);
+  }, [sessionId, markPromptAnswered]);
 
   // Change working directory and restart PTY
   const changeCwd = useCallback(
@@ -372,22 +390,26 @@ export function useChatSession({
       };
     }
 
-    // Tauri Desktop Listeners
+    // Tauri Desktop Listeners: this session's events only (pty.rs
+    // session-output / session-prompt / session-status carry the id).
     const unsubOutput = subscribeToTauriEvent(
-      listen<{ data: number[] }>("pty-output", (event) => {
+      listen<SessionOutputEvent>("session-output", (event) => {
+        if (!isForSession(event.payload, sessionId)) return;
         onRawOutput?.(new Uint8Array(event.payload.data));
       })
     );
 
     const unsubPrompt = subscribeToTauriEvent(
-      listen<PtyPrompt>("pty-prompt", (event) => {
-        showPromptUnlessEcho(event.payload);
+      listen<SessionPromptEvent<PtyPrompt>>("session-prompt", (event) => {
+        if (!isForSession(event.payload, sessionId)) return;
+        showPromptUnlessEcho(event.payload.prompt);
       })
     );
 
     const unsubStatus = subscribeToTauriEvent(
-      listen<string>("pty-status", (event) => {
-        if (event.payload === "terminated") {
+      listen<SessionStatusEvent>("session-status", (event) => {
+        if (!isForSession(event.payload, sessionId)) return;
+        if (event.payload.status === "terminated") {
           setStatus("idle");
         }
       })
@@ -398,9 +420,10 @@ export function useChatSession({
       unsubStatus();
       unsubPrompt();
     };
-  }, [onRawOutput, showPromptUnlessEcho]);
+  }, [sessionId, onRawOutput, showPromptUnlessEcho]);
 
   return {
+    sessionId,
     cwd,
     status,
     isStarting,

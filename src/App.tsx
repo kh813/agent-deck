@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { ask, message, open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Terminal } from "@xterm/xterm";
-import { useChatSession } from "./hooks/useChatSession";
 import { TerminalView } from "./components/TerminalView";
 import { SkillCatalogPanel } from "./components/SkillCatalogPanel";
 import { subscribeToTauriEvent } from "./lib/tauriListener";
@@ -18,6 +17,17 @@ import { baseName, pickImageFile, promptTextForPaths, saveClipboardImage, saveIm
 import { Attachment, AttachmentKind, MAX_ATTACHMENTS, addAttachments, canSend, composeMessage, removeAttachment } from "./lib/attachments";
 import { AttachmentChips, ImageAttachButton } from "./components/ImageAttachButton";
 import { RESTART_DELAY_MS, decideAfterSelfUpdate } from "./lib/selfUpdateRestart";
+import {
+  MAX_TABS, SessionOutputEvent, SessionStatusEvent, Tab, addTab, canAddTab,
+  findFolderConflict, isForSession, newSessionId, nextActiveAfterClose, removeTab, renameTab, tabLabel,
+} from "./lib/sessions";
+import { sameSet, tabShortcutTarget } from "./lib/tabShortcuts";
+import { defaultTabs, loadSavedTabs, saveTabs } from "./lib/tabPersistence";
+import { promptNotifications } from "./lib/sessionNotify";
+import { workingSessions } from "./lib/sessionLights";
+import { TabSidebar } from "./components/TabSidebar";
+import { NewTabDialog } from "./components/NewTabDialog";
+import { IDLE_RUNTIME_STATE, RuntimeApi, RuntimeState, SessionRuntime } from "./components/SessionRuntime";
 import { loadLangChoice, parseLangChoice, resolveLang, saveLangChoice, setCurrentLang, type LangChoice } from "./lib/language";
 import { stopAndWaitForExit } from "./lib/ptyHandover";
 import {
@@ -61,14 +71,12 @@ interface UpdateStatus {
 }
 
 function App() {
-  const isWindows = window.navigator.userAgent.includes("Windows");
-  const defaultShell = isWindows ? "powershell.exe" : "zsh";
 
-  const [shellPath, setShellPath] = useState(defaultShell);
-  const [shellArgs, setShellArgs] = useState("");
-  const [input, setInput] = useState("");
-  // Images attached from the input bar (🖼 button / paste), sent with the text.
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Per-tab input draft & image attachments (app_specs.md 5.7.4): never shared
+  // across tabs, so text/screenshots for one project are never accidentally
+  // sent into another tab's session after switching.
+  const [draftsByTab, setDraftsByTab] = useState<Record<string, string>>({});
+  const [attachmentsByTab, setAttachmentsByTab] = useState<Record<string, Attachment[]>>({});
 
   // CWD History State
   const [recentCwds, setRecentCwds] = useState<string[]>(() => {
@@ -193,7 +201,12 @@ function App() {
     );
     return unsub;
   }, []);
-  const [selectedAgentId, setSelectedAgentId] = useState(() => loadSavedEngine() ?? "agy");
+  // Tabs from the last run (5.7.4: restored, not auto-started -- only the
+  // visible tab starts, as a single session always did).
+  const [restoredTabs] = useState(() => loadSavedTabs(loadSavedEngine() ?? "agy"));
+  const [selectedAgentId, setSelectedAgentId] = useState(
+    () => restoredTabs?.tabs.find((t) => t.id === restoredTabs.activeId)?.engineId ?? loadSavedEngine() ?? "agy",
+  );
 
   const currentAgentStatus = agentStatuses[selectedAgentId] || {
     installed: false,
@@ -334,15 +347,63 @@ function App() {
   // (Assigned below, once useChatSession has run.) Lets a prompt answered
   // in the terminal also dismiss the GUI's prompt panel.
   const noteTerminalInputRef = useRef<(data: string) => void>(() => {});
+  // ── Tabs (app_specs.md 5.7.4) ──
+  // One tab = one session. The terminal, input bar, prompt panel and the
+  // install/update flows act on the active tab. Each tab's live session is a
+  // SessionRuntime (always mounted); its state is reported into
+  // runtimeStates and its controls registered in runtimesRef.
+  const [tabs, setTabs] = useState<Tab[]>(() => (restoredTabs ?? defaultTabs(selectedAgentId)).tabs);
+  const [activeSessionId, setActiveSessionId] = useState(() => (restoredTabs ?? defaultTabs(selectedAgentId)).activeId);
+  const input = draftsByTab[activeSessionId] ?? "";
+  const setInput = useCallback(
+    (value: string) => {
+      setDraftsByTab((prev) => ({ ...prev, [activeSessionId]: value }));
+    },
+    [activeSessionId],
+  );
+  const attachments = attachmentsByTab[activeSessionId] ?? [];
+  const setAttachmentsForTab = useCallback(
+    (tabId: string, updater: Attachment[] | ((cur: Attachment[]) => Attachment[])) => {
+      setAttachmentsByTab((prev) => {
+        const cur = prev[tabId] ?? [];
+        const next = typeof updater === "function" ? updater(cur) : updater;
+        return { ...prev, [tabId]: next };
+      });
+    },
+    [],
+  );
+  const setAttachments = useCallback(
+    (updater: Attachment[] | ((cur: Attachment[]) => Attachment[])) => {
+      setAttachmentsForTab(activeSessionId, updater);
+    },
+    [activeSessionId, setAttachmentsForTab],
+  );
+  // Remember the tabs for the next launch.
+  useEffect(() => {
+    saveTabs({ tabs, activeId: activeSessionId });
+  }, [tabs, activeSessionId]);
+  const [startOnMountIds, setStartOnMountIds] = useState<ReadonlySet<string>>(() => new Set());
+  const runtimesRef = useRef<Record<string, RuntimeApi>>({});
+  const [runtimeStates, setRuntimeStates] = useState<Record<string, RuntimeState>>({});
+  const registerRuntime = useCallback((id: string, api: RuntimeApi | null) => {
+    if (api) runtimesRef.current[id] = api;
+    else delete runtimesRef.current[id];
+  }, []);
+  const handleRuntimeState = useCallback((id: string, state: RuntimeState) => {
+    setRuntimeStates((prev) => ({ ...prev, [id]: state }));
+    // the tab remembers its folder once its session has one
+    if (state.cwd) setTabs((prev) => prev.map((t) => (t.id === id && t.cwd !== state.cwd ? { ...t, cwd: state.cwd } : t)));
+  }, []);
+  const activeRuntime = useCallback(() => runtimesRef.current[activeSessionId], [activeSessionId]);
   const handleTerminalInput = useCallback((data: string) => {
     noteTerminalInputRef.current(data);
-    invoke("write_to_pty", { input: data });
-  }, []);
+    invoke("write_to_pty", { input: data, sessionId: activeSessionId });
+  }, [activeSessionId]);
 
   // Keeps the PTY's reported window size in sync with what xterm.js is actually rendering.
   const handleTerminalResize = useCallback((size: { rows: number; cols: number }) => {
     terminalSizeRef.current = size;
-    invoke("resize_pty", size).catch(() => {
+    invoke("resize_pty", { ...size, sessionId: activeSessionId }).catch(() => {
       // No active session yet - the size will be used when one starts.
     });
 
@@ -354,32 +415,56 @@ function App() {
     }, 300);
   }, []);
 
-  const getTerminalSize = useCallback(() => terminalSizeRef.current ?? undefined, []);
 
-  const {
-    cwd,
-    status,
-    isStarting,
-    activePrompt,
-    noteTerminalInput,
-    statusMessage,
-    showStatusMessage,
-    startSession,
-    stopSession,
-    sendMessage,
-    respondToPrompt,
-    changeCwd,
-  } = useChatSession({
-    command: shellPath,
-    defaultArgs: shellArgs.trim() ? shellArgs.split(" ") : [],
-    initialCwd: "",
-    onRawOutput: handleRawOutput,
-    getTerminalSize,
-    preLaunchCommand: appConfig?.pre_launch_command ?? undefined,
-    preLaunchArgs: appConfig?.pre_launch_args,
-    preLaunchRequired: appConfig?.pre_launch_required,
-  });
-  noteTerminalInputRef.current = noteTerminalInput;
+  // The active tab's session, as the rest of the screen sees it.
+  const activeState = runtimeStates[activeSessionId] ?? IDLE_RUNTIME_STATE;
+  const { cwd, status, isStarting, activePrompt, statusMessage } = activeState;
+  const startSession = useCallback(
+    async (targetCwd?: string, command?: string, args?: string[]) => {
+      await activeRuntime()?.startSession(targetCwd, command, args);
+    },
+    [activeRuntime],
+  );
+  const stopSession = useCallback(async () => { await activeRuntime()?.stopSession(); }, [activeRuntime]);
+  const sendMessage = useCallback(async (text: string) => { await activeRuntime()?.sendMessage(text); }, [activeRuntime]);
+  const respondToPrompt = useCallback(
+    async (text: string, raw?: string) => { await activeRuntime()?.respondToPrompt(text, raw); },
+    [activeRuntime],
+  );
+  const changeCwdUnchecked = useCallback(async (dir: string) => { await activeRuntime()?.changeCwd(dir); }, [activeRuntime]);
+  // Platform folder-name case rule for the "same or nested folder" check.
+  const caseInsensitiveFs = typeof navigator !== "undefined" && /Mac|Win/i.test(navigator.userAgent);
+  // Resolve a folder (and every other tab's) and refuse one already in use
+  // by another tab, or nested with one (5.7.4). Returns the resolved path.
+  const resolveFolderFor = useCallback(async (dir: string, forTabId?: string): Promise<{ folder: string; error: string | null }> => {
+    if (!isTauri()) return { folder: dir, error: null };
+    const resolve = (p: string) => invoke<string>("resolve_session_folder", { path: p }).catch(() => p);
+    const folder = await resolve(dir);
+    const others = await Promise.all(tabs.filter((tb) => tb.id !== forTabId).map(async (tb) => ({ ...tb, cwd: await resolve(tb.cwd) })));
+    const conflict = findFolderConflict(others, folder, caseInsensitiveFs);
+    const error = conflict
+      ? t("folderInUse").replace("{tab}", tabLabel(conflict, t("appLocationShort"))).replace("{folder}", folder)
+      : null;
+    return { folder, error };
+  }, [tabs, caseInsensitiveFs, lang]);
+  const checkFolderFree = useCallback(async (dir: string, forTabId?: string): Promise<string | null> => {
+    const { folder, error } = await resolveFolderFor(dir, forTabId);
+    if (error) {
+      await message(error, { title: "agent-deck", kind: "warning" });
+      return null;
+    }
+    return folder;
+  }, [resolveFolderFor]);
+  const changeCwd = useCallback(async (dir: string) => {
+    const folder = await checkFolderFree(dir, activeSessionId);
+    if (folder) await changeCwdUnchecked(folder);
+  }, [checkFolderFree, activeSessionId, changeCwdUnchecked]);
+  const showStatusMessage = useCallback((text: string, autoClear = true) => {
+    const rt = activeRuntime();
+    if (rt) rt.showStatusMessage(text, autoClear);
+    else console.info(text);
+  }, [activeRuntime]);
+  noteTerminalInputRef.current = (data: string) => activeRuntime()?.noteTerminalInput(data);
 
   // Load SKILL.md content when CWD changes
   useEffect(() => {
@@ -423,7 +508,7 @@ function App() {
     const unsub = subscribeToTauriEvent(
       listen("menu-force-kill-requested", async () => {
         try {
-          await invoke("force_kill_pty");
+          await invoke("force_kill_pty", { sessionId: activeSessionId });
         } catch (e) {
           console.error("Failed to force kill PTY:", e);
         }
@@ -561,11 +646,12 @@ function App() {
     });
   }, [autoCheckUpdate]);
 
-  // 1. Load dynamic configuration
+  // 1. Load dynamic configuration once from the install root (never from an
+  // arbitrary tab's working directory).
   useEffect(() => {
     const loadAppConfig = async () => {
       try {
-        const cfg = await invoke<AppConfig>("get_app_config", { cwd: cwd || null });
+        const cfg = await invoke<AppConfig>("get_app_config", { cwd: null });
         setAppConfig(cfg);
         
         const savedTheme = localStorage.getItem("agent-ui-theme");
@@ -577,7 +663,7 @@ function App() {
       }
     };
     loadAppConfig();
-  }, [cwd]);
+  }, []);
 
   // 2. Trigger status detection when configuration loads or refreshes
   useEffect(() => {
@@ -608,28 +694,33 @@ function App() {
     setUpdateStatus({ current_version: null, latest_version: null, update_available: false });
   }, [selectedAgentId]);
 
-  // 3. Update PTY command configuration when selection or statuses change
-  useEffect(() => {
-    if (!appConfig) return;
-    const engine = appConfig.engines.find(e => e.id === selectedAgentId);
-    const status = agentStatuses[selectedAgentId];
-    if (engine && status && status.installed && status.path) {
-      setShellPath(status.path);
-      const args = engine.args || [];
-      setShellArgs(args.join(" "));
-    }
-  }, [selectedAgentId, agentStatuses, appConfig]);
 
   // Quit guard (src-tauri/src/quit_guard.rs): while any of these runs,
   // Cmd/Ctrl+Q or closing the window asks before quitting. (A working
   // agent/skill is detected on the Rust side from terminal output.)
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
   const [catalogBusy, setCatalogBusy] = useState(false);
-  const quitGuardBusy = isStarting || isSelfUpdating || isUpdating || isInstalling || catalogBusy;
+  const anyTabStarting = Object.values(runtimeStates).some((s) => s.isStarting);
+  const quitGuardBusy = anyTabStarting || isSelfUpdating || isUpdating || isInstalling || catalogBusy;
   useEffect(() => {
     if (!isTauri()) return;
     invoke("set_quit_guard_busy", { busy: quitGuardBusy }).catch(() => {});
   }, [quitGuardBusy]);
+
+  // Surface backend guardrail warnings (e.g. missing Claude settings file)
+  // rather than letting a session start silently without full protections.
+  useEffect(() => {
+    if (!isTauri()) return;
+    return subscribeToTauriEvent(
+      listen<{ session_id?: string; message?: string }>("guardrail-warning", (event) => {
+        const msg = event.payload?.message;
+        if (!msg) return;
+        const target = event.payload?.session_id ? runtimesRef.current[event.payload.session_id] : activeRuntime();
+        if (target) target.showStatusMessage(`⚠️ ${msg}`, false);
+        else showStatusMessage(`⚠️ ${msg}`, false);
+      }),
+    );
+  }, [activeRuntime, showStatusMessage]);
 
   checkUpdateStatusRef.current = checkUpdateStatus;
   engineInstalledRef.current = currentAgentStatus.installed;
@@ -712,26 +803,36 @@ function App() {
     }
   }, [showStatusMessage, lang]);
 
+  // Track which tab owns an in-flight install / update / self-update so
+  // switching tabs never drops its completion status event.
+  const maintenanceSessionIdRef = useRef<string | null>(null);
+
   // Listen to PTY termination during installation and updates
   useEffect(() => {
     const unsubStatus = subscribeToTauriEvent(
-      listen<string>("pty-status", (event) => {
+      listen<SessionStatusEvent>("session-status", (raw) => {
+        const expectedId = maintenanceSessionIdRef.current ?? activeSessionId;
+        if (!isForSession(raw.payload, expectedId)) return;
+        const event = { payload: raw.payload.status };
         // An agent-deck update's session can also end with "error" (the
         // pipe broke instead of closing, Windows): it's over either way --
         // check whether it installed and restart.
         if (event.payload === "error" && isSelfUpdating && selfUpdateActiveRef.current) {
           selfUpdateActiveRef.current = false;
+          maintenanceSessionIdRef.current = null;
           setIsSelfUpdating(false);
           void finishSelfUpdate(selfUpdateStartedAtRef.current);
           return;
         }
         if (event.payload === "terminated") {
           if (isInstalling) {
+            maintenanceSessionIdRef.current = null;
             setIsInstalling(false);
             checkAgentStatus();
           }
           if (isUpdating && agentUpdateActiveRef.current) {
             agentUpdateActiveRef.current = false;
+            maintenanceSessionIdRef.current = null;
             setIsUpdating(false);
             checkAgentStatus().then(() => {
               checkUpdateStatus();
@@ -739,6 +840,7 @@ function App() {
           }
           if (isSelfUpdating && selfUpdateActiveRef.current) {
             selfUpdateActiveRef.current = false;
+            maintenanceSessionIdRef.current = null;
             // Unlike agy above, there's no "re-detect" step that makes sense
             // here: the running process's own version can't change without
             // an actual restart, so self_update.py apply's own completion
@@ -751,7 +853,7 @@ function App() {
     );
 
     return unsubStatus;
-  }, [isInstalling, isUpdating, isSelfUpdating, checkAgentStatus, checkUpdateStatus, showStatusMessage, finishSelfUpdate]);
+  }, [activeSessionId, isInstalling, isUpdating, isSelfUpdating, checkAgentStatus, checkUpdateStatus, showStatusMessage, finishSelfUpdate]);
 
   // Poll for install/update completion independent of the PTY session ever
   // reporting "terminated".
@@ -804,14 +906,17 @@ function App() {
 
       const appBundleDir = await invoke<string>("get_app_bundle_dir");
 
+      maintenanceSessionIdRef.current = activeSessionId;
       await invoke("start_pty", {
         command: installCmd.command,
         args: installCmd.args,
         cwd: appBundleDir,
         rows: terminalSizeRef.current?.rows,
         cols: terminalSizeRef.current?.cols,
+        sessionId: activeSessionId,
       });
     } catch (e: any) {
+      maintenanceSessionIdRef.current = null;
       setIsInstalling(false);
       console.error("Installation failed to launch:", e);
       alert(`${t("failedToInstall")}: ${e.toString()}`);
@@ -823,8 +928,10 @@ function App() {
   const handOverPty = () =>
     stopAndWaitForExit({
       isRunning: status === "running",
-      stop: () => invoke("stop_pty"),
-      onStatus: (cb) => listen<string>("pty-status", (e) => cb(e.payload)),
+      stop: () => invoke("stop_pty", { sessionId: activeSessionId }),
+      onStatus: (cb) => listen<SessionStatusEvent>("session-status", (e) => {
+        if (isForSession(e.payload, activeSessionId)) cb(e.payload.status);
+      }),
     });
 
   // Trigger update via PTY. This reuses the same always-visible main
@@ -842,15 +949,18 @@ function App() {
 
       await handOverPty();
       agentUpdateActiveRef.current = true;
+      maintenanceSessionIdRef.current = activeSessionId;
       await invoke("start_pty", {
         command: updateCmd.command,
         args: updateCmd.args,
         cwd: appBundleDir,
         rows: terminalSizeRef.current?.rows,
         cols: terminalSizeRef.current?.cols,
+        sessionId: activeSessionId,
       });
     } catch (e: any) {
       agentUpdateActiveRef.current = false;
+      maintenanceSessionIdRef.current = null;
       setIsUpdating(false);
       console.error("Update failed to launch:", e);
       alert(`${t("failedToUpdate")}: ${e.toString()}`);
@@ -869,8 +979,11 @@ function App() {
         kind: selfUpdateKind,
       });
 
+      // Stop every other tab's session before self-update replaces files on disk.
+      await invoke("stop_other_sessions", { keepSessionId: activeSessionId }).catch(() => {});
       await handOverPty();
       selfUpdateActiveRef.current = true;
+      maintenanceSessionIdRef.current = activeSessionId;
       selfUpdateStartedAtRef.current = Date.now();
       showStatusMessage(t("selfUpdateStarted"), false);
       await invoke("start_pty", {
@@ -878,9 +991,11 @@ function App() {
         args: updateCmd.args,
         rows: terminalSizeRef.current?.rows,
         cols: terminalSizeRef.current?.cols,
+        sessionId: activeSessionId,
       });
     } catch (e: any) {
       selfUpdateActiveRef.current = false;
+      maintenanceSessionIdRef.current = null;
       setIsSelfUpdating(false);
       showStatusMessage("", true);
       console.error("agent-deck update failed to launch:", e);
@@ -1078,9 +1193,9 @@ function App() {
   const hasActivePrompt = activePrompt !== null;
 
   // ── Images (screenshots) -> a file path in the prompt (lib/imageAttach.ts) ──
-  // Saved under <working folder>/tmp/screenshots/ by the Rust side; the
-  // quoted path is typed into the terminal (not sent), so the user can add
-  // the instruction and press Enter.
+  // Saved under <agent-deck install>/tmp/screenshots/ by the Rust side (never
+  // dirtying the tab's working folder); the quoted path is typed into the
+  // terminal (not sent), so the user can add the instruction and press Enter.
   const reportAttached = useCallback((path: string) => {
     showStatusMessage(t("imageAttached").replace("{name}", baseName(path)));
   }, [showStatusMessage, lang]);
@@ -1088,7 +1203,8 @@ function App() {
     showStatusMessage(t("imageAttachFailed").replace("{error}", String(e)), false);
   }, [showStatusMessage, lang]);
   const typeIntoTerminal = useCallback((text: string) => {
-    if (terminalRef.current) terminalRef.current.paste(text);
+    const term = activeRuntime()?.terminal();
+    if (term) term.paste(text);
     else handleTerminalInput(text);
   }, [handleTerminalInput]);
   const requireRunning = useCallback(() => {
@@ -1121,25 +1237,29 @@ function App() {
     }
   }, [cwd, requireRunning, typeIntoTerminal, reportAttached, reportAttachError]);
   // Images for the next message (🖼 button, or pasted into the input bar).
-  const addInputAttachments = useCallback((paths: string[], kind: AttachmentKind) => {
-    setAttachments((cur) => {
+  const addInputAttachmentsForTab = useCallback((tabId: string, paths: string[], kind: AttachmentKind) => {
+    setAttachmentsForTab(tabId, (cur) => {
       const { list, overLimit } = addAttachments(cur, paths, kind);
       if (overLimit) showStatusMessage(t("attachLimit").replace("{max}", String(MAX_ATTACHMENTS)));
       return list;
     });
-  }, [showStatusMessage, lang]);
+  }, [setAttachmentsForTab, showStatusMessage, lang]);
+  const addInputAttachments = useCallback((paths: string[], kind: AttachmentKind) => {
+    addInputAttachmentsForTab(activeSessionId, paths, kind);
+  }, [addInputAttachmentsForTab, activeSessionId]);
   // Paste into the input bar: an image becomes an attachment chip.
   const handleInputPaste = useCallback(async (e: React.ClipboardEvent<HTMLInputElement>) => {
     const file = pickImageFile(e.clipboardData?.items);
     if (!file || !isTauri()) return;
     e.preventDefault();
+    const targetTabId = activeSessionId;
     try {
       const path = await saveImageBlob(file, cwd);
-      addInputAttachments([path], "pasted");
+      addInputAttachmentsForTab(targetTabId, [path], "pasted");
     } catch (err) {
       reportAttachError(err);
     }
-  }, [cwd, addInputAttachments, reportAttachError]);
+  }, [activeSessionId, cwd, addInputAttachmentsForTab, reportAttachError]);
   // Files dropped on the window: their paths are typed into the terminal
   // (any file type -- the CLIs read files by path; images aren't copied).
   const dropHandlerRef = useRef<(paths: string[]) => void>(() => {});
@@ -1167,7 +1287,247 @@ function App() {
     };
   }, []);
 
+  // ── Tab operations ──
+  const switchToTab = useCallback((id: string) => {
+    const tab = tabs.find((tb) => tb.id === id);
+    if (!tab) return;
+    // Not an engine *change* for the engine-change auto-start effect.
+    previousAgentIdRef.current = tab.engineId;
+    setSelectedAgentId(tab.engineId);
+    setActiveSessionId(id);
+  }, [tabs]);
+
+  // The engine picked in the header belongs to the active tab.
+  useEffect(() => {
+    setTabs((prev) => prev.map((tb) => (tb.id === activeSessionId && tb.engineId !== selectedAgentId ? { ...tb, engineId: selectedAgentId } : tb)));
+  }, [selectedAgentId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // "New tab" opens a dialog: agent (default: the one in use) + folder.
+  const [isNewTabOpen, setIsNewTabOpen] = useState(false);
+  const handleNewTab = useCallback(async () => {
+    if (!isTauri()) return;
+    if (!canAddTab(tabs)) {
+      showStatusMessage(t("tabLimit").replace("{max}", String(MAX_TABS)));
+      return;
+    }
+    setIsNewTabOpen(true);
+  }, [tabs, showStatusMessage, lang]);
+
+  const pickNewTabFolder = useCallback(async (): Promise<string | null> => {
+    try {
+      const picked = await open({ directory: true, multiple: false, title: t("newTabPickFolder") });
+      return typeof picked === "string" ? picked : null;
+    } catch (e) {
+      console.error("Failed to open directory dialog:", e);
+      return null;
+    }
+  }, [lang]);
+
+  // Returns an error to show in the dialog, or null once the tab exists.
+  const createTab = useCallback(async (dir: string, engineId: string): Promise<string | null> => {
+    if (!canAddTab(tabs)) return t("tabLimit").replace("{max}", String(MAX_TABS));
+    const { folder, error } = await resolveFolderFor(dir);
+    if (error) return error;
+    const id = newSessionId(tabs.map((tb) => tb.id));
+    const nextTabs = addTab(tabs, { id, name: "", cwd: folder, engineId });
+    // Flush the updated registry to disk BEFORE the new tab's PTY spawns so
+    // the guard hook already knows about this tab on its very first tool call.
+    if (isTauri()) {
+      const entries = nextTabs.map((tb) => ({ id: tb.id, label: tabLabel(tb, t("appLocationShort")), cwd: tb.cwd }));
+      await invoke("set_session_registry", { entries }).catch((e) => console.warn("set_session_registry failed:", e));
+    }
+    setTabs(nextTabs);
+    setStartOnMountIds((prev) => new Set(prev).add(id));
+    // Not an engine *change* (no auto-start effect): the new tab starts itself.
+    previousAgentIdRef.current = engineId;
+    setSelectedAgentId(engineId);
+    setActiveSessionId(id);
+    setIsNewTabOpen(false);
+    return null;
+  }, [tabs, resolveFolderFor, lang]);
+
+  const handleCloseTab = useCallback(async (id: string = activeSessionId) => {
+    if (tabs.length <= 1) {
+      showStatusMessage(t("lastTabCantClose"));
+      return;
+    }
+    const tab = tabs.find((tb) => tb.id === id);
+    if (!tab) return;
+    if (runtimeStates[id]?.status === "running") {
+      const ok = await ask(t("closeTabConfirm").replace("{tab}", tabLabel(tab, t("appLocationShort"))), {
+        title: "agent-deck", kind: "warning", okLabel: t("closeTabOk"), cancelLabel: t("cancel"),
+      });
+      if (!ok) return;
+    }
+    await invoke("close_pty_session", { sessionId: id }).catch(() => {});
+    const next = nextActiveAfterClose(tabs, id, activeSessionId);
+    if (next && next !== activeSessionId) switchToTab(next);
+    setTabs((prev) => removeTab(prev, id));
+    setRuntimeStates((prev) => {
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+    setDraftsByTab((prev) => {
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+    setAttachmentsByTab((prev) => {
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+    delete lastOutputAtRef.current[id];
+  }, [tabs, activeSessionId, runtimeStates, switchToTab, showStatusMessage, lang]);
+
+  // Shortcuts: New Tab / Close Tab come from the File menu (CmdOrCtrl+T/W);
+  // Ctrl+Tab / Ctrl+Shift+Tab / CmdOrCtrl+1..9 are handled here, before
+  // the terminal sees them.
+  const tabActionsRef = useRef({ handleNewTab, handleCloseTab, switchToTab, tabs, activeSessionId });
+  tabActionsRef.current = { handleNewTab, handleCloseTab, switchToTab, tabs, activeSessionId };
+  useEffect(() => {
+    if (!isTauri()) return;
+    const offNew = subscribeToTauriEvent(listen("menu-new-tab", () => void tabActionsRef.current.handleNewTab()));
+    const offClose = subscribeToTauriEvent(listen("menu-close-tab", () => void tabActionsRef.current.handleCloseTab()));
+    const onKey = (e: KeyboardEvent) => {
+      const { tabs: list, activeSessionId: cur, switchToTab: go } = tabActionsRef.current;
+      const target = tabShortcutTarget(e, list.map((tb) => tb.id), cur);
+      if (target) {
+        e.preventDefault();
+        e.stopPropagation();
+        go(target);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      offNew();
+      offClose();
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, []);
+
+  // Which tabs are working (output in the last few seconds), for the lights.
+  const lastOutputAtRef = useRef<Record<string, number>>({});
+  const [workingIds, setWorkingIds] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    if (!isTauri()) return;
+    const off = subscribeToTauriEvent(listen<SessionOutputEvent>("session-output", (e) => {
+      lastOutputAtRef.current[e.payload.session_id] = Date.now();
+    }));
+    const timer = setInterval(() => {
+      const next = workingSessions(lastOutputAtRef.current, Date.now());
+      setWorkingIds((prev) => (sameSet(prev, next) ? prev : next));
+    }, 1000);
+    return () => {
+      off();
+      clearInterval(timer);
+    };
+  }, []);
+
+  // The engine install screen shows the active tab's install output.
+  useEffect(() => {
+    if (!isTauri() || !isInstallTerminalOpen) return;
+    const off = subscribeToTauriEvent(listen<SessionOutputEvent>("session-output", (e) => {
+      if (isForSession(e.payload, activeSessionId)) handleRawOutput(new Uint8Array(e.payload.data));
+    }));
+    return off;
+  }, [isInstallTerminalOpen, activeSessionId, handleRawOutput]);
+
+  // Tell the backend every tab's folder and name: the guard hook refuses
+  // writes into another tab's folder; the quit dialog names busy tabs.
+  useEffect(() => {
+    if (!isTauri()) return;
+    const entries = tabs.map((tb) => ({ id: tb.id, label: tabLabel(tb, t("appLocationShort")), cwd: tb.cwd }));
+    invoke("set_session_registry", { entries }).catch((e) => console.warn("set_session_registry failed:", e));
+  }, [tabs, lang]);
+
+  // A tab you aren't looking at (or any tab while agent-deck is in the
+  // background) is waiting at an approval prompt: notify once per prompt.
+  const notifiedPromptsRef = useRef<Record<string, string>>({});
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  useEffect(() => {
+    if (!isTauri()) return;
+    const { notify, notified } = promptNotifications(runtimeStates, activeSessionId, document.hasFocus(), notifiedPromptsRef.current);
+    notifiedPromptsRef.current = notified;
+    if (!notify.length) return;
+    void (async () => {
+      try {
+        const n = await import("@tauri-apps/plugin-notification");
+        let ok = await n.isPermissionGranted();
+        if (!ok) ok = (await n.requestPermission()) === "granted";
+        if (!ok) return;
+        for (const item of notify) {
+          const tab = tabsRef.current.find((tb) => tb.id === item.sessionId);
+          const name = tab ? tabLabel(tab, t("appLocationShort")) : item.sessionId;
+          n.sendNotification({ title: t("tabNeedsYouTitle").replace("{tab}", name), body: item.message.slice(0, 200) });
+        }
+      } catch (e) {
+        console.warn("notification failed:", e);
+      }
+    })();
+  }, [runtimeStates, activeSessionId, lang]);
+
+  const showCheckingPanel = !agentStatusChecked ||
+    !!(appConfig && pickEngine(appConfig.engines.map(e => e.id), agentStatuses, selectedAgentId) !== selectedAgentId);
+  const showOnboardingPanel = !showCheckingPanel && !currentAgentStatus.installed;
+  const showMainView = !showCheckingPanel && !showOnboardingPanel;
+
   return (
+    <div className="app-shell">
+    {showMainView && (
+      <TabSidebar
+        lang={lang}
+        tabs={tabs}
+        activeId={activeSessionId}
+        states={runtimeStates}
+        engineNames={Object.fromEntries((appConfig?.engines ?? []).map((e) => [e.id, e.name]))}
+        workingIds={workingIds}
+        onSelect={switchToTab}
+        onNew={() => void handleNewTab()}
+        onClose={(id) => void handleCloseTab(id)}
+        onRename={(id, name) => setTabs((prev) => renameTab(prev, id, name))}
+        footer={isTauri() ? (<>
+                <button
+                  className="secondary header-btn"
+                  onClick={() => setIsCatalogOpen(true)}
+                  style={{ display: "flex", alignItems: "center", gap: "6px" }}
+                  title={lang === "ja" ? "スキルカタログ" : "Skill Catalog"}
+                >
+                  📚 {lang === "ja" ? "スキル" : "Skills"}
+                </button>
+                <button
+                  className="secondary header-btn"
+                  onClick={() => {
+                    refreshWebServerStatus();
+                    setIsWebUiModalOpen(true);
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    background: webServerStatus.running ? "rgba(16, 185, 129, 0.15)" : undefined,
+                    borderColor: webServerStatus.running ? "#10b981" : undefined,
+                    color: webServerStatus.running ? "#10b981" : undefined,
+                  }}
+                  title="Web UI Remote Access"
+                >
+                  🌐 Web UI {webServerStatus.running ? "● ON" : ""}
+                </button>
+</>) : undefined}
+      />
+    )}
+    {isNewTabOpen && (
+      <NewTabDialog
+        lang={lang}
+        engines={(appConfig?.engines ?? []).filter((e) => agentStatuses[e.id]?.installed).map((e) => ({ id: e.id, name: e.name }))}
+        defaultEngineId={selectedAgentId}
+        pickFolder={pickNewTabFolder}
+        onCreate={createTab}
+        onCancel={() => setIsNewTabOpen(false)}
+      />
+    )}
     <div className="app-container">
       {/* Header and Connection Panel */}
       <header className="app-header">
@@ -1321,39 +1681,7 @@ function App() {
                 </button>
               )}
 
-              {/* Web UI is a separate feature from the session controls
-                  (engine / folder / status / start-stop), so it sits apart at
-                  the right edge behind a divider. */}
-              {isTauri() && (
-                <div className="header-aside">
-                <button
-                  className="secondary header-btn"
-                  onClick={() => setIsCatalogOpen(true)}
-                  style={{ display: "flex", alignItems: "center", gap: "6px", marginRight: "8px" }}
-                  title={lang === "ja" ? "スキルカタログ" : "Skill Catalog"}
-                >
-                  📚 {lang === "ja" ? "スキル" : "Skills"}
-                </button>
-                <button
-                  className="secondary header-btn"
-                  onClick={() => {
-                    refreshWebServerStatus();
-                    setIsWebUiModalOpen(true);
-                  }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    background: webServerStatus.running ? "rgba(16, 185, 129, 0.15)" : undefined,
-                    borderColor: webServerStatus.running ? "#10b981" : undefined,
-                    color: webServerStatus.running ? "#10b981" : undefined,
-                  }}
-                  title="Web UI Remote Access"
-                >
-                  🌐 Web UI {webServerStatus.running ? "● ON" : ""}
-                </button>
-                </div>
-              )}
+
             </>
           )}
         </div>
@@ -1489,14 +1817,14 @@ function App() {
           main panel can use the full width) */}
       <div className="app-body-layout">
         {/* Main Panel View (live terminal OR Onboarding installer) */}
-        {!agentStatusChecked ||
-        (appConfig && pickEngine(appConfig.engines.map(e => e.id), agentStatuses, selectedAgentId) !== selectedAgentId) ? (
+        {showCheckingPanel && (
           /* First detection still running, or the selection is about to move
              to an installed engine: don't claim anything is missing yet */
           <div className="onboarding-panel" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
             <p className="onboarding-desc">{t("checkingAgents")}</p>
           </div>
-        ) : !currentAgentStatus.installed ? (
+        )}
+        {showOnboardingPanel && (
           /* Onboarding Panel */
           <div className="onboarding-panel" style={{ display: "flex", flexDirection: isInstallTerminalOpen ? "row" : "column", gap: "24px", width: "100%" }}>
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
@@ -1543,9 +1871,10 @@ function App() {
               </div>
             )}
           </div>
-        ) : (
-          /* Live Antigravity Terminal Session */
-          <div className="main-view-layout" style={{ flex: 1 }}>
+        )}
+        {/* Live sessions: always mounted (hidden while the panels above
+            show) so every tab's terminal keeps its output (5.7.4). */}
+          <div className="main-view-layout" style={{ flex: 1, display: showMainView ? undefined : "none" }}>
             <div className="chat-panel">
               <div className="terminal-panel" style={{ flex: 1 }}>
                 <div className="terminal-header">
@@ -1554,17 +1883,32 @@ function App() {
                     {status.toUpperCase()}
                   </span>
                 </div>
-                <div style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-                  <TerminalView
-                    terminalRef={terminalRef}
-                    onData={handleTerminalInput}
-                    onResize={handleTerminalResize}
-                    theme={themes[currentThemeId].terminal}
-                    fontFamily={terminalFont.family}
-                    fontSize={terminalFont.size}
-                    onImagePaste={handleTerminalImagePaste}
-                    onNativeImagePaste={handleNativeImagePaste}
-                  />
+                <div style={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative" }}>
+                  {tabs.map((tab) => {
+                    const engine = appConfig?.engines.find((e) => e.id === tab.engineId);
+                    return (
+                      <SessionRuntime
+                        key={tab.id}
+                        sessionId={tab.id}
+                        active={tab.id === activeSessionId}
+                        initialCwd={tab.cwd}
+                        command={agentStatuses[tab.engineId]?.path ?? ""}
+                        args={engine?.args ?? []}
+                        preLaunchCommand={appConfig?.pre_launch_command ?? undefined}
+                        preLaunchArgs={appConfig?.pre_launch_args}
+                        preLaunchRequired={appConfig?.pre_launch_required}
+                        theme={themes[currentThemeId].terminal}
+                        fontFamily={terminalFont.family}
+                        fontSize={terminalFont.size}
+                        startOnMount={startOnMountIds.has(tab.id)}
+                        onState={handleRuntimeState}
+                        register={registerRuntime}
+                        onResize={handleTerminalResize}
+                        onImagePaste={handleTerminalImagePaste}
+                        onNativeImagePaste={handleNativeImagePaste}
+                      />
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1701,7 +2045,6 @@ function App() {
               </form>
             </div>
           </div>
-        )}
 
         {/* SKILL.md Preview Modal */}
         {isPreviewOpen && (
@@ -2075,6 +2418,7 @@ function App() {
           </div>
         )}
       </div>
+    </div>
     </div>
   );
 }

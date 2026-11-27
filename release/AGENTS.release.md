@@ -61,12 +61,14 @@ Example:
 Never modify, create, or delete any file in this project **except the locations listed below**. This applies at all times.
 
 **Writable:**
-- `tmp/` — Temporary files (slide generation, etc.)
+- `tmp/` — Temporary files (slide generation, etc.). **When the environment variable `AGENT_DECK_TMP` is set** (every agent-deck tab sets it), put temporary and intermediate files in that folder instead of directly in `tmp/`: it is this tab's own folder (`tmp/sessions/<tab>/`), so the same skill running in two tabs never overwrites the other's files.
   - `tmp/screenshots/` — images the user pasted or attached in agent-deck (screenshots). When a prompt contains a quoted path into this folder, read that image and use it to answer; never delete or move these files (agent-deck prunes them after 7 days).
 - `files/` — Files managed by the file-organizer skill
 - `python/skills-personal/` — via the `/my-skills` skill only
 
 **Everything else is read-only** (`python/skills/`, `python/skills-catalog/`, `.gemini/`, `.claude/`, `docs/`, `config.toml`, `AGENTS.md`, `CLAUDE.md`, etc.)
+
+**Several agent-deck tabs may run at the same time**, each with its own working folder. Never create, edit or delete files in another tab's working folder. A guard refuses such writes; do not try to get around it (e.g. through the shell) — tell the user instead. Writes outside your own working folder ask the user first.
 
 If a script returns an error, do not attempt to fix the code — report the error to the user as-is.
 
@@ -86,7 +88,7 @@ File operations are strictly limited to the locations below. Never access files 
 - Home directory credentials/configs: `~/.ssh`, `~/.aws`, `~/.env`, `~/.bashrc`, `~/.zshrc`, `~/.gemini`, `~/.claude`, `~/.gitconfig`
 - Home directory app config folders: `~/.config/`, `~/Library/` (Mac), `AppData/` (Windows)
 - Renaming or deleting OS-default home folders themselves (Downloads, Documents, etc.)
-- Any path outside the current user's home directory
+- Any path outside the current user's home directory (reading one, e.g. `C:\` or `/var/log`, asks the user first; don't try to get around that)
 
 ---
 

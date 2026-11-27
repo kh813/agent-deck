@@ -629,7 +629,7 @@ def test_restart_notice_is_plain_when_not_a_terminal(monkeypatch, capsys):
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
     su._print_restart_notice()
     out = capsys.readouterr().out
-    assert "\033[" not in out and "Close agent-deck" in out
+    assert "\033[" not in out and "quit agent-deck and start it again" in out
 
 
 # ── background check (the app's periodic update check) ───────────────

@@ -19,3 +19,9 @@ def test_lists_both_installed_skill_dirs():
 def test_claude_config_dir_is_protected_like_gemini():
     assert "`~/.claude`" in AGENTS_MD
     assert "`.claude/`" in AGENTS_MD
+
+
+def test_multi_tab_rules():
+    # per-tab temp folder and the "never another tab's folder" rule (5.7.4)
+    assert "AGENT_DECK_TMP" in AGENTS_MD
+    assert "another tab's working folder" in AGENTS_MD

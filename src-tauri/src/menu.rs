@@ -18,6 +18,19 @@ const UPDATE_ORG_TEST_MENU_ID: &str = "update:org-test";
 const UPDATE_STABLE_LABEL: &str = "Update to Latest...";
 const UPDATE_TEST_LABEL: &str = "Update to Test Release...";
 const FORCE_KILL_SESSION_MENU_ID: &str = "session:force-kill";
+// Multi-session tabs (app_specs.md 5.7.4). Close Tab takes over CmdOrCtrl+W
+// from the platform's predefined Close Window item (removed from File; the
+// window's own close button still works and goes through the quit guard).
+pub(crate) const NEW_TAB_MENU_ID: &str = "tab:new";
+pub(crate) const CLOSE_TAB_MENU_ID: &str = "tab:close";
+pub(crate) const NEW_TAB_LABEL: &str = "New Tab";
+pub(crate) const CLOSE_TAB_LABEL: &str = "Close Tab";
+
+/// The predefined "Close Window" item (muda: "Close Window"; some platforms "&Close").
+pub(crate) fn is_predefined_close_text(text: &str) -> bool {
+    let t = text.replace('&', "").trim().to_ascii_lowercase();
+    t == "close window" || t == "close"
+}
 const LANGUAGE_MENU_ID_PREFIX: &str = "language:";
 const SETTINGS_MENU_LABEL: &str = "Settings";
 /// View -> Language choices: (id, label). "auto" follows the OS
@@ -353,14 +366,29 @@ pub fn build_menu(
     }
 
     let file_sep = PredefinedMenuItem::separator(handle)?;
+    let tab_sep = PredefinedMenuItem::separator(handle)?;
+    let new_tab_item = MenuItem::with_id(handle, NEW_TAB_MENU_ID, NEW_TAB_LABEL, true, Some("CmdOrCtrl+T"))?;
+    let close_tab_item = MenuItem::with_id(handle, CLOSE_TAB_MENU_ID, CLOSE_TAB_LABEL, true, Some("CmdOrCtrl+W"))?;
     match find_submenu(&menu, "File")? {
         Some(file) => {
+            // Free CmdOrCtrl+W for Close Tab.
+            let items = file.items()?;
+            for (i, child) in items.iter().enumerate().rev() {
+                if let Some(p) = child.as_predefined_menuitem() {
+                    if is_predefined_close_text(&p.text()?) {
+                        file.remove_at(i)?;
+                    }
+                }
+            }
             file.prepend(&file_sep)?;
             file.prepend(&force_kill_item)?;
+            file.prepend(&tab_sep)?;
+            file.prepend(&close_tab_item)?;
+            file.prepend(&new_tab_item)?;
         }
         // No File menu on this platform (Linux default): keep it reachable.
         None => {
-            let session = Submenu::with_items(handle, "Session", true, &[&force_kill_item])?;
+            let session = Submenu::with_items(handle, "Session", true, &[&new_tab_item, &close_tab_item, &tab_sep, &force_kill_item])?;
             menu.append(&session)?;
         }
     }
@@ -451,6 +479,16 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         return;
     }
 
+    if id == NEW_TAB_MENU_ID {
+        let _ = app.emit("menu-new-tab", ());
+        return;
+    }
+
+    if id == CLOSE_TAB_MENU_ID {
+        let _ = app.emit("menu-close-tab", ());
+        return;
+    }
+
     if id == AUTO_CHECK_UPDATE_MENU_ID {
         if let Some(state) = app.try_state::<AutoCheckUpdateMenuState>() {
             // muda already flips the checkmark before dispatching this event
@@ -525,6 +563,26 @@ pub fn set_font_menu_state(app: AppHandle, family: Option<String>, size: u32) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_the_predefined_close_window_item() {
+        for t in ["Close Window", "&Close", "close window", " Close "] {
+            assert!(is_predefined_close_text(t), "{t}");
+        }
+        for t in ["Close Tab", "Closed", "Quit", "Force Kill Session", ""] {
+            assert!(!is_predefined_close_text(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn tab_items_use_the_standard_shortcuts() {
+        let src = include_str!("menu.rs").replace("\r\n", "\n");
+        assert!(src.contains("NEW_TAB_LABEL, true, Some(\"CmdOrCtrl+T\")"));
+        assert!(src.contains("CLOSE_TAB_LABEL, true, Some(\"CmdOrCtrl+W\")"));
+        assert!(src.contains("app.emit(\"menu-new-tab\""));
+        assert!(src.contains("app.emit(\"menu-close-tab\""));
+    }
 
     #[test]
     fn language_menu_ids_map_to_choices() {
@@ -536,8 +594,6 @@ mod tests {
         let ids: Vec<&str> = LANGUAGES.iter().map(|(id, _)| *id).collect();
         assert_eq!(ids, vec!["auto", "ja", "en"]);
     }
-
-    use super::*;
 
     #[test]
     fn family_menu_ids_map_to_css_stacks() {

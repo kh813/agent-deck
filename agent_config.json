@@ -8,19 +8,13 @@
       "id": "agy",
       "name": "Antigravity",
       "command": "agy",
-      "args": []
+      "args": ["--add-dir", "${PROJECT_ROOT}"]
     },
     {
       "id": "claude",
       "name": "Claude Code",
       "command": "claude",
-      "args": ["--settings", "${PROJECT_ROOT}/.claude/agent-deck-settings.json"]
-    },
-    {
-      "id": "codex",
-      "name": "Codex",
-      "command": "codex",
-      "args": []
+      "args": ["--settings", "${PROJECT_ROOT}/.claude/agent-deck-settings.json", "--append-system-prompt", "${GUARDRAILS}"]
     }
   ],
   "pre_launch_macos": {

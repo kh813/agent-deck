@@ -1,5 +1,5 @@
 // Pasted / dropped images -> a file path in the prompt (app_specs.md 5.7.2).
-// The Rust side saves the image under <working folder>/tmp/screenshots/;
+// The Rust side always saves pasted images under <agent-deck install>/tmp/screenshots/;
 // these helpers decide what to save and what text to type into the CLI.
 import { invoke } from "@tauri-apps/api/core";
 

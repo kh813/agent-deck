@@ -29,10 +29,25 @@ def test_renders_absolute_python_deny_rule(tmp_path):
 def test_protects_credentials_and_allows_skill_scripts(tmp_path):
     data = json.loads(agent_setup.install_claude_settings(tmp_path).read_text(encoding="utf-8"))
     deny, allow = data["permissions"]["deny"], data["permissions"]["allow"]
-    for rule in ("Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(~/.gemini/**)", "Edit(~/.claude/**)", "Edit(//etc/**)"):
-        assert rule in deny
+    root_rule = agent_setup._claude_abs_rule_path(tmp_path)
+    for rule in (
+        "Read(~/.ssh/**)",
+        "Read(~/.aws/**)",
+        "Read(~/.gemini/**)",
+        "Edit(~/.claude/**)",
+        "Edit(//etc/**)",
+        f"Edit({root_rule}/tmp/agent-deck-sessions.json)",
+        f"Edit({root_rule}/.claude/**)",
+        f"Edit({root_rule}/AGENTS.md)",
+        f"Edit({root_rule}/agent_config.json)",
+        f"Read({root_rule}/python/scripts/automation/ChromeUserData/**)",
+    ):
+        assert rule in deny, rule
     assert "Skill" in allow
     assert "Bash(python3 python/*)" in allow
+    # Overly broad Python auto-allows that bypassed Bash confirmation are removed.
+    for overly_broad in ("Bash(python3 -m *)", "Bash(python -m *)", "Bash(venv/bin/python3 *)"):
+        assert overly_broad not in allow, overly_broad
 
 
 def test_windows_drive_path_uses_claude_rule_form():
@@ -46,7 +61,11 @@ def test_not_named_settings_json_so_dev_sessions_are_unaffected():
     assert agent_setup.CLAUDE_SETTINGS_NAME != "settings.json"
     cfg = json.loads((ROOT / "agent_config.json").read_text(encoding="utf-8"))
     claude = next(e for e in cfg["engines"] if e["id"] == "claude")
-    assert claude["args"] == ["--settings", "${PROJECT_ROOT}/.claude/agent-deck-settings.json"]
+    assert claude["args"][:2] == ["--settings", "${PROJECT_ROOT}/.claude/agent-deck-settings.json"]
+    # the product guardrails go in explicitly (5.7.4): they apply in any working folder
+    assert claude["args"][2:] == ["--append-system-prompt", "${GUARDRAILS}"]
+    agy = next(e for e in cfg["engines"] if e["id"] == "agy")
+    assert agy["args"] == ["--add-dir", "${PROJECT_ROOT}"]  # agy loads AGENTS.md from an added folder
 
 
 def test_rebuild_and_init_install_claude_settings():

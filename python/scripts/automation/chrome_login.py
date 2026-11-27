@@ -29,7 +29,12 @@ if sys.platform == 'win32':
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from playwright.sync_api import sync_playwright  # noqa: E402
 
-from common import get_chrome_executable, get_user_data_dir  # noqa: E402
+from common import (  # noqa: E402
+    acquire_browser_lock,
+    get_chrome_executable,
+    get_user_data_dir,
+    release_browser_lock,
+)
 
 CLOUDSEARCH_TOP = "https://cloudsearch.google.com/cloudsearch"
 LOGIN_TIMEOUT_MS = 600_000  # 10 minutes
@@ -43,42 +48,46 @@ def main() -> int:
     executable = get_chrome_executable()
     authenticated = False
     with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            get_user_data_dir(),
-            headless=False,
-            executable_path=executable,
-            args=[
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-infobars",
-                "--disable-blink-features=AutomationControlled",
-            ],
-            ignore_default_args=["--enable-automation"],
-        )
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto(CLOUDSEARCH_TOP)
-        print("──────────────────────────────────────────────────────────────────")
-        print("  ログイン完了後、ブラウザは自動的に閉じます。")
-        print("  The browser closes automatically after you log in.")
-        print("──────────────────────────────────────────────────────────────────")
+        acquire_browser_lock()
         try:
-            # URL checks alone give false positives (goto() can settle on
-            # cloudsearch.google.com before the JS redirect to the login page).
-            page.wait_for_selector('input[aria-label="Search"]', timeout=LOGIN_TIMEOUT_MS)
+            context = p.chromium.launch_persistent_context(
+                get_user_data_dir(),
+                headless=False,
+                executable_path=executable,
+                args=[
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-infobars",
+                    "--disable-blink-features=AutomationControlled",
+                ],
+                ignore_default_args=["--enable-automation"],
+            )
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto(CLOUDSEARCH_TOP)
+            print("──────────────────────────────────────────────────────────────────")
+            print("  ログイン完了後、ブラウザは自動的に閉じます。")
+            print("  The browser closes automatically after you log in.")
+            print("──────────────────────────────────────────────────────────────────")
             try:
-                # Let the session cookies reach disk before closing.
-                page.wait_for_load_state("networkidle", timeout=10_000)
+                # URL checks alone give false positives (goto() can settle on
+                # cloudsearch.google.com before the JS redirect to the login page).
+                page.wait_for_selector('input[aria-label="Search"]', timeout=LOGIN_TIMEOUT_MS)
+                try:
+                    # Let the session cookies reach disk before closing.
+                    page.wait_for_load_state("networkidle", timeout=10_000)
+                except Exception:
+                    page.wait_for_timeout(5_000)
+                authenticated = True
             except Exception:
-                page.wait_for_timeout(5_000)
-            authenticated = True
-        except Exception:
-            print()
-            print("[WARN] タイムアウト（10分）。ログインが完了していない可能性があります。")
-            print("[WARN] Timed out (10 min). Login may not have completed.")
-        try:
-            context.close()
-        except Exception:
-            pass
+                print()
+                print("[WARN] タイムアウト（10分）。ログインが完了していない可能性があります。")
+                print("[WARN] Timed out (10 min). Login may not have completed.")
+            try:
+                context.close()
+            except Exception:
+                pass
+        finally:
+            release_browser_lock()
     if authenticated:
         print("✓ セッションが保存されました。次回から自動ログインになります。")
         print("✓ Session saved. Automated runs will be logged in from now on.")

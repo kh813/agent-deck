@@ -402,6 +402,78 @@ def install_gemini_policies():
 
 CLAUDE_SETTINGS_NAME = "agent-deck-settings.json"
 
+# ── Guard hook (python/scripts/hooks/agent_deck_guard.py, app_specs.md 5.7.4) ──
+# Both engines run it before a file-writing tool: it refuses writes into
+# another agent-deck tab's folder and asks before writes outside the tab's
+# own folder. Matchers mirror the hook's AGY_MATCHER / CLAUDE_MATCHER.
+GUARD_HOOK_NAME = "agent-deck-guard"
+GUARD_AGY_MATCHER = (
+    "write_file|write_to_file|replace_file_content|multi_replace_file_content|"
+    "edit_file|create_file|delete_file|apply_patch|edit_notebook|rename_file|"
+    "replace|move_file|patch_file|notebook_edit|"
+    "read_file|view_file|view_file_outline|view_code_item|"
+    "list_dir|find_by_name|grep_search|read_notebook|"
+    "run_shell_command|run_command"
+)
+GUARD_CLAUDE_MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Read|Glob|Grep|NotebookRead|Bash"
+
+
+def _guard_python(project_root):
+    """The install's venv Python when present (it exists after setup), else this one."""
+    root = Path(project_root)
+    for cand in (root / "venv" / "Scripts" / "python.exe", root / "venv" / "bin" / "python3"):
+        if cand.exists():
+            return cand
+    return Path(sys.executable)
+
+
+def guard_hook_command(engine, project_root=None, windows=None):
+    """Shell command both engines run. Forward slashes work for Python on
+    Windows too and need no escaping. agy runs hooks with `cmd /c` on
+    Windows, which strips the first and last quote of a command holding
+    several quoted parts (a path with spaces: C:/Users/Taro Yamada/...):
+    one more pair of quotes around the whole command survives that. Claude
+    Code runs hooks through bash, so it keeps plain quoting."""
+    project_root = Path(project_root) if project_root else Path(SCRIPT_DIR).parents[2].resolve()
+    script = project_root / "python" / "scripts" / "hooks" / "agent_deck_guard.py"
+    py = _guard_python(project_root)
+    cmd = f'"{py.as_posix()}" "{script.as_posix()}" --engine {engine}'
+    windows = (os.name == "nt") if windows is None else windows
+    if windows and engine == "agy":
+        cmd = f'"{cmd}"'
+    return cmd
+
+
+def install_agy_guard_hook(project_root=None, hooks_path=None):
+    """Merge agent-deck's guard into agy's shared hooks file
+    (~/.gemini/config/hooks.json). Other named hooks are kept as they are; an
+    unreadable file is left alone (never clobber someone's config)."""
+    import json
+    hooks_path = Path(hooks_path) if hooks_path else Path.home() / ".gemini" / "config" / "hooks.json"
+    data = {}
+    if hooks_path.exists():
+        try:
+            data = json.loads(hooks_path.read_text(encoding="utf-8-sig"))
+            if not isinstance(data, dict):
+                raise ValueError("not an object")
+        except (OSError, ValueError) as e:
+            print(
+                f"  [ERROR] {hooks_path} is not valid JSON ({e}); agent-deck's guard hook was NOT installed. "
+                "Fix or remove that file so multi-session protection can run.",
+                file=sys.stderr,
+            )
+            return None
+    data[GUARD_HOOK_NAME] = {"PreToolUse": [{
+        "matcher": GUARD_AGY_MATCHER,
+        "hooks": [{"type": "command", "command": guard_hook_command("agy", project_root), "timeout": 30}],
+    }]}
+    hooks_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = hooks_path.with_name(hooks_path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, hooks_path)
+    print(f"==> Installed agy guard hook: {hooks_path}")
+    return hooks_path
+
 def _claude_abs_rule_path(path):
     """Absolute path in Claude Code permission-rule form: `//` + POSIX path.
     Windows drive paths are normalized the way Claude Code does it
@@ -424,6 +496,12 @@ def install_claude_settings(project_root=None):
     text = text.replace("${PROJECT_ROOT_POSIX}", json.dumps(_project_root_posix(project_root))[1:-1])
     data = json.loads(text)
     data.pop("$comment", None)
+    # The guard hook (see GUARD_HOOK_NAME), next to any hooks the template has.
+    hooks = data.setdefault("hooks", {})
+    hooks.setdefault("PreToolUse", []).append({
+        "matcher": GUARD_CLAUDE_MATCHER,
+        "hooks": [{"type": "command", "command": guard_hook_command("claude", project_root), "timeout": 30}],
+    })
     dest = project_root / ".claude" / CLAUDE_SETTINGS_NAME
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -513,6 +591,7 @@ def skills_rebuild():
     build_skills()
     install_skills()
     install_claude_settings()
+    install_agy_guard_hook()
     print("==> Skills rebuilt and reinstalled.")
 
 @_with_skills_lock
@@ -849,6 +928,7 @@ if __name__ == "__main__":
             install_skills()
         install_gemini_policies()
         install_claude_settings()
+        install_agy_guard_hook()
         trust_project_folder()
         setup_files_folder()
         print("==> Setup completed successfully.")

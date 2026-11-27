@@ -1,7 +1,7 @@
 // Images attached to the next message from the input bar's 🖼 button
 // (app_specs.md 5.7.2). Two sources:
 //  - "pasted": a screenshot from the clipboard, saved by the Rust side under
-//    <working folder>/tmp/screenshots/ (removed automatically after 7 days);
+//    <agent-deck install>/tmp/screenshots/ (removed automatically after 7 days);
 //  - "file": an image the user picked -- its own path is used as-is, nothing
 //    is copied (and so nothing needs cleaning up).
 // Send puts the quoted paths in front of the text, on one line (a newline

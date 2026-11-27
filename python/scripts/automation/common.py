@@ -275,6 +275,110 @@ def sync_from_system_chrome(quiet: bool = False) -> bool:
     return copied_cookies
 
 
+# ── One browser-automation skill at a time (app_specs.md 5.7.4) ──
+# Every browser skill drives the same saved Chrome profile (ChromeUserData).
+# With several agent-deck tabs, two skills starting Chrome on it at once
+# would collide (the second fails on the profile lock, or both fight over
+# the same windows). A lock file next to the profile serializes them: a
+# second skill waits, then gives up with a clear message.
+BROWSER_LOCK_WAIT_SECONDS = 120
+
+
+class BrowserBusyError(RuntimeError):
+    pass
+
+
+_browser_lock_fh = None
+
+
+def _try_lock(fh):
+    if os.name == 'nt':
+        import msvcrt
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock(fh):
+    try:
+        if os.name == 'nt':
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    fh.close()
+
+
+def browser_lock_path():
+    return os.path.normpath(get_user_data_dir()) + '.agent-deck.lock'
+
+
+def acquire_browser_lock(wait_seconds=None, sleep=None, clock=None):
+    """Take the browser lock (re-entrant within this process). Waits up to
+    wait_seconds for another tab's skill to finish, then BrowserBusyError."""
+    global _browser_lock_fh
+    if _browser_lock_fh is not None:
+        return
+    import time as _time
+    wait_seconds = BROWSER_LOCK_WAIT_SECONDS if wait_seconds is None else wait_seconds
+    sleep = sleep or _time.sleep
+    clock = clock or _time.monotonic
+    path = browser_lock_path()
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    fh = open(path, 'a+')
+    deadline = clock() + wait_seconds
+    told = False
+    while True:
+        try:
+            _try_lock(fh)
+            _browser_lock_fh = fh
+            return
+        except OSError:
+            if clock() >= deadline:
+                fh.close()
+                raise BrowserBusyError(
+                    '別のタブのスキルがブラウザを使用中のため、開始できませんでした。そちらが終わってから、もう一度実行してください。'
+                    ' / Another tab\'s skill is using the browser. Run this again once it has finished.')
+            if not told:
+                print('別のタブのスキルがブラウザを使用中です。終わるまで待っています… / '
+                      'Another tab\'s skill is using the browser; waiting for it to finish…', flush=True)
+                told = True
+            sleep(1)
+
+
+def release_browser_lock():
+    global _browser_lock_fh
+    if _browser_lock_fh is not None:
+        _unlock(_browser_lock_fh)
+        _browser_lock_fh = None
+
+
+import atexit as _atexit
+_atexit.register(release_browser_lock)
+
+
+def _release_on_close(context):
+    """context.close() also frees the browser for other tabs."""
+    original = context.close
+
+    def close(*a, **k):
+        try:
+            return original(*a, **k)
+        finally:
+            release_browser_lock()
+    try:
+        context.close = close
+    except Exception:
+        pass
+    return context
+
+
 def get_chrome_context(p, lang='ja-JP', headless=False):
     """専用 ChromeUserData で Chrome を起動して context と page を返す。
 
@@ -304,19 +408,24 @@ def get_chrome_context(p, lang='ja-JP', headless=False):
         # 暗号化鍵が一致し、セッションクッキーが正しく読み書きできる。
         ignore_default_args=['--enable-automation'],
     )
-    context = p.chromium.launch_persistent_context(get_user_data_dir(), **launch)
-    page = context.pages[0] if context.pages else context.new_page()
-    if headless and executable is None:
-        # The bundled Chromium's headless UA says "HeadlessChrome", which
-        # Google services may treat as a bot. Relaunch with the same UA
-        # minus that marker (version etc. stay accurate).
-        ua = page.evaluate("navigator.userAgent")
-        if 'HeadlessChrome' in ua:
-            context.close()
-            context = p.chromium.launch_persistent_context(
-                get_user_data_dir(), user_agent=ua.replace('HeadlessChrome', 'Chrome'), **launch)
-            page = context.pages[0] if context.pages else context.new_page()
-    return context, page
+    acquire_browser_lock()
+    try:
+        context = p.chromium.launch_persistent_context(get_user_data_dir(), **launch)
+        page = context.pages[0] if context.pages else context.new_page()
+        if headless and executable is None:
+            # The bundled Chromium's headless UA says "HeadlessChrome", which
+            # Google services may treat as a bot. Relaunch with the same UA
+            # minus that marker (version etc. stay accurate).
+            ua = page.evaluate("navigator.userAgent")
+            if 'HeadlessChrome' in ua:
+                context.close()
+                context = p.chromium.launch_persistent_context(
+                    get_user_data_dir(), user_agent=ua.replace('HeadlessChrome', 'Chrome'), **launch)
+                page = context.pages[0] if context.pages else context.new_page()
+    except Exception:
+        release_browser_lock()
+        raise
+    return _release_on_close(context), page
 
 
 def rename_download(download, new_filename):

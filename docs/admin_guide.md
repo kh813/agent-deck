@@ -834,13 +834,34 @@ The `ask_user` tool is built into Antigravity CLI. Instead of asking questions v
 
 ## 14. セキュリティ設定 / Security Settings
 
-agent-deck は **二層のセキュリティ** でエージェントの動作範囲を制限しています。
+agent-deck は **三つの層** でエージェントの動作範囲を制限しています（v0.3.0〜）。
+agent-deck limits what agents can do in **three layers** (v0.3.0+).
 
 | 層 / Layer | 仕組み / Mechanism | 役割 / Role |
 |---|---|---|
-| 第1層（行動制約） | `AGENTS.md` の記述 | モデルへのルールとして何を操作してよいか・悪いかを定義 |
-| 第2層（技術的強制） | agy ポリシーファイル（TOML） | ツール呼び出し自体をランタイムでブロック。YOLO モードでも有効 |
-| 第2層（Claude Code） | `.claude/agent-deck-settings.json`（`permissions.allow/deny`） | `claude --settings` で常に読み込まれる。deny は許可モードに関係なく優先 |
+| 1. 行動制約 / Instructions | `AGENTS.md`（製品のガードレール） | モデルへのルール。作業フォルダに関係なく必ず渡す: agy は `--add-dir <インストール先>`、Claude Code は `--append-system-prompt`（`agent_config.json`）。/ Rules for the model, always handed over whatever the working folder is. |
+| 2. 技術的強制（両エンジン共通）/ Enforcement (both engines) | **ガードフック** `python/scripts/hooks/agent_deck_guard.py`（PreToolUse） | ツール実行の直前に判定し、拒否または確認を求める（下表）。agent-deck が起動したセッション（環境変数 `AGENT_DECK_SESSION_ID`）にだけ作用。/ Decides right before a tool runs; only in sessions agent-deck started. |
+| 3. Claude Code の許可設定 / Claude permissions | `.claude/agent-deck-settings.json`（`permissions.allow/deny`、`claude --settings`） | deny は許可モードに関係なく優先。/ Deny rules win in every permission mode. |
+
+### ガードフック / Guard hook
+
+**登録先 / Installed into:** agy は `~/.gemini/config/hooks.json`（`"agent-deck-guard"` を追記。ほかの名前のフックはそのまま残す。壊れた JSON のときは何もしない）、Claude Code は `.claude/agent-deck-settings.json` の `hooks.PreToolUse`。どちらも `setup.py init` / `skills rebuild`（起動時）が行う。agy: merged into the shared hooks file (other hooks kept); Claude: the settings file's `hooks`.
+
+| 操作 / Operation | 判定 / Decision |
+|---|---|
+| 認証情報・設定（`~/.ssh`、`~/.aws`、`~/.gemini`、`~/.claude`、`~/.config`、`~/Library`、`AppData` 等）の読み書き | **拒否** / deny |
+| システムフォルダ（`/etc`、`/System`、`C:\Windows`、`C:\Program Files` 等）への書き込み | **拒否** / deny（`/dev/null`・`NUL` への出力の破棄は除く） |
+| agent-deck の保護ファイル（`python/scripts`、`python/skills`、`AGENTS.md`、`config/`、タブ一覧 等）への書き込み | **拒否** / deny |
+| **別のタブの作業フォルダ**・別のタブの一時フォルダへの書き込みやシェル操作 | **拒否** / deny |
+| 自分の作業フォルダ・インストール先の `files/`・`tmp/`・`python/skills-personal/`・agy のワークスペース以外への書き込み | **確認** / ask（agy は毎回確認の `force_ask`） |
+| **ホームフォルダの外の読み取り**（`C:\`、`/var/log`、別ドライブ等。作業フォルダ・インストール先・OS の一時フォルダを除く）— ファイル読み取りツール、およびシェルの読み取り・一覧コマンド（`ls`、`dir`、`cat`、`type`、`Get-ChildItem` 等） | **確認** / ask（v0.3.0〜） |
+| ホームフォルダ内（`Downloads`、`Documents` 等）の読み取り | 許可 / allowed（AGENTS.md のとおり） |
+
+フック自身の不具合で作業が止まらないよう、エラー時は判定しません（通常のルールに任せる）。タブ一覧はアプリが `tmp/agent-deck-sessions.json` に書きます。
+On its own errors the hook gives no opinion, so a broken hook can't stop every session. The app writes the tab list to `tmp/agent-deck-sessions.json`.
+
+**なぜフックか / Why a hook:** 実機で確認したところ（2026-11-26）、agy は Gemini CLI 形式の `~/.gemini/policies/*.toml` を読まず（`/private/` への書き込みが通った）、Auto モードは一部の作業フォルダ外への書き込みを確認なしで行い、agy 自身の許可ルールでは「このフォルダの中だけ」を表せない（deny が allow より優先される）。agy の `hooks.json` の PreToolUse は拒否・確認とも実機で動作を確認済み。
+Verified against the real CLIs: agy ignores the Gemini-style policy TOML files, its Auto mode writes outside the workspace without asking in some cases, and its own rules can't express "only inside this folder" (deny beats allow). agy's hooks.json PreToolUse was confirmed to deny and ask.
 
 ### Google Workspace アカウントでの利用 / Using a Google Workspace Account
 
@@ -856,15 +877,10 @@ agent-deck は **二層のセキュリティ** でエージェントの動作範
 
 `AGENTS.md` の **File Access Policy** セクションで、`files/`・`tmp/`・OS標準フォルダ以外の操作、システムディレクトリ、認証情報・設定ドットファイル、アプリケーション設定フォルダへの書き込みを禁止しています。
 
-### ポリシーファイル / Policy File
+### ポリシーファイル（参考）/ Policy File (reference)
 
-**インストール先:** `~/.gemini/policies/agent-deck.toml`（`setup.py init`/`skills rebuild` がコピー）。`priority` 値が大きいほど高優先で、deny ルールは YOLO モードの allow-all より高優先度に設定されています。
-
-| priority | カテゴリ / Category | 動作 / Action |
-|---|---|---|
-| 250 | 外部ファイルシステム保護 | deny（YOLO を上書き） |
-| 200 | `src/` 書き込み禁止 | deny（YOLO を上書き） |
-| 100 | スキルアクティベーション・自動化コマンド | allow（確認省略） |
+`~/.gemini/policies/agent-deck.toml`（`setup.py init` がコピー）は Gemini CLI 形式のポリシーです。**agy（Antigravity CLI）はこのファイルを読まないことを実機で確認したため（2026-11-26）、agy に対する技術的な強制は上のガードフックが担います。** ファイルは Gemini CLI を併用する環境向けに残しています。
+Gemini CLI-format policies. **agy doesn't read them (verified 2026-11-26); the guard hook above is what enforces rules for agy.** Kept for setups that also use Gemini CLI.
 
 ### Claude Code の許可設定 / Claude Code Permission Settings
 
@@ -884,7 +900,12 @@ Verified against Claude Code 2.1.x: Write to `python/` is denied, Write to `file
 
 ### 既知の制限 / Known Limitations
 
-`list_directory`・`glob`・`grep_search` ツールはパスパターンによるブロック対象外のため、設定ファイルの探索は AGENTS.md の行動制約のみに依存します。同様に `files/`・`tmp/` 以外への新規ファイル作成や、Windows のバックスラッシュパスも技術的にはブロックされないケースがあります。
+- シェルコマンドの判定はコマンド文字列の解析によるため、スクリプトの中で動的に組み立てたパスまでは見えません（例: Python スクリプトが内部で別フォルダに書き込む）。AGENTS.md の行動制約と、agent-deck が用意したスクリプトだけを許可している Claude の allow 設定で補っています。
+  Shell checks parse the command text, so paths built inside a script aren't seen; AGENTS.md and Claude's allow list (only agent-deck's own scripts) cover that.
+- ホームフォルダ内の読み取りは制限していません（Downloads 等でのファイルの受け渡しのため）。認証情報・設定フォルダは拒否します。
+  Reads inside the home folder aren't restricted (Downloads etc. are how files are handed over); credentials and config folders are denied.
+- 「確認」は対話中のセッションで表示されます。agy の非対話モード（`agy -p`、定期実行など）では確認できないため通ることがあります。agent-deck の定期実行は `AGENT_DECK_SESSION_ID` を設定しないため、フックの対象外です。
+  "Ask" shows in interactive sessions; in non-interactive agy runs it may pass. agent-deck's scheduled runs aren't agent-deck tab sessions and aren't covered by the hook.
 
 ---
 
